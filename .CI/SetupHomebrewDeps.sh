@@ -38,12 +38,10 @@ c2-make-universal-dylib() {
     fi
 
     if [ ! -f "${_x86_64_lib}" ]; then
-        echo "error: The x86_64 library '${_input_lib}' cannot be found at '${_x86_64_lib}'"
-        exit 1
-    fi
-
+        # arm64 only (no x86_64 Homebrew)
+        cp -v "${_arm64_lib}" "${_universal_lib}"
     # Create the combined library
-    if ! lipo "${_arm64_lib}" "${_x86_64_lib}" -create -output "${_universal_lib}"; then
+    elif ! lipo "${_arm64_lib}" "${_x86_64_lib}" -create -output "${_universal_lib}"; then
         echo "error: Something went wrong creating the combined library"
         echo "Some errors can be solved by re-linking the original libraries (e.g. brew link --overwrite boost)"
         exit 1
@@ -61,19 +59,14 @@ sudo mkdir "$universal_lib_dir"
 
 sudo chown -R $USER "$universal_lib_dir"
 
-echo "Installing x86_64 brew"
-arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# Homebrew no longer installs on Intel/Rosetta ("Homebrew on macOS is only
+# supported on Apple Silicon processors!"), so only arm64 libraries are
+# installed. They are still placed in the universal lib directory so the
+# packaging steps keep working.
 
 echo "Installing ARM dependencies"
 brew update
 brew install "$@"
-
-echo "Installing x86_64 dependencies"
-arch -x86_64 "$x86_64_homebrew_dir/bin/brew" update
-for dep in "$@"
-do
-    arch -x86_64 "$x86_64_homebrew_dir/bin/brew" install "$dep"
-done
 
 echo "Relinking boost libraries"
 c2-make-universal-dylib lib/libboost_random.dylib

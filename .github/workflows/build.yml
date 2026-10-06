@@ -29,7 +29,7 @@ env:
   C2_ENABLE_LTO: ${{ github.ref == 'refs/heads/chatterino7' || startsWith(github.ref, 'refs/heads/bugfix-release') || startsWith(github.ref, 'refs/heads/release/')}}
   CHATTERINO_REQUIRE_CLEAN_GIT: On
   CHATTERINO_BUILD_TYPE: ${{ case(inputs.buildType != '', inputs.buildType, 'auto') }}
-  CONAN_VERSION: 2.11.0
+  CONAN_VERSION: 2.28.1
 
 jobs:
   build-ubuntu-docker:
@@ -255,7 +255,7 @@ jobs:
       # WINDOWS
       - name: Enable Developer Command Prompt (Windows)
         if: startsWith(matrix.os, 'windows')
-        uses: ilammy/msvc-dev-cmd@v1.13.0
+        uses: Chatterino/msvc-dev-cmd@24444121cb2805a7adbd23d0f4455d0916af896b # v2.0.7
         with:
           arch: ${{env.C2_ARCH == 'arm' && 'arm64' || 'x64' }}
 
@@ -384,7 +384,7 @@ jobs:
               -DUSE_PRECOMPILED_HEADERS=OFF \
               -DCHATTERINO_LTO="$C2_ENABLE_LTO" \
               -DCHATTERINO_NO_AVIF_PLUGIN=On \
-              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+              -DCMAKE_OSX_ARCHITECTURES="arm64" \
               -DFORCE_JSON_GENERATION=Off \
               -DCHATTERINO_NIGHTLY_BUILD=${{ steps.build-type.outputs.NIGHTLY_BUILD }} \
               -DCHATTERINO_SPELLCHECK=On \
