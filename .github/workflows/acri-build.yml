@@ -1,6 +1,8 @@
 ---
 # Windows build of this fork (usercard + repeat highlight changes).
 # Runs on pushes to the "acri" branch, or by hand from the Actions tab.
+# Builds of the release branch are published as a GitHub release
+# ("chatterino3-build-<run number>"), which Chatterino3's update button finds.
 name: Acri Windows build
 
 on:
@@ -14,8 +16,16 @@ concurrency:
   group: acri-build-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 env:
   CONAN_VERSION: 2.28.1
+  # Branch whose builds become Chatterino3 releases.
+  RELEASE_BRANCH: acri
+  # Same updater upstream bundles in its portable zip (create-installer.yml).
+  C2_PORTABLE_INSTALLER_VERSION: "v0.1.4"
+  C2_PORTABLE_INSTALLER_SHA256_X64: "77bcbe8c0fb0e2e7c40c89a250816b3def14cb5d0144b98293d3224fe2b1a59b"
   QT_VERSION: 6.9.3
 
 jobs:
@@ -81,7 +91,9 @@ jobs:
               -DUSE_PRECOMPILED_HEADERS=ON `
               -DBUILD_WITH_CRASHPAD=OFF `
               -DCHATTERINO_LTO=OFF `
-              -DCHATTERINO_UPDATER=OFF `
+              -DCHATTERINO_UPDATER=ON `
+              -DCHATTERINO3_BUILD="${{ github.run_number }}" `
+              -DCHATTERINO_EXTRA_BUILD_STRING="Chatterino3 build ${{ github.run_number }}" `
               -DFORCE_JSON_GENERATION=On `
               ..
           set cl=/MP
@@ -94,6 +106,25 @@ jobs:
           cp bin/chatterino.exe Chatterino2/
           ..\.CI\deploy-crt.ps1 Chatterino2
 
+      # The update button downloads the release zip and runs this updater,
+      # which unpacks it over the install folder and restarts Chatterino.
+      # No "modes" file is written: Chatterino3 keeps its settings in %APPDATA%.
+      - name: Bundle updater
+        working-directory: build
+        shell: pwsh
+        run: |
+          New-Item "Chatterino2/updater.1" -ItemType Directory -Force
+          Invoke-RestMethod "https://github.com/Nerixyz/c2-portable-updater/releases/download/$Env:C2_PORTABLE_INSTALLER_VERSION/c2-portable-updater-x86_64-pc-windows-msvc.zip" -OutFile _portable-installer.zip
+          $hash = (Get-FileHash _portable-installer.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $Env:C2_PORTABLE_INSTALLER_SHA256_X64) {
+              Write-Error "Updater hash mismatch: expected $Env:C2_PORTABLE_INSTALLER_SHA256_X64, got $hash"
+              exit 1
+          }
+          7z e -y _portable-installer.zip c2-portable-updater.exe
+          Move-Item c2-portable-updater.exe "Chatterino2/updater.1/ChatterinoUpdater.exe" -Force
+          7z e -so _portable-installer.zip LICENSE-MIT > "Chatterino2/updater.1/LICENSE"
+          Remove-Item _portable-installer.zip
+
       - name: Package
         working-directory: build
         run: |
@@ -104,3 +135,18 @@ jobs:
         with:
           name: chatterino-acri-windows-x86-64
           path: build/chatterino-acri-windows-x86-64.zip
+
+      - name: Publish release
+        if: github.ref == format('refs/heads/{0}', env.RELEASE_BRANCH)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/.*CHATTERINO_VERSION = QStringLiteral("\([^"]*\)").*/\1/p' src/common/Version.hpp)
+          tag="chatterino3-build-${{ github.run_number }}"
+          cp build/chatterino-acri-windows-x86-64.zip Chatterino3-windows-x86-64.zip
+          gh release create "$tag" Chatterino3-windows-x86-64.zip \
+            --target "${{ github.sha }}" \
+            --title "Chatterino3 $version (build ${{ github.run_number }})" \
+            --notes "Chatterino $version (7TV) plus the Chatterino3 changes, commit ${{ github.sha }}." \
+            --latest

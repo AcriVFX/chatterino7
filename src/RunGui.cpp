@@ -25,6 +25,7 @@
 #include <QStyleFactory>
 #include <Qt>
 #include <QtConcurrent>
+#include <QTimer>
 
 #include <csignal>
 #include <cstdlib>
@@ -274,6 +275,13 @@ void runGui(QApplication &a, const Paths &paths, Settings &settings,
 
     chatterino::NetworkManager::init();
     updates.checkForUpdates();
+
+    // Chatterino3: also look for new builds while Chatterino stays open.
+    auto *updateTimer = new QTimer(qApp);
+    QObject::connect(updateTimer, &QTimer::timeout, [&updates] {
+        updates.checkForUpdates();
+    });
+    updateTimer->start(std::chrono::hours(3));
 
     QObject::connect(qApp, &QApplication::aboutToQuit, [] {
         auto *app = dynamic_cast<Application *>(tryGetApp());
