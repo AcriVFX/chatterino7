@@ -17,7 +17,6 @@
 #include "controllers/userdata/UserDataController.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
-#include "messages/LimitedQueueSnapshot.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageColor.hpp"
 #include "messages/MessageElement.hpp"
