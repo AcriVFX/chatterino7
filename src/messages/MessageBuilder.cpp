@@ -11,6 +11,7 @@
 #include "controllers/userdata/UserDataController.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
+#include "messages/LimitedQueueSnapshot.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageColor.hpp"
 #include "messages/MessageElement.hpp"
@@ -43,6 +44,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/IrcHelpers.hpp"
+#include "util/ModHelpers.hpp"
 #include "util/QStringHash.hpp"
 #include "util/Variant.hpp"
 #include "widgets/Window.hpp"
@@ -58,6 +60,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ranges>
 #include <unordered_set>
 
 using namespace chatterino::literals;
@@ -68,6 +71,116 @@ using namespace chatterino;
 using namespace std::chrono_literals;
 
 const QColor AUTOMOD_USER_COLOR{"blue"};
+
+/// Plain text words of a chat message, without emotes, mentions and links
+QStringList textWordsOf(const Message &message)
+{
+    QStringList words;
+    for (const auto &element : message.elements)
+    {
+        auto *text = dynamic_cast<TextElement *>(element.get());
+        if (text == nullptr || dynamic_cast<MentionElement *>(text) ||
+            dynamic_cast<LinkElement *>(text) ||
+            text->getFlags() != MessageElementFlag::Text)
+        {
+            continue;
+        }
+        words.append(text->words());
+    }
+    return words;
+}
+
+bool hasEmotes(const Message &message)
+{
+    return std::ranges::any_of(message.elements, [](const auto &element) {
+        return dynamic_cast<EmoteElement *>(element.get()) != nullptr ||
+               dynamic_cast<LayeredEmoteElement *>(element.get()) != nullptr;
+    });
+}
+
+/// Is this message a repeat?
+/// - longer text: the same user sent (nearly) the same text
+///   REPEAT_PREVIOUS_NEEDED times in the last REPEAT_WINDOW_SECONDS
+/// - short spam like "W", "Ww", "Wwww": the same user sent it
+///   SHORT_SPAM_PREVIOUS_NEEDED times in the last SHORT_SPAM_WINDOW_SECONDS
+///   and nobody else in chat is spamming the same thing
+bool isRepeatedMessage(Channel *channel, const Message &message)
+{
+    if (!message.serverReceivedTime.isValid() ||
+        message.messageText.startsWith('!'))
+    {
+        return false;
+    }
+
+    auto words = textWordsOf(message);
+    auto key = modhelpers::repeatKey(words);
+    QString shortKey;
+    if (key.isEmpty())
+    {
+        if (hasEmotes(message))
+        {
+            return false;
+        }
+        shortKey = modhelpers::shortSpamKey(words);
+        if (shortKey.isEmpty())
+        {
+            return false;
+        }
+    }
+
+    const auto window = key.isEmpty()
+                            ? std::max(modhelpers::SHORT_SPAM_WINDOW_SECONDS,
+                                       modhelpers::SHORT_SPAM_OTHERS_SECONDS)
+                            : modhelpers::REPEAT_WINDOW_SECONDS;
+
+    int previous = 0;
+    auto snapshot = channel->getMessageSnapshot();
+    for (const auto &prev : snapshot | std::views::reverse)
+    {
+        auto age =
+            prev->serverReceivedTime.isValid()
+                ? prev->serverReceivedTime.secsTo(message.serverReceivedTime)
+                : 0;
+        if (age > window)
+        {
+            break;
+        }
+        if (prev->flags.has(MessageFlag::System) ||
+            prev->flags.has(MessageFlag::Timeout) || prev->loginName.isEmpty())
+        {
+            continue;
+        }
+
+        if (!key.isEmpty())
+        {
+            if (prev->loginName == message.loginName &&
+                modhelpers::isSameRepeatKey(
+                    modhelpers::repeatKey(textWordsOf(*prev)), key) &&
+                ++previous >= modhelpers::REPEAT_PREVIOUS_NEEDED)
+            {
+                return true;
+            }
+            continue;
+        }
+
+        // short spam
+        if (modhelpers::shortSpamKey(textWordsOf(*prev)) != shortKey ||
+            hasEmotes(*prev))
+        {
+            continue;
+        }
+        if (prev->loginName != message.loginName)
+        {
+            // others are spamming it too, e.g. "W" in the whole chat
+            return false;
+        }
+        if (age <= modhelpers::SHORT_SPAM_WINDOW_SECONDS)
+        {
+            previous++;
+        }
+    }
+    return key.isEmpty() && previous >= modhelpers::SHORT_SPAM_PREVIOUS_NEEDED;
+}
 
 const QString regexHelpString("(\\w+)[.,!?;:]*?$");
 
@@ -1674,6 +1787,20 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
 
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
+
+    // repeated messages: same text from the same user 3 times in 5 minutes
+    if (!builder->flags.has(MessageFlag::Highlighted) &&
+        twitchChannel != nullptr && !args.isReceivedWhisper &&
+        !args.isSentWhisper && builder->loginName != channel->getName() &&
+        builder->loginName !=
+            getApp()->getAccounts()->twitch.getCurrent()->getUserName() &&
+        isRepeatedMessage(channel, builder.message()))
+    {
+        static const auto repeatColor =
+            std::make_shared<QColor>(0x28, 0xa0, 0x8c, 0x50);
+        builder->flags.set(MessageFlag::Highlighted);
+        builder->highlightColor = repeatColor;
+    }
     if (tags.contains("historical"))
     {
         highlight.playSound = false;

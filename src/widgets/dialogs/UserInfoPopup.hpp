@@ -66,6 +66,14 @@ private:
 
     void updateAvatarUrl();
 
+    /// Colors the "Created" label for fresh accounts
+    void updateAccountAgeWarning();
+    /// Reads this user's timeouts of the last 7 days from the chat logs
+    void updateTimeoutHistory(const QString &login);
+
+    int accountAgeDays_ = -1;
+    int followerCount_ = -1;
+
     bool isMod_{};
     bool isBroadcaster_{};
 
@@ -106,6 +114,7 @@ private:
         Label *userIDLabel = nullptr;
         Label *followageLabel = nullptr;
         Label *subageLabel = nullptr;
+        Label *timeoutHistoryLabel = nullptr;
 
         LiveIndicator *liveIndicator = nullptr;
 

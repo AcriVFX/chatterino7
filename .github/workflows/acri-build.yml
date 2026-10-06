@@ -1,0 +1,104 @@
+---
+# Windows build of this fork (usercard + repeat highlight changes).
+# Runs on pushes to the "acri" branch, or by hand from the Actions tab.
+name: Acri Windows build
+
+on:
+  push:
+    branches:
+      - acri
+  workflow_dispatch:
+
+concurrency:
+  group: acri-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONAN_VERSION: 2.11.0
+  QT_VERSION: 6.9.1
+
+jobs:
+  build-windows:
+    name: "Build Windows"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4.3.0
+        with:
+          cache: true
+          cache-key-prefix: ${{ runner.os }}-QtCache-${{ env.QT_VERSION }}-v2
+          modules: qt5compat qtimageformats
+          version: ${{ env.QT_VERSION }}
+
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+
+      - name: Cache conan packages
+        uses: actions/cache@v4
+        with:
+          key: ${{ runner.os }}-conan-user-${{ hashFiles('**/conanfile.py') }}-QT6
+          path: ~/.conan2/
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install and Setup Conan
+        run: |
+          pip install conan==${{ env.CONAN_VERSION }}
+          conan --version
+          conan profile detect -f
+        shell: bash
+
+      - name: Install dependencies
+        run: |
+          mkdir build
+          cd build
+          conan install .. \
+              -s build_type=RelWithDebInfo \
+              -c tools.cmake.cmaketoolchain:generator="Ninja" \
+              -b missing \
+              --output-folder=. \
+              -o with_openssl3=True
+        shell: bash
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cd build
+          cmake `
+              -G"NMake Makefiles" `
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+              -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake" `
+              -DUSE_PRECOMPILED_HEADERS=ON `
+              -DBUILD_WITH_CRASHPAD=OFF `
+              -DCHATTERINO_LTO=OFF `
+              -DCHATTERINO_UPDATER=OFF `
+              -DFORCE_JSON_GENERATION=On `
+              ..
+          set cl=/MP
+          nmake /S /NOLOGO
+
+      - name: Prepare build dir
+        working-directory: build
+        run: |
+          windeployqt bin/chatterino.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --dir Chatterino2/ --force-openssl
+          cp bin/chatterino.exe Chatterino2/
+          ..\.CI\deploy-crt.ps1 Chatterino2
+
+      - name: Package
+        working-directory: build
+        run: |
+          7z a chatterino-acri-windows-x86-64.zip Chatterino2/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterino-acri-windows-x86-64
+          path: build/chatterino-acri-windows-x86-64.zip
