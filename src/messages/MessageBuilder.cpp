@@ -136,11 +136,15 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
     }
 
     const auto window = key.isEmpty()
-                            ? std::max(modhelpers::SHORT_SPAM_WINDOW_SECONDS,
-                                       modhelpers::SHORT_SPAM_OTHERS_SECONDS)
+                            ? std::max({modhelpers::SHORT_SPAM_WINDOW_SECONDS,
+                                        modhelpers::SHORT_SPAM_OTHERS_SECONDS,
+                                        modhelpers::HEAVY_SPAM_WINDOW_SECONDS})
                             : modhelpers::REPEAT_WINDOW_SECONDS;
 
     int previous = 0;
+    int previousTotal = 0;
+    int others = 0;
+    bool othersRecently = false;
     auto snapshot = channel->getMessageSnapshot();
     for (const auto &prev : snapshot | std::views::reverse)
     {
@@ -179,14 +183,34 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
         if (prev->loginName != message.loginName)
         {
             // others are spamming it too, e.g. "W" in the whole chat
-            return false;
+            others++;
+            if (age <= modhelpers::SHORT_SPAM_OTHERS_SECONDS)
+            {
+                othersRecently = true;
+            }
+            continue;
+        }
+        if (age <= modhelpers::HEAVY_SPAM_WINDOW_SECONDS)
+        {
+            previousTotal++;
         }
         if (age <= modhelpers::SHORT_SPAM_WINDOW_SECONDS)
         {
             previous++;
         }
     }
-    return key.isEmpty() && previous >= modhelpers::SHORT_SPAM_PREVIOUS_NEEDED;
+    if (!key.isEmpty())
+    {
+        return false;
+    }
+    if (!othersRecently && previous >= modhelpers::SHORT_SPAM_PREVIOUS_NEEDED)
+    {
+        return true;
+    }
+    // one user sending it again and again stands out even in a chat spam,
+    // as long as they sent at least as many as everyone else together
+    return previousTotal >= modhelpers::HEAVY_SPAM_PREVIOUS_NEEDED &&
+           previousTotal + 1 >= others;
 }
 
 const QString regexHelpString("(\\w+)[.,!?;:]*?$");
@@ -1845,8 +1869,11 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
 
-    // repeated messages: same text from the same user 3 times in 5 minutes
-    if (!builder->flags.has(MessageFlag::Highlighted) &&
+    // repeated messages: same text from the same user 3 times in 5 minutes.
+    // Faint highlights (spam, streamer names) are replaced by the repeat color.
+    if ((!builder->flags.has(MessageFlag::Highlighted) ||
+         (builder->highlightColor != nullptr &&
+          builder->highlightColor->alpha() < 0x40)) &&
         twitchChannel != nullptr && !args.isReceivedWhisper &&
         !args.isSentWhisper && builder->loginName != channel->getName() &&
         builder->loginName !=
@@ -1854,7 +1881,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         isRepeatedMessage(channel, builder.message()))
     {
         static const auto repeatColor =
-            std::make_shared<QColor>(0x28, 0xa0, 0x8c, 0x50);
+            std::make_shared<QColor>(0x28, 0xa0, 0x8c, 0x80);
         builder->flags.set(MessageFlag::Highlighted);
         builder->highlightColor = repeatColor;
     }

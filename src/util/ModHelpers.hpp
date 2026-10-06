@@ -30,6 +30,13 @@ inline constexpr int SHORT_SPAM_PREVIOUS_NEEDED = 2;
 inline constexpr qint64 SHORT_SPAM_WINDOW_SECONDS = 60;
 inline constexpr qint64 SHORT_SPAM_OTHERS_SECONDS = 120;
 
+/// Short spam is also counted, even while others spam it too, when the same
+/// user sent it HEAVY_SPAM_PREVIOUS_NEEDED more times within
+/// HEAVY_SPAM_WINDOW_SECONDS and at least as often as everyone else together
+/// (one user sending "67" 15 times while a few others join in).
+inline constexpr int HEAVY_SPAM_PREVIOUS_NEEDED = 4;
+inline constexpr qint64 HEAVY_SPAM_WINDOW_SECONDS = 10 * 60;
+
 /// Comparison key for short spam: letters/digits only, lowercase, repeated
 /// characters collapsed ("Wwwww" -> "w"). Empty if longer than 15 characters.
 QString shortSpamKey(const QStringList &textWords);
