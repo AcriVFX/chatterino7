@@ -295,14 +295,18 @@ void KickApi::sendMessage(uint64_t broadcasterUserID, const QString &message,
     this->postJson<Response>(
         u"chat"_s, json,
         [cb = std::move(cb)](const ExpectedStr<Response> &res) {
-            cb(res.and_then([](Response res) {
-                if (res.isSent)
-                {
-                    return ExpectedStr<void>{};
-                }
-                return ExpectedStr<void>{
-                    makeUnexpected(u"Message was not sent"_s)};
-            }));
+            // No and_then: GCC 12's std::expected lacks monadic operations.
+            if (!res)
+            {
+                cb(ExpectedStr<void>{makeUnexpected(res.error())});
+                return;
+            }
+            if (res->isSent)
+            {
+                cb(ExpectedStr<void>{});
+                return;
+            }
+            cb(ExpectedStr<void>{makeUnexpected(u"Message was not sent"_s)});
         });
 }
 
