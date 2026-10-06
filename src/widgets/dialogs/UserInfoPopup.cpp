@@ -35,6 +35,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
+#include "util/ModHelpers.hpp"
 #include "util/PostToThread.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
@@ -61,6 +62,9 @@
 #include <QNetworkReply>
 #include <QPointer>
 #include <QStringBuilder>
+#include <QThreadPool>
+
+#include <ranges>
 
 namespace {
 constexpr QStringView TEXT_FOLLOWERS = u"Followers: %1";
@@ -475,6 +479,7 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                 .assign(&this->ui_.createdDateLabel);
             vbox.emplace<Label>("").assign(&this->ui_.followageLabel);
             vbox.emplace<Label>("").assign(&this->ui_.subageLabel);
+            vbox.emplace<Label>("").assign(&this->ui_.timeoutHistoryLabel);
         }
     }
 
@@ -959,6 +964,156 @@ void UserInfoPopup::setData(const QString &name,
     }
 }
 
+void UserInfoPopup::updateAccountAgeWarning()
+{
+    // Fresh accounts: red below 30 days, orange below 180 days with 0 followers
+    QColor color;
+    if (this->accountAgeDays_ < 0)
+    {
+        return;
+    }
+    if (this->accountAgeDays_ < 30)
+    {
+        color = QColor(255, 80, 80);
+    }
+    else if (this->accountAgeDays_ < 180 && this->followerCount_ == 0)
+    {
+        color = QColor(255, 140, 0);
+    }
+    else
+    {
+        return;
+    }
+
+    auto palette = this->ui_.createdDateLabel->palette();
+    palette.setColor(QPalette::WindowText, color);
+    this->ui_.createdDateLabel->setPalette(palette);
+    this->ui_.createdDateLabel->setFontStyle(FontStyle::UiMediumBold);
+}
+
+void UserInfoPopup::updateTimeoutHistory(const QString &login)
+{
+    constexpr int days = 7;
+
+    auto *label = this->ui_.timeoutHistoryLabel;
+    auto *twitchChannel =
+        dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get());
+    if (twitchChannel == nullptr || login.isEmpty())
+    {
+        label->setText({});
+        return;
+    }
+
+    QString baseDirectory = getSettings()->logPath.getValue().isEmpty()
+                                ? getApp()->getPaths().messageLogDirectory
+                                : getSettings()->logPath.getValue();
+    QString channelName = twitchChannel->getName();
+    QString directory = baseDirectory % u"/Twitch/Channels/" % channelName;
+
+    std::weak_ptr<bool> hack = this->lifetimeHack_;
+    QThreadPool::globalInstance()->start([this, hack, directory, channelName,
+                                          login] {
+        auto now = QDateTime::currentDateTime();
+        auto timeouts = modhelpers::readLogTimeouts(directory, channelName,
+                                                    login, now, days);
+
+        postToThread([this, hack, timeouts = std::move(timeouts), now] {
+            if (!hack.lock())
+            {
+                return;
+            }
+
+            auto *label = this->ui_.timeoutHistoryLabel;
+            int modTimeouts = 0;
+            int bans = 0;
+            int bots = 0;
+            QStringList recent;
+            QDateTime lastBan;
+            QStringList tooltip;
+            for (const auto &t : timeouts | std::views::reverse)
+            {
+                QString kind = t.isBan()        ? u"ban"_s
+                               : t.vanish       ? u"!vanish"_s
+                               : t.automatic    ? u"bot"_s
+                               : t.seconds < 10 ? u"purge"_s
+                                                : u"mod"_s;
+                tooltip.append(t.time.toString(u"ddd dd.MM. HH:mm"_s) % u" · " %
+                               t.duration % u" · " % kind);
+                if (t.isBan())
+                {
+                    bans++;
+                    if (!lastBan.isValid())
+                    {
+                        lastBan = t.time;
+                    }
+                }
+                else if (t.countsAsModAction())
+                {
+                    modTimeouts++;
+                    if (recent.size() < 3)
+                    {
+                        recent.append(t.duration % u" " %
+                                      modhelpers::formatAgo(t.time, now));
+                    }
+                }
+                else if (t.automatic && !t.vanish)
+                {
+                    bots++;
+                }
+            }
+
+            QString text;
+            QColor color;
+            if (bans > 0)
+            {
+                text = u"Banned " % modhelpers::formatAgo(lastBan, now);
+                if (modTimeouts > 0)
+                {
+                    text += u" · " % QString::number(modTimeouts) %
+                            u" timeouts (7d)";
+                }
+                color = QColor(255, 80, 80);
+            }
+            else if (modTimeouts > 0)
+            {
+                text = u"Timeouts (7d): " % QString::number(modTimeouts) %
+                       u" · " % recent.join(u", ");
+                if (modTimeouts >= 2)
+                {
+                    color = QColor(255, 140, 0);
+                }
+            }
+            else if (bots > 0)
+            {
+                text =
+                    u"Timeouts (7d): only bot (" % QString::number(bots) % u")";
+                color = QColor("#aaa");
+            }
+            else
+            {
+                text = u"Timeouts (7d): none"_s;
+                color = QColor("#aaa");
+            }
+
+            label->setText(text);
+            label->setToolTip(tooltip.isEmpty()
+                                  ? u"From your chat logs, last 7 days"_s
+                                  : tooltip.join(u"\n"));
+            label->setMouseTracking(true);
+            if (color.isValid())
+            {
+                auto palette = label->palette();
+                palette.setColor(QPalette::WindowText, color);
+                label->setPalette(palette);
+            }
+            if (bans > 0 || modTimeouts >= 2)
+            {
+                label->setFontStyle(FontStyle::UiMediumBold);
+            }
+        });
+    });
+}
+
 void UserInfoPopup::updateLatestMessages()
 {
     auto filteredChannel =
@@ -1058,13 +1213,29 @@ void UserInfoPopup::updateUserData()
 
         this->setWindowTitle(TEXT_TITLE.arg(
             user.displayName, this->underlyingChannel_->getName()));
-        this->ui_.createdDateLabel->setText(
-            TEXT_CREATED.arg(user.createdAt.section("T", 0, 0)));
+        auto createdAt =
+            QDateTime::fromString(user.createdAt, Qt::ISODateWithMs);
+        this->accountAgeDays_ = createdAt.isValid()
+                                    ? static_cast<int>(createdAt.daysTo(
+                                          QDateTime::currentDateTimeUtc()))
+                                    : -1;
+        if (this->accountAgeDays_ >= 0 && this->accountAgeDays_ < 365)
+        {
+            this->ui_.createdDateLabel->setText(
+                TEXT_CREATED.arg(user.createdAt.section("T", 0, 0)) % u" (" %
+                QString::number(this->accountAgeDays_) % u" days ago)");
+        }
+        else
+        {
+            this->ui_.createdDateLabel->setText(
+                TEXT_CREATED.arg(user.createdAt.section("T", 0, 0)));
+        }
         this->ui_.createdDateLabel->setToolTip(
-            formatLongFriendlyDuration(
-                QDateTime::fromString(user.createdAt, Qt::ISODateWithMs),
-                QDateTime::currentDateTimeUtc()) +
+            formatLongFriendlyDuration(createdAt,
+                                       QDateTime::currentDateTimeUtc()) +
             u" ago"_s);
+        this->updateAccountAgeWarning();
+        this->updateTimeoutHistory(user.login);
         this->ui_.createdDateLabel->setMouseTracking(true);
         this->ui_.userIDLabel->setText(TEXT_USER_ID % user.id);
         this->ui_.userIDLabel->setProperty("copy-text", user.id);
@@ -1088,6 +1259,8 @@ void UserInfoPopup::updateUserData()
                 }
                 this->ui_.followerCountLabel->setText(
                     TEXT_FOLLOWERS.arg(localizeNumbers(followers.total)));
+                this->followerCount_ = static_cast<int>(followers.total);
+                this->updateAccountAgeWarning();
             },
             [](const auto &errorMessage) {
                 qCWarning(chatterinoTwitch)
