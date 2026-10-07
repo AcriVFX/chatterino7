@@ -3,6 +3,7 @@
 # Runs on pushes to "acri" and "claude/**" branches, or by hand from the Actions tab.
 # Builds of the release branch are published as a GitHub release
 # ("chatterino3-build-<run number>"), which Chatterino3's update button finds.
+# Release line: claude/project-thread-7tkw9z (Chatterino7 7.5.5 + Chatterino3 changes).
 name: Acri Windows build
 
 on:
