@@ -1,6 +1,6 @@
 ---
 # Windows build of this fork (usercard + repeat highlight changes).
-# Runs on pushes to the "acri" branch, or by hand from the Actions tab.
+# Runs on pushes to "acri" and "claude/**" branches, or by hand from the Actions tab.
 # Builds of the release branch are published as a GitHub release
 # ("chatterino3-build-<run number>"), which Chatterino3's update button finds.
 name: Acri Windows build
@@ -22,7 +22,7 @@ permissions:
 env:
   CONAN_VERSION: 2.28.1
   # Branch whose builds become Chatterino3 releases.
-  RELEASE_BRANCH: acri
+  RELEASE_BRANCH: claude/project-thread-7tkw9z
   # Same updater upstream bundles in its portable zip (create-installer.yml).
   C2_PORTABLE_INSTALLER_VERSION: "v0.1.4"
   C2_PORTABLE_INSTALLER_SHA256_X64: "77bcbe8c0fb0e2e7c40c89a250816b3def14cb5d0144b98293d3224fe2b1a59b"
