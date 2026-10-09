@@ -480,6 +480,8 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
             vbox.emplace<Label>("").assign(&this->ui_.followageLabel);
             vbox.emplace<Label>("").assign(&this->ui_.subageLabel);
             vbox.emplace<Label>("").assign(&this->ui_.timeoutHistoryLabel);
+            vbox.emplace<Label>("").assign(&this->ui_.spamNowLabel);
+            this->ui_.spamNowLabel->setVisible(false);
         }
     }
 
@@ -1114,6 +1116,68 @@ void UserInfoPopup::updateTimeoutHistory(const QString &login)
     });
 }
 
+void UserInfoPopup::updateSpamNow()
+{
+    // how long after the last repeat the line stays
+    constexpr qint64 keepSeconds = 30 * 60LL;
+
+    auto *label = this->ui_.spamNowLabel;
+    if (label == nullptr)
+    {
+        return;
+    }
+
+    MessagePtr latest;
+    auto snapshot = this->underlyingChannel_->getMessageSnapshot();
+    for (const auto &message : snapshot | std::views::reverse)
+    {
+        if (message->repeatCount > 0 &&
+            message->loginName.compare(this->userName_, Qt::CaseInsensitive) ==
+                0)
+        {
+            latest = message;
+            break;
+        }
+    }
+
+    auto now = QDateTime::currentDateTime();
+    if (latest == nullptr || !latest->serverReceivedTime.isValid() ||
+        latest->serverReceivedTime.secsTo(now) > keepSeconds)
+    {
+        label->setVisible(false);
+        return;
+    }
+
+    // "NINJAGO TEMPELLLL" -> "ninjago tempel"
+    static const QRegularExpression stretched(R"((.)\1{2,})");
+    auto quote = latest->messageText.toLower().replace(stretched, u"\\1"_s);
+    if (quote.size() > 30)
+    {
+        quote = quote.left(29).trimmed() + u"…"_s;
+    }
+    QString span =
+        latest->repeatSeconds < 90
+            ? QString::number(latest->repeatSeconds) + u"s"_s
+            : QString::number((latest->repeatSeconds + 30) / 60) + u" min"_s;
+    QString when = u"Spam now: "_s;
+    if (latest->serverReceivedTime.secsTo(now) >= 60)
+    {
+        when = u"Spam "_s +
+               modhelpers::formatAgo(latest->serverReceivedTime, now) + u": "_s;
+    }
+
+    label->setText(when % QString::number(latest->repeatCount) %
+                   u" variants of “" % quote % u"” in " % span);
+    label->setToolTip(u"Similar messages this user sent in a row "
+                      u"(same rule as the teal REPEAT highlight)"_s);
+    label->setMouseTracking(true);
+    auto palette = label->palette();
+    palette.setColor(QPalette::WindowText, QColor(0x3a, 0xd0, 0xb8));
+    label->setPalette(palette);
+    label->setFontStyle(FontStyle::UiMediumBold);
+    label->setVisible(true);
+}
+
 void UserInfoPopup::updateLatestMessages()
 {
     auto filteredChannel =
@@ -1125,6 +1189,8 @@ void UserInfoPopup::updateLatestMessages()
     this->ui_.latestMessages->setVisible(hasMessages);
     this->ui_.noMessagesLabel->setVisible(!hasMessages);
 
+    this->updateSpamNow();
+
     // shrink dialog in case ChannelView goes from visible to hidden
     this->adjustSize();
 
@@ -1135,6 +1201,10 @@ void UserInfoPopup::updateLatestMessages()
                     if (!checkMessageUserName(this->userName_, message))
                     {
                         return;
+                    }
+                    if (message->repeatCount > 0)
+                    {
+                        this->updateSpamNow();
                     }
 
                     if (hasMessages)

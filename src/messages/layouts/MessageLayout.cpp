@@ -39,6 +39,28 @@ QColor laneColor(const QColor &highlight)
     return color;
 }
 
+/// Stripe and tag color of a highlighted message. Repeats take the
+/// spammer's name color, so each spammer's run reads as one color.
+QColor laneColorOf(const Message &message)
+{
+    if (message.repeatCount > 0 && message.usernameColor.isValid())
+    {
+        return laneColor(message.usernameColor);
+    }
+    return laneColor(*message.highlightColor);
+}
+
+/// Tag text in lane-style splits, e.g. "BAN" or "REPEAT ×7"
+QString laneTagOf(const Message &message)
+{
+    if (message.repeatCount > 0)
+    {
+        return message.highlightTag + QStringLiteral(" \u00D7") +
+               QString::number(message.repeatCount);
+    }
+    return message.highlightTag;
+}
+
 QColor blendColors(const QColor &base, const QColor &apply)
 {
     const qreal &alpha = apply.alphaF();
@@ -180,9 +202,8 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         this->message_->highlightColor)
     {
         this->laneTag_ = std::make_unique<TextElement>(
-            this->message_->highlightTag, MessageElementFlag::HighlightLane,
-            laneColor(*this->message_->highlightColor),
-            FontStyle::ChatMediumBold);
+            laneTagOf(*this->message_), MessageElementFlag::HighlightLane,
+            laneColorOf(*this->message_), FontStyle::ChatMediumBold);
     }
     if (lane && !this->message_->moderationChip.isEmpty())
     {
@@ -522,7 +543,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     {
         painter.fillRect(
             QRectF{0, 0, 4 * this->scale_, this->container_.getHeight()},
-            laneColor(*this->message_->highlightColor));
+            laneColorOf(*this->message_));
     }
 
     // draw message

@@ -80,6 +80,8 @@ private:
     void updateAccountAgeWarning();
     /// Reads this user's timeouts of the last 7 days from the chat logs
     void updateTimeoutHistory(const QString &login);
+    /// Shows this user's latest repeat/variant spam (see countRepeats)
+    void updateSpamNow();
 
     int accountAgeDays_ = -1;
     int followerCount_ = -1;
@@ -129,6 +131,7 @@ private:
         Label *followageLabel = nullptr;
         Label *subageLabel = nullptr;
         Label *timeoutHistoryLabel = nullptr;
+        Label *spamNowLabel = nullptr;
 
         LiveIndicator *liveIndicator = nullptr;
 

@@ -113,12 +113,16 @@ bool hasEmotes(const Message &message)
 /// - spam with small variations ("NINJAGO TEMPEL", "NINJAGOOOO",
 ///   "ninjago Tempel pls"): the same user sent VARIANT_PREVIOUS_NEEDED
 ///   variants of it in the last VARIANT_WINDOW_SECONDS
-bool isRepeatedMessage(Channel *channel, const Message &message)
+/// Returns how many of these messages the user sent (this one included),
+/// or 0 if it is not a repeat. `spanSeconds` is set to the time between
+/// the oldest counted message and this one.
+int countRepeats(Channel *channel, const Message &message, qint64 &spanSeconds)
 {
+    spanSeconds = 0;
     if (!message.serverReceivedTime.isValid() ||
         message.messageText.startsWith('!'))
     {
-        return false;
+        return 0;
     }
 
     auto words = textWordsOf(message);
@@ -131,7 +135,7 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
     }
     if (key.isEmpty() && shortKey.isEmpty() && variantTokens.isEmpty())
     {
-        return false;
+        return 0;
     }
 
     auto window = modhelpers::VARIANT_WINDOW_SECONDS;
@@ -147,9 +151,13 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
     }
 
     int repeats = 0;
+    qint64 repeatsSpan = 0;
     int variants = 0;
+    qint64 variantsSpan = 0;
     int previous = 0;
+    qint64 previousSpan = 0;
     int previousTotal = 0;
+    qint64 previousTotalSpan = 0;
     int others = 0;
     bool othersRecently = false;
     auto snapshot = channel->getMessageSnapshot();
@@ -179,20 +187,20 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
         if (sameUser && !variantTokens.isEmpty() &&
             age <= modhelpers::VARIANT_WINDOW_SECONDS &&
             modhelpers::isVariantOf(variantTokens,
-                                    modhelpers::variantTokens(prevWords)) &&
-            ++variants >= modhelpers::VARIANT_PREVIOUS_NEEDED)
+                                    modhelpers::variantTokens(prevWords)))
         {
-            return true;
+            variants++;
+            variantsSpan = age;
         }
 
         if (!key.isEmpty())
         {
             if (sameUser && age <= modhelpers::REPEAT_WINDOW_SECONDS &&
                 modhelpers::isSameRepeatKey(modhelpers::repeatKey(prevWords),
-                                            key) &&
-                ++repeats >= modhelpers::REPEAT_PREVIOUS_NEEDED)
+                                            key))
             {
-                return true;
+                repeats++;
+                repeatsSpan = age;
             }
             continue;
         }
@@ -216,24 +224,48 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
         if (age <= modhelpers::HEAVY_SPAM_WINDOW_SECONDS)
         {
             previousTotal++;
+            previousTotalSpan = age;
         }
         if (age <= modhelpers::SHORT_SPAM_WINDOW_SECONDS)
         {
             previous++;
+            previousSpan = age;
         }
     }
-    if (shortKey.isEmpty())
+
+    int count = 0;
+    auto take = [&](int previousCount, qint64 span) {
+        if (previousCount + 1 > count)
+        {
+            count = previousCount + 1;
+            spanSeconds = span;
+        }
+    };
+    if (variants >= modhelpers::VARIANT_PREVIOUS_NEEDED)
     {
-        return false;
+        take(variants, variantsSpan);
     }
-    if (!othersRecently && previous >= modhelpers::SHORT_SPAM_PREVIOUS_NEEDED)
+    if (repeats >= modhelpers::REPEAT_PREVIOUS_NEEDED)
     {
-        return true;
+        take(repeats, repeatsSpan);
     }
-    // one user sending it again and again stands out even in a chat spam,
-    // as long as they sent at least as many as everyone else together
-    return previousTotal >= modhelpers::HEAVY_SPAM_PREVIOUS_NEEDED &&
-           previousTotal + 1 >= others;
+    if (!shortKey.isEmpty())
+    {
+        if (!othersRecently &&
+            previous >= modhelpers::SHORT_SPAM_PREVIOUS_NEEDED)
+        {
+            take(previous, previousSpan);
+        }
+        // one user sending it again and again stands out even in a chat
+        // spam, as long as they sent at least as many as everyone else
+        // together
+        if (previousTotal >= modhelpers::HEAVY_SPAM_PREVIOUS_NEEDED &&
+            previousTotal + 1 >= others)
+        {
+            take(previousTotal, previousTotalSpan);
+        }
+    }
+    return count;
 }
 
 const QString regexHelpString("(\\w+)[.,!?;:]*?$");
@@ -1892,7 +1924,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
 
-    // repeated messages and variant spam from one user (see isRepeatedMessage).
+    // repeated messages and variant spam from one user (see countRepeats).
     // Faint highlights (spam, streamer names) are replaced by the repeat color.
     if ((!builder->flags.has(MessageFlag::Highlighted) ||
          (builder->highlightColor != nullptr &&
@@ -1900,8 +1932,13 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         twitchChannel != nullptr && !args.isReceivedWhisper &&
         !args.isSentWhisper && builder->loginName != channel->getName() &&
         builder->loginName !=
-            getApp()->getAccounts()->twitch.getCurrent()->getUserName() &&
-        isRepeatedMessage(channel, builder.message()))
+            getApp()->getAccounts()->twitch.getCurrent()->getUserName())
+    {
+        qint64 span = 0;
+        builder->repeatCount = countRepeats(channel, builder.message(), span);
+        builder->repeatSeconds = span;
+    }
+    if (builder->repeatCount > 0)
     {
         static const auto repeatColor =
             std::make_shared<QColor>(0x28, 0xa0, 0x8c, 0x80);

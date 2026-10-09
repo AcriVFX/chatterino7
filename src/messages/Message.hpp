@@ -84,6 +84,11 @@ struct Message {
     QString highlightLabel;
     /// Short tag for highlightLabel, e.g. "BAN" (shown in lane-style splits)
     QString highlightTag;
+    /// How many similar messages the user sent in a row, this one included
+    /// (0 if it is not a repeat, see countRepeats)
+    int repeatCount = 0;
+    /// Seconds between the first counted repeat and this message
+    qint64 repeatSeconds = 0;
     /// Set on a user's last message when they get timed out or banned,
     /// e.g. "TO 10m" or "BAN" (shown in lane-style splits)
     mutable QString moderationChip;
