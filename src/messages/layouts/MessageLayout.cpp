@@ -37,12 +37,13 @@ class LanePillLayoutElement : public TextLayoutElement
 public:
     LanePillLayoutElement(MessageElement &creator, QString &text, QSizeF size,
                           QColor color, QColor background, ImagePtr icon,
-                          float scale)
+                          bool centered, float scale)
         : TextLayoutElement(creator, text, size, color,
                             FontStyle::ChatMediumSmall, MessageColor::Text,
                             scale)
         , background_(std::move(background))
         , icon_(std::move(icon))
+        , centered_(centered)
     {
     }
 
@@ -52,6 +53,11 @@ protected:
         const qreal pad = 5 * this->scale_;
         const qreal inset = 2 * this->scale_;
         QRectF rect = QRectF(this->getRect()).adjusted(0, inset, 0, -inset);
+
+        if (this->background_.alpha() == 0)
+        {
+            return;  // spacer on untagged rows
+        }
 
         painter.save();
         painter.setRenderHint(QPainter::Antialiasing);
@@ -79,25 +85,31 @@ protected:
             getApp()->getFonts()->getFont(this->style_, this->scale_));
         painter.drawText(
             QRectF(textX, rect.y(), rect.right() - textX, rect.height()),
-            this->getText(), QTextOption(Qt::AlignLeft | Qt::AlignVCenter));
+            this->getText(),
+            QTextOption((this->centered_ ? Qt::AlignHCenter : Qt::AlignLeft) |
+                        Qt::AlignVCenter));
         painter.restore();
     }
 
 private:
     QColor background_;
     ImagePtr icon_;
+    bool centered_;
 };
 
 class LanePillElement : public MessageElement
 {
 public:
+    /// fixedWidth: as wide as the longest category tag, so every row of a
+    /// lane starts its timestamp and message at the same x
     LanePillElement(QString text, QColor color, QColor background,
-                    ImagePtr icon = nullptr)
+                    ImagePtr icon = nullptr, bool fixedWidth = false)
         : MessageElement(MessageElementFlag::HighlightLane)
         , text_(std::move(text))
         , color_(std::move(color))
         , background_(std::move(background))
         , icon_(std::move(icon))
+        , fixedWidth_(fixedWidth)
     {
     }
 
@@ -113,25 +125,33 @@ public:
         // as tall as a chat line, so the pill sits centered on the row
         const qreal height =
             fonts->getFontMetrics(FontStyle::ChatMedium, scale).height();
-        qreal width = fonts->getFontMetrics(FontStyle::ChatMediumSmall, scale)
-                          .horizontalAdvance(this->text_) +
-                      10 * scale;
+        const auto metrics =
+            fonts->getFontMetrics(FontStyle::ChatMediumSmall, scale);
+        QString text = this->text_;
+        qreal textWidth = metrics.horizontalAdvance(text);
+        if (this->fixedWidth_)
+        {
+            textWidth = metrics.horizontalAdvance(QStringLiteral("POLITICS"));
+            text = metrics.elidedText(text, Qt::ElideRight,
+                                      static_cast<int>(textWidth));
+        }
+        qreal width = textWidth + 10 * scale;
         if (this->icon_)
         {
             width += height - 4 * scale - 2 * scale + 3 * scale;
         }
-        QString text = this->text_;
         auto *element = new LanePillLayoutElement(
             *this, text, QSizeF(width, height), this->color_, this->background_,
-            this->icon_, scale);
+            this->icon_, this->fixedWidth_, scale);
         element->setTrailingSpace(true);
         container.addElement(element);
     }
 
     std::unique_ptr<MessageElement> clone() const override
     {
-        return std::make_unique<LanePillElement>(
-            this->text_, this->color_, this->background_, this->icon_);
+        return std::make_unique<LanePillElement>(this->text_, this->color_,
+                                                 this->background_, this->icon_,
+                                                 this->fixedWidth_);
     }
 
     std::string_view type() const override
@@ -144,6 +164,7 @@ private:
     QColor color_;
     QColor background_;
     ImagePtr icon_;
+    bool fixedWidth_;
 };
 
 /// Opaque, readable version of a highlight color for stripes and tags
@@ -315,17 +336,25 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     this->laneTag_.reset();
     this->laneChip_.reset();
     this->laidOutChip_ = this->message_->moderationChip;
-    if (lane && this->message_->flags.has(MessageFlag::Highlighted) &&
-        !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
-        !this->message_->highlightTag.isEmpty() &&
-        this->message_->highlightColor)
+    const bool tagged = lane &&
+                        this->message_->flags.has(MessageFlag::Highlighted) &&
+                        !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
+                        !this->message_->highlightTag.isEmpty() &&
+                        this->message_->highlightColor;
+    if (tagged)
     {
         this->laneTag_ = std::make_unique<LanePillElement>(
             this->message_->highlightTag, QColor(0x11, 0x11, 0x11),
-            pillColor(*this->message_->highlightColor));
+            pillColor(*this->message_->highlightColor), nullptr, true);
+    }
+    else if (lane)
+    {
+        // same room on untagged rows, so all rows of a lane line up
+        this->laneTag_ = std::make_unique<LanePillElement>(
+            QString(), QColor(), QColor(Qt::transparent), nullptr, true);
     }
     this->laneRepeat_.reset();
-    if (this->laneTag_ && this->message_->repeatCount > 0)
+    if (tagged && this->message_->repeatCount > 0)
     {
         // one row per spammer (see ChannelView), the counter opens the usercard
         this->laneRepeat_ = std::make_unique<TextElement>(
