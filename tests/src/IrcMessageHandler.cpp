@@ -658,3 +658,67 @@ TEST(TestIrcMessageHandlerP, Integrity)
 {
     ASSERT_FALSE(UPDATE_SNAPSHOTS);  // make sure fixtures are actually tested
 }
+
+namespace {
+
+class TestIrcMessageHandlerRepeats : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        this->mockApplication = std::make_unique<MockApplication>();
+    }
+
+    void TearDown() override
+    {
+        this->mockApplication.reset();
+    }
+
+    std::unique_ptr<MockApplication> mockApplication;
+};
+
+/// The i-th of the same message from one user, 5 seconds apart
+QByteArray spamMessage(int i)
+{
+    return u"@display-name=spammer;id=repeat-%1;room-id=11148817;"
+           "tmi-sent-ts=%2;user-id=123 "
+           ":spammer!spammer@spammer.tmi.twitch.tv PRIVMSG #pajlada "
+           ":follow my channel for free stuff"_s.arg(i)
+               .arg(1662206235000 + (i * 5000))
+               .toUtf8();
+}
+
+}  // namespace
+
+/// The recent messages loaded on join are built into a sink before any of
+/// them is in the channel, so the repeat check has to look at the sink.
+TEST_F(TestIrcMessageHandlerRepeats, RepeatsInRecentMessages)
+{
+    auto channel = std::make_shared<TwitchChannel>(u"pajlada"_s);
+
+    VectorMessageSink sink;
+    for (int i = 0; i < 3; i++)
+    {
+        auto *ircMessage =
+            Communi::IrcMessage::fromData(spamMessage(i), nullptr);
+        ASSERT_NE(ircMessage, nullptr);
+        IrcMessageHandler::parseMessageInto(ircMessage, sink, channel.get());
+        delete ircMessage;
+    }
+
+    ASSERT_EQ(sink.messages().size(), 3);
+    EXPECT_EQ(sink.messages()[1]->repeatCount, 0);
+    const auto &third = sink.messages()[2];
+    EXPECT_EQ(third->repeatCount, 3);
+    EXPECT_EQ(third->repeatSeconds, 10);
+    EXPECT_EQ(third->highlightTag, u"REPEAT"_s);
+
+    // another sink doesn't see them, and the channel is still empty
+    VectorMessageSink other;
+    auto *ircMessage = Communi::IrcMessage::fromData(spamMessage(3), nullptr);
+    ASSERT_NE(ircMessage, nullptr);
+    IrcMessageHandler::parseMessageInto(ircMessage, other, channel.get());
+    delete ircMessage;
+    ASSERT_EQ(other.messages().size(), 1);
+    EXPECT_EQ(other.messages()[0]->repeatCount, 0);
+}

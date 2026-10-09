@@ -7,7 +7,6 @@
 #include "controllers/filters/lang/Filter.hpp"
 #include "controllers/filters/lang/Types.hpp"
 #include "controllers/highlights/HighlightController.hpp"
-#include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "mocks/BaseApplication.hpp"
 #include "mocks/Channel.hpp"
@@ -26,8 +25,6 @@
 
 #include <QColor>
 #include <QVariant>
-
-#include <vector>
 
 using namespace Qt::Literals;
 using namespace chatterino;
@@ -406,43 +403,6 @@ TEST_F(FiltersF, TypingContextChecks)
     EXPECT_EQ(contextMap, expected);
 
     delete privmsg;
-}
-
-TEST_F(FiltersF, RepeatTagInRecentMessages)
-{
-    TwitchChannel channel("pajlada");
-
-    auto build = [&](int i, const std::vector<MessagePtr> *pending) {
-        auto data = u"@display-name=spammer;id=repeat-%1;room-id=11148817;"
-                    "tmi-sent-ts=%2;user-id=123 "
-                    ":spammer!spammer@spammer.tmi.twitch.tv PRIVMSG #pajlada "
-                    ":follow my channel for free stuff"_s.arg(i)
-                        .arg(1662206235000 + (i * 5000));
-        auto *privmsg = dynamic_cast<Communi::IrcPrivateMessage *>(
-            Communi::IrcPrivateMessage::fromData(data.toUtf8(), nullptr));
-        EXPECT_NE(privmsg, nullptr);
-        auto [msg, alert] = MessageBuilder::makeIrcMessage(
-            &channel, privmsg, MessageParseArgs{.pendingMessages = pending},
-            privmsg->content(), 0);
-        delete privmsg;
-        EXPECT_NE(msg.get(), nullptr);
-        return msg;
-    };
-
-    // the recent messages loaded on join are built before any of them is in
-    // the channel, so the repeat check has to look at the pending ones
-    std::vector<MessagePtr> pending;
-    pending.emplace_back(build(0, &pending));
-    pending.emplace_back(build(1, &pending));
-    auto third = build(2, &pending);
-
-    EXPECT_EQ(third->repeatCount, 3);
-    EXPECT_EQ(third->repeatSeconds, 10);
-    EXPECT_EQ(buildContextMap(third, &channel).value("message.highlight_tag"),
-              QVariant(u"REPEAT"_s));
-
-    // without them, the (empty) channel has nothing to compare against
-    EXPECT_EQ(build(3, nullptr)->repeatCount, 0);
 }
 
 TEST_F(FiltersF, ExpressionDebug)
