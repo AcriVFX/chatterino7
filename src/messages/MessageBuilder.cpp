@@ -1883,6 +1883,8 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
             std::make_shared<QColor>(0x28, 0xa0, 0x8c, 0x80);
         builder->flags.set(MessageFlag::Highlighted);
         builder->highlightColor = repeatColor;
+        builder->highlightLabel = QStringLiteral("REPEAT");
+        builder->highlightTag = QStringLiteral("REPEAT");
     }
     if (tags.contains("historical"))
     {
@@ -2330,6 +2332,8 @@ HighlightAlert MessageBuilder::parseHighlights(const QVariantMap &tags,
     this->message().flags.set(MessageFlag::Highlighted);
 
     this->message().highlightColor = highlightResult.color;
+    this->message().highlightLabel = highlightResult.label;
+    this->message().highlightTag = highlightTagFromLabel(highlightResult.label);
 
     if (highlightResult.showInMentions)
     {

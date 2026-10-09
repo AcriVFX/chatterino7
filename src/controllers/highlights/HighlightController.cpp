@@ -25,11 +25,12 @@ using namespace chatterino;
 
 auto highlightPhraseCheck(const HighlightPhrase &highlight) -> HighlightCheck
 {
+    auto label = highlightLabelFromPattern(highlight.getPattern());
     return HighlightCheck{
-        [highlight](const auto &args, const auto &twitchBadges,
-                    const auto &senderName, const auto &originalMessage,
-                    const auto &flags,
-                    const auto self) -> std::optional<HighlightResult> {
+        [highlight, label](const auto &args, const auto &twitchBadges,
+                           const auto &senderName, const auto &originalMessage,
+                           const auto &flags,
+                           const auto self) -> std::optional<HighlightResult> {
             (void)args;          // unused
             (void)twitchBadges;  // unused
             (void)senderName;    // unused
@@ -52,11 +53,13 @@ auto highlightPhraseCheck(const HighlightPhrase &highlight) -> HighlightCheck
                 highlightSoundUrl = highlight.getSoundUrl();
             }
 
-            return HighlightResult{
+            HighlightResult result{
                 highlight.hasAlert(),       highlight.hasSound(),
                 highlightSoundUrl,          highlight.getColor(),
                 highlight.showInMentions(),
             };
+            result.label = label;
+            return result;
         }};
 }
 
@@ -560,6 +563,8 @@ std::pair<bool, HighlightResult> HighlightController::check(
                 if (!result.color)
                 {
                     result.color = checkResult->color;
+                    // the label belongs to the rule that colors the message
+                    result.label = checkResult->label;
                 }
             }
 
