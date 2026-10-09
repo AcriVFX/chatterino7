@@ -24,11 +24,19 @@ struct Entry {
 };
 
 constexpr qint64 KEEP_MSECS = 3LL * 24 * 60 * 60 * 1000;
-constexpr qint64 MATCH_MSECS = 15 * 1000;
+constexpr qint64 MATCH_MSECS = 15LL * 1000;
 
-std::mutex mutex;
-bool loaded = false;
-std::vector<Entry> entries;
+struct Store {
+    std::mutex mutex;
+    bool loaded = false;
+    std::vector<Entry> entries;
+};
+
+Store &store()
+{
+    static Store instance;
+    return instance;
+}
 
 QString filePath()
 {
@@ -37,13 +45,13 @@ QString filePath()
 }
 
 /// Reads the file once and rewrites it without entries older than 3 days
-void loadLocked()
+void loadLocked(Store &st)
 {
-    if (loaded)
+    if (st.loaded)
     {
         return;
     }
-    loaded = true;
+    st.loaded = true;
 
     const auto cutoff = QDateTime::currentMSecsSinceEpoch() - KEEP_MSECS;
     QFile file(filePath());
@@ -63,7 +71,7 @@ void loadLocked()
             dropped = true;
             continue;
         }
-        entries.push_back({msecs, parts[1], parts[2]});
+        st.entries.push_back({msecs, parts[1], parts[2]});
     }
     file.close();
 
@@ -71,7 +79,7 @@ void loadLocked()
         file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
     {
         QTextStream out(&file);
-        for (const auto &e : entries)
+        for (const auto &e : st.entries)
         {
             out << e.msecs << '\t' << e.user << '\t' << e.moderator << '\n';
         }
@@ -87,11 +95,12 @@ void remember(const QString &user, const QDateTime &time,
     {
         return;
     }
-    std::lock_guard lock(mutex);
-    loadLocked();
+    auto &st = store();
+    std::lock_guard lock(st.mutex);
+    loadLocked(st);
 
     const auto msecs = time.toMSecsSinceEpoch();
-    entries.push_back({msecs, user, moderator});
+    st.entries.push_back({msecs, user, moderator});
 
     QFile file(filePath());
     if (file.open(QIODevice::Append | QIODevice::Text))
@@ -107,13 +116,14 @@ QString lookup(const QString &user, const QDateTime &time)
     {
         return {};
     }
-    std::lock_guard lock(mutex);
-    loadLocked();
+    auto &st = store();
+    std::lock_guard lock(st.mutex);
+    loadLocked(st);
 
     const auto msecs = time.toMSecsSinceEpoch();
     QString best;
     qint64 bestDiff = MATCH_MSECS + 1;
-    for (const auto &e : entries)
+    for (const auto &e : st.entries)
     {
         const auto diff = std::abs(e.msecs - msecs);
         if (diff < bestDiff && e.user.compare(user, Qt::CaseInsensitive) == 0)
