@@ -42,7 +42,9 @@ Version::Version()
 
 #ifdef Q_OS_WIN
     // keep in sync with .CI/chatterino-installer.iss
-    this->appUserModelID_ = L"SevenTV.Chatterino7";
+    // Chatterino3: own ID, so Windows doesn't mix it up with Chatterino7
+    // (taskbar icon and pins come from the shortcut with the same ID)
+    this->appUserModelID_ = L"AcriVFX.Chatterino3";
 #endif
 }
 

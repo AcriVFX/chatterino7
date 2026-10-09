@@ -288,7 +288,7 @@ void Toasts::ensureInitialized()
     this->initialized_ = true;
 
     auto *instance = WinToast::instance();
-    instance->setAppName(L"Chatterino7");
+    instance->setAppName(L"Chatterino3");
     instance->setAppUserModelId(Version::instance().appUserModelID());
     if (!getSettings()->createShortcutForToasts)
     {
