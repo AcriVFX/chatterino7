@@ -91,6 +91,12 @@ protected:
         painter.restore();
     }
 
+    bool paintAnimated(QPainter & /*painter*/, qreal /*yOffset*/) override
+    {
+        // never a 7TV paint, even when the pill links to a user
+        return false;
+    }
+
 private:
     QColor background_;
     ImagePtr icon_;
@@ -149,9 +155,11 @@ public:
 
     std::unique_ptr<MessageElement> clone() const override
     {
-        return std::make_unique<LanePillElement>(this->text_, this->color_,
-                                                 this->background_, this->icon_,
-                                                 this->fixedWidth_);
+        auto element = std::make_unique<LanePillElement>(
+            this->text_, this->color_, this->background_, this->icon_,
+            this->fixedWidth_);
+        element->setLink(this->getLink());
+        return element;
     }
 
     std::string_view type() const override
@@ -166,18 +174,6 @@ private:
     ImagePtr icon_;
     bool fixedWidth_;
 };
-
-/// Opaque, readable version of a highlight color for stripes and tags
-QColor laneColor(const QColor &highlight)
-{
-    QColor color = highlight;
-    color.setAlpha(255);
-    if (color.lightness() < 150)
-    {
-        color = QColor::fromHsl(color.hslHue(), color.hslSaturation(), 150);
-    }
-    return color;
-}
 
 /// Repeat counter in lane-style splits, e.g. "8 in 49s ▸" or "17 in 2 min ▸"
 QString repeatCounterOf(const Message &message)
@@ -357,10 +353,9 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     if (tagged && this->message_->repeatCount > 0)
     {
         // one row per spammer (see ChannelView), the counter opens the usercard
-        this->laneRepeat_ = std::make_unique<TextElement>(
-            repeatCounterOf(*this->message_), MessageElementFlag::HighlightLane,
-            laneColor(*this->message_->highlightColor),
-            FontStyle::ChatMediumBold);
+        this->laneRepeat_ = std::make_unique<LanePillElement>(
+            repeatCounterOf(*this->message_), QColor(0x11, 0x11, 0x11),
+            pillColor(*this->message_->highlightColor));
         this->laneRepeat_->setLink({Link::UserInfo, this->message_->loginName});
     }
     if (lane && !this->message_->moderationChip.isEmpty())
