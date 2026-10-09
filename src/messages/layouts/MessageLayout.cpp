@@ -497,6 +497,17 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
                 pixmap->height(),
             },
             ctx.messageColors.disabled);
+
+        // lane-style splits also cross out a punished message (the chip says
+        // why); painted here, not into the buffer, like the overlay above
+        if (this->currentWordFlags_.has(MessageElementFlag::HighlightLane))
+        {
+            ctx.painter.save();
+            ctx.painter.translate(0, ctx.y);
+            this->container_.paintStrikeout(ctx.painter,
+                                            QColor(0x9a, 0x9a, 0xa3));
+            ctx.painter.restore();
+        }
     }
 
     if (this->message_->flags.has(MessageFlag::RecentMessage) &&

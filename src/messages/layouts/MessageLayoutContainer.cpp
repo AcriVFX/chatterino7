@@ -233,6 +233,34 @@ void MessageLayoutContainer::breakLine()
     this->line_++;
 }
 
+void MessageLayoutContainer::paintStrikeout(QPainter &painter,
+                                            const QColor &color) const
+{
+    painter.save();
+    painter.setPen(QPen(color, std::max(1.0F, this->scale_)));
+    for (const auto &line : this->lines_)
+    {
+        std::optional<QRectF> span;
+        for (auto i = line.startIndex; i < line.endIndex; i++)
+        {
+            const auto &element = this->elements_[i];
+            if (!element->getCreator().getFlags().has(MessageElementFlag::Text))
+            {
+                continue;
+            }
+            QRectF rect = element->getRect();
+            span = span ? span->united(rect) : rect;
+        }
+        if (span)
+        {
+            const qreal y = span->center().y();
+            painter.drawLine(QPointF(span->left(), y),
+                             QPointF(span->right(), y));
+        }
+    }
+    painter.restore();
+}
+
 void MessageLayoutContainer::paintElements(QPainter &painter,
                                            const MessagePaintContext &ctx) const
 {

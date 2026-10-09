@@ -80,6 +80,12 @@ struct MessageLayoutContainer {
     bool paintAnimatedElements(QPainter &painter, qreal yOffset) const;
 
     /**
+     * Cross out the message text, line by line (lane-style splits show
+     * timed-out messages this way)
+     */
+    void paintStrikeout(QPainter &painter, const QColor &color) const;
+
+    /**
      * Paint the selection for this container
      * This container contains one or more message elements
      *
