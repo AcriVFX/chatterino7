@@ -5,6 +5,7 @@
 #include "messages/layouts/MessageLayout.hpp"
 
 #include "Application.hpp"
+#include "messages/Image.hpp"
 #include "messages/layouts/MessageLayoutContainer.hpp"
 #include "messages/layouts/MessageLayoutContext.hpp"
 #include "messages/layouts/MessageLayoutElement.hpp"
@@ -12,6 +13,7 @@
 #include "messages/MessageElement.hpp"
 #include "messages/Selection.hpp"
 #include "providers/colors/ColorProvider.hpp"
+#include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/StreamerMode.hpp"
 #include "singletons/WindowManager.hpp"
@@ -26,6 +28,41 @@
 namespace chatterino {
 
 namespace {
+
+/// The ban icon of the moderation actions, in front of a lane BAN chip
+class LaneIconElement : public MessageElement
+{
+public:
+    explicit LaneIconElement(ImagePtr image)
+        : MessageElement(MessageElementFlag::HighlightLane)
+        , image_(std::move(image))
+    {
+    }
+
+    void addToContainer(MessageLayoutContainer &container,
+                        const MessageLayoutContext &ctx) override
+    {
+        if (ctx.flags.has(MessageElementFlag::HighlightLane))
+        {
+            QSizeF size{container.getScale() * 16, container.getScale() * 16};
+            container.addElement(
+                new ImageLayoutElement(*this, this->image_, size));
+        }
+    }
+
+    std::unique_ptr<MessageElement> clone() const override
+    {
+        return std::make_unique<LaneIconElement>(this->image_);
+    }
+
+    std::string_view type() const override
+    {
+        return "LaneIconElement";
+    }
+
+private:
+    ImagePtr image_;
+};
 
 /// Opaque, readable version of a highlight color for stripes and tags
 QColor laneColor(const QColor &highlight)
@@ -185,6 +222,7 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     const bool lane = ctx.flags.has(MessageElementFlag::HighlightLane);
     this->laneTag_.reset();
     this->laneChip_.reset();
+    this->laneChipIcon_.reset();
     this->laidOutChip_ = this->message_->moderationChip;
     if (lane && this->message_->flags.has(MessageFlag::Highlighted) &&
         !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
@@ -208,6 +246,11 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     }
     if (lane && !this->message_->moderationChip.isEmpty())
     {
+        if (this->message_->moderationChip.startsWith(u"BAN"))
+        {
+            this->laneChipIcon_ = std::make_unique<LaneIconElement>(
+                Image::fromResourcePixmap(getResources().buttons.ban));
+        }
         this->laneChip_ = std::make_unique<TextElement>(
             this->message_->moderationChip, MessageElementFlag::HighlightLane,
             this->message_->moderationChip.startsWith(u"BAN")
@@ -284,6 +327,10 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     if (this->laneChip_ &&
         !(hideModerated && this->message_->flags.has(MessageFlag::Disabled)))
     {
+        if (this->laneChipIcon_)
+        {
+            this->laneChipIcon_->addToContainer(this->container_, ctx);
+        }
         this->laneChip_->addToContainer(this->container_, ctx);
     }
 
