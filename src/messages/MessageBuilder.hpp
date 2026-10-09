@@ -19,6 +19,7 @@
 #include <ctime>
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace chatterino {
 
@@ -86,6 +87,9 @@ struct MessageParseArgs {
     bool allowIgnore = true;
     bool isAction = false;
     QString channelPointRewardId = "";
+    /// Messages built just before this one that are not in the channel yet
+    /// (recent messages loaded on join), for repeat detection
+    const std::vector<MessagePtr> *pendingMessages = nullptr;
 };
 
 struct HighlightAlert {

@@ -396,6 +396,8 @@ private:
     bool shouldIncludeMessage(const MessagePtr &message) const;
     /// True if the parent split shows highlights in lane style
     bool isLaneStyle() const;
+    /// Lanes (filtered lane-style splits) show one row per spammer
+    bool foldsRepeats() const;
 
     // Returns whether the scrollbar should have highlights
     bool showScrollbarHighlights() const;

@@ -31,6 +31,8 @@ public:
 
     MessageSinkTraits sinkTraits() const override;
 
+    const std::vector<MessagePtr> *pendingMessages() const override;
+
     const std::vector<MessagePtr> &messages() const;
     std::vector<MessagePtr> takeMessages() &&;
 

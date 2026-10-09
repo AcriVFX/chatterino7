@@ -104,4 +104,9 @@ MessageSinkTraits VectorMessageSink::sinkTraits() const
     return this->traits;
 }
 
+const std::vector<MessagePtr> *VectorMessageSink::pendingMessages() const
+{
+    return &this->messages_;
+}
+
 }  // namespace chatterino

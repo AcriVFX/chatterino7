@@ -61,6 +61,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QFileInfo>
+#include <QSet>
 #include <QStringBuilder>
 #include <QTimeZone>
 
@@ -116,7 +117,10 @@ bool hasEmotes(const Message &message)
 /// Returns how many of these messages the user sent (this one included),
 /// or 0 if it is not a repeat. `spanSeconds` is set to the time between
 /// the oldest counted message and this one.
-int countRepeats(Channel *channel, const Message &message, qint64 &spanSeconds)
+/// `pending` are messages built before this one that are not in the
+/// channel yet (the recent messages loaded on join), or null.
+int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
+                 const Message &message, qint64 &spanSeconds)
 {
     spanSeconds = 0;
     if (!message.serverReceivedTime.isValid() ||
@@ -160,27 +164,31 @@ int countRepeats(Channel *channel, const Message &message, qint64 &spanSeconds)
     qint64 previousTotalSpan = 0;
     int others = 0;
     bool othersRecently = false;
-    auto snapshot = channel->getMessageSnapshot();
-    for (const auto &prev : snapshot | std::views::reverse)
-    {
+    // returns false once `prev` is too old to matter
+    auto visit = [&](const MessagePtr &prev) -> bool {
         auto age =
             prev->serverReceivedTime.isValid()
                 ? prev->serverReceivedTime.secsTo(message.serverReceivedTime)
                 : 0;
         if (age > window)
         {
-            break;
+            return false;
+        }
+        if (age < 0)
+        {
+            // sent after this one (live messages while history loads)
+            return true;
         }
         if (prev->flags.has(MessageFlag::System) ||
             prev->flags.has(MessageFlag::Timeout) || prev->loginName.isEmpty())
         {
-            continue;
+            return true;
         }
         const bool sameUser = prev->loginName == message.loginName;
         if ((sameUser && prev->messageText.startsWith('!')) ||
             (!sameUser && shortKey.isEmpty()))
         {
-            continue;
+            return true;
         }
         const auto prevWords = textWordsOf(*prev);
 
@@ -202,14 +210,14 @@ int countRepeats(Channel *channel, const Message &message, qint64 &spanSeconds)
                 repeats++;
                 repeatsSpan = age;
             }
-            continue;
+            return true;
         }
 
         // short spam
         if (shortKey.isEmpty() ||
             modhelpers::shortSpamKey(prevWords) != shortKey || hasEmotes(*prev))
         {
-            continue;
+            return true;
         }
         if (!sameUser)
         {
@@ -219,7 +227,7 @@ int countRepeats(Channel *channel, const Message &message, qint64 &spanSeconds)
             {
                 othersRecently = true;
             }
-            continue;
+            return true;
         }
         if (age <= modhelpers::HEAVY_SPAM_WINDOW_SECONDS)
         {
@@ -230,6 +238,38 @@ int countRepeats(Channel *channel, const Message &message, qint64 &spanSeconds)
         {
             previous++;
             previousSpan = age;
+        }
+        return true;
+    };
+    bool more = true;
+    QSet<QString> pendingIds;
+    if (pending != nullptr)
+    {
+        // recent messages being loaded, not in the channel yet
+        for (const auto &prev : *pending | std::views::reverse)
+        {
+            pendingIds.insert(prev->id);
+            more = visit(prev);
+            if (!more)
+            {
+                break;
+            }
+        }
+    }
+    if (more)
+    {
+        auto snapshot = channel->getMessageSnapshot();
+        for (const auto &prev : snapshot | std::views::reverse)
+        {
+            if (!prev->id.isEmpty() && pendingIds.contains(prev->id))
+            {
+                // loaded again after a reconnect, don't count it twice
+                continue;
+            }
+            if (!visit(prev))
+            {
+                break;
+            }
         }
     }
 
@@ -1935,7 +1975,8 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
             getApp()->getAccounts()->twitch.getCurrent()->getUserName())
     {
         qint64 span = 0;
-        builder->repeatCount = countRepeats(channel, builder.message(), span);
+        builder->repeatCount = countRepeats(channel, args.pendingMessages,
+                                            builder.message(), span);
         builder->repeatSeconds = span;
     }
     if (builder->repeatCount > 0)
