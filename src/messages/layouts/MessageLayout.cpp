@@ -26,6 +26,8 @@
 #include <QtGlobal>
 #include <QThread>
 
+#include <cmath>
+
 namespace chatterino {
 
 namespace {
@@ -41,7 +43,7 @@ public:
         : TextLayoutElement(creator, text, size, color,
                             FontStyle::ChatMediumSmall, MessageColor::Text,
                             scale)
-        , background_(std::move(background))
+        , background_(background)
         , icon_(std::move(icon))
         , centered_(centered)
         , radius_(radius)
@@ -71,15 +73,15 @@ protected:
         if (this->icon_)
         {
             auto pixmap = this->icon_->pixmapOrLoad();
-            const qreal iconSize = rect.height() - 2 * this->scale_;
+            const qreal iconSize = rect.height() - (2 * this->scale_);
             if (pixmap)
             {
                 painter.drawPixmap(
-                    QRectF(textX, rect.center().y() - iconSize / 2, iconSize,
+                    QRectF(textX, rect.center().y() - (iconSize / 2), iconSize,
                            iconSize),
                     *pixmap, QRectF());
             }
-            textX += iconSize + 3 * this->scale_;
+            textX += iconSize + (3 * this->scale_);
         }
 
         painter.setPen(this->color_);
@@ -116,8 +118,8 @@ public:
                     qreal radius = 3)
         : MessageElement(MessageElementFlag::HighlightLane)
         , text_(std::move(text))
-        , color_(std::move(color))
-        , background_(std::move(background))
+        , color_(color)
+        , background_(background)
         , icon_(std::move(icon))
         , fixedWidth_(fixedWidth)
         , radius_(radius)
@@ -146,10 +148,10 @@ public:
             text = metrics.elidedText(text, Qt::ElideRight,
                                       static_cast<int>(textWidth));
         }
-        qreal width = textWidth + 10 * scale;
+        qreal width = textWidth + (10 * scale);
         if (this->icon_)
         {
-            width += height - 4 * scale - 2 * scale + 3 * scale;
+            width += height - (3 * scale);
         }
         auto *element = new LanePillLayoutElement(
             *this, text, QSizeF(width, height), this->color_, this->background_,
@@ -197,7 +199,8 @@ QString repeatCounterOf(const Message &message)
 QColor pillColor(const QColor &highlight)
 {
     auto lift = [](int c) {
-        return std::min(255, static_cast<int>(c + (255 - c) * 0.25 + 0.5));
+        return std::min(255,
+                        static_cast<int>(std::lround(c + ((255 - c) * 0.25))));
     };
     return {lift(highlight.red()), lift(highlight.green()),
             lift(highlight.blue())};
