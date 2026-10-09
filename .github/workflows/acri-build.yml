@@ -100,7 +100,7 @@ jobs:
               -G Ninja `
               -DCMAKE_BUILD_TYPE=RelWithDebInfo `
               -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake" `
-              -DUSE_PRECOMPILED_HEADERS=ON `
+              -DUSE_PRECOMPILED_HEADERS=OFF `
               -DBUILD_WITH_CRASHPAD=OFF `
               -DCHATTERINO_LTO=OFF `
               -DCHATTERINO_UPDATER=ON `
@@ -109,6 +109,7 @@ jobs:
               -DFORCE_JSON_GENERATION=On `
               ..
           ninja
+          sccache --show-stats
 
       - name: Prepare build dir
         working-directory: build
