@@ -721,6 +721,19 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
             pillColor(*this->message_->highlightColor));
     }
 
+    // lane-style splits mark the words the highlight rule matched
+    if (this->currentWordFlags_.has(MessageElementFlag::HighlightLane) &&
+        this->message_->flags.has(MessageFlag::Highlighted) &&
+        !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
+        this->message_->highlightColor &&
+        !this->message_->highlightMatch.isEmpty())
+    {
+        QColor mark = *this->message_->highlightColor;
+        mark.setAlphaF(std::max<float>(mark.alphaF(), 0.45F));
+        this->container_.paintWordMarks(painter, this->message_->highlightMatch,
+                                        mark);
+    }
+
     // draw message
     this->container_.paintElements(painter, ctx);
 

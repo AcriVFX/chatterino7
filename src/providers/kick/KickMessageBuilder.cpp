@@ -406,6 +406,7 @@ HighlightAlert processHighlights(KickMessageBuilder &builder,
     builder->highlightColor = highlightResult.color;
     builder->highlightLabel = highlightResult.label;
     builder->highlightTag = highlightTagFromLabel(highlightResult.label);
+    builder->highlightMatch = highlightResult.matchedText;
 
     if (highlightResult.showInMentions)
     {

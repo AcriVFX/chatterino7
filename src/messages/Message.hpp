@@ -84,6 +84,8 @@ struct Message {
     QString highlightLabel;
     /// Short tag for highlightLabel, e.g. "BAN" (shown in lane-style splits)
     QString highlightTag;
+    /// Text the coloring highlight rule matched, e.g. "hurensohn"
+    QString highlightMatch;
     /// How many similar messages the user sent in a row, this one included
     /// (0 if it is not a repeat, see countRepeats)
     int repeatCount = 0;

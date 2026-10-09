@@ -86,6 +86,13 @@ struct MessageLayoutContainer {
     void paintStrikeout(QPainter &painter, const QColor &color) const;
 
     /**
+     * Put a soft marker behind the text words that are part of `match`
+     * (lane-style splits mark what a highlight rule matched)
+     */
+    void paintWordMarks(QPainter &painter, const QString &match,
+                        const QColor &color) const;
+
+    /**
      * Paint the selection for this container
      * This container contains one or more message elements
      *

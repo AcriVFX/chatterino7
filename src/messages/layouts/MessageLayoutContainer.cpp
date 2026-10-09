@@ -261,6 +261,45 @@ void MessageLayoutContainer::paintStrikeout(QPainter &painter,
     painter.restore();
 }
 
+void MessageLayoutContainer::paintWordMarks(QPainter &painter,
+                                            const QString &match,
+                                            const QColor &color) const
+{
+    const auto words = match.split(u' ', Qt::SkipEmptyParts);
+    if (words.isEmpty())
+    {
+        return;
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    for (const auto &element : this->elements_)
+    {
+        if (!element->getCreator().getFlags().has(MessageElementFlag::Text))
+        {
+            continue;
+        }
+        const auto &text = element->getText();
+        bool marked = false;
+        for (const auto &word : words)
+        {
+            if (text.contains(word, Qt::CaseInsensitive) ||
+                (text.size() >= 2 && word.contains(text, Qt::CaseInsensitive)))
+            {
+                marked = true;
+                break;
+            }
+        }
+        if (marked)
+        {
+            painter.drawRoundedRect(QRectF(element->getRect()),
+                                    2 * this->scale_, 2 * this->scale_);
+        }
+    }
+    painter.restore();
+}
+
 void MessageLayoutContainer::paintElements(QPainter &painter,
                                            const MessagePaintContext &ctx) const
 {

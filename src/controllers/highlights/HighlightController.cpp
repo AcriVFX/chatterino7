@@ -59,6 +59,7 @@ auto highlightPhraseCheck(const HighlightPhrase &highlight) -> HighlightCheck
                 highlight.showInMentions(),
             };
             result.label = label;
+            result.matchedText = highlight.matchedText(originalMessage);
             return result;
         }};
 }
@@ -565,6 +566,7 @@ std::pair<bool, HighlightResult> HighlightController::check(
                     result.color = checkResult->color;
                     // the label belongs to the rule that colors the message
                     result.label = checkResult->label;
+                    result.matchedText = checkResult->matchedText;
                 }
             }
 
