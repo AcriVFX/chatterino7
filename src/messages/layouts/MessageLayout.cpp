@@ -5,6 +5,7 @@
 #include "messages/layouts/MessageLayout.hpp"
 
 #include "Application.hpp"
+#include "messages/Image.hpp"
 #include "messages/layouts/MessageLayoutContainer.hpp"
 #include "messages/layouts/MessageLayoutContext.hpp"
 #include "messages/layouts/MessageLayoutElement.hpp"
@@ -12,6 +13,7 @@
 #include "messages/MessageElement.hpp"
 #include "messages/Selection.hpp"
 #include "providers/colors/ColorProvider.hpp"
+#include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/StreamerMode.hpp"
 #include "singletons/WindowManager.hpp"
@@ -26,6 +28,65 @@
 namespace chatterino {
 
 namespace {
+
+/// The ban icon of the moderation actions, in front of a lane BAN chip
+class LaneIconElement : public MessageElement
+{
+public:
+    explicit LaneIconElement(ImagePtr image)
+        : MessageElement(MessageElementFlag::HighlightLane)
+        , image_(std::move(image))
+    {
+    }
+
+    void addToContainer(MessageLayoutContainer &container,
+                        const MessageLayoutContext &ctx) override
+    {
+        if (ctx.flags.has(MessageElementFlag::HighlightLane))
+        {
+            QSizeF size{container.getScale() * 16, container.getScale() * 16};
+            container.addElement(
+                new ImageLayoutElement(*this, this->image_, size));
+        }
+    }
+
+    std::unique_ptr<MessageElement> clone() const override
+    {
+        return std::make_unique<LaneIconElement>(this->image_);
+    }
+
+    std::string_view type() const override
+    {
+        return "LaneIconElement";
+    }
+
+private:
+    ImagePtr image_;
+};
+
+/// Opaque, readable version of a highlight color for stripes and tags
+QColor laneColor(const QColor &highlight)
+{
+    QColor color = highlight;
+    color.setAlpha(255);
+    if (color.lightness() < 150)
+    {
+        color = QColor::fromHsl(color.hslHue(), color.hslSaturation(), 150);
+    }
+    return color;
+}
+
+/// Repeat counter in lane-style splits, e.g. "8 in 49s ▸" or "17 in 2 min ▸"
+QString repeatCounterOf(const Message &message)
+{
+    QString span =
+        message.repeatSeconds < 90
+            ? QString::number(message.repeatSeconds) + QStringLiteral("s")
+            : QString::number((message.repeatSeconds + 30) / 60) +
+                  QStringLiteral(" min");
+    return QString::number(message.repeatCount) + QStringLiteral(" in ") +
+           span + QStringLiteral(" \u25B8");
+}
 
 QColor blendColors(const QColor &base, const QColor &apply)
 {
@@ -97,6 +158,10 @@ bool MessageLayout::layout(const MessageLayoutContext &ctx,
     layoutRequired |= this->currentWordFlags_ != ctx.flags;
     this->currentWordFlags_ = ctx.flags;  // getSettings()->getWordTypeMask();
 
+    // check if a timeout chip was added since the last layout
+    layoutRequired |= ctx.flags.has(MessageElementFlag::HighlightLane) &&
+                      this->laidOutChip_ != this->message_->moderationChip;
+
     // check if layout was requested manually
     layoutRequired |= this->flags.has(MessageLayoutFlag::RequiresLayout);
     this->flags.unset(MessageLayoutFlag::RequiresLayout);
@@ -154,8 +219,57 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     this->container_.beginLayout(ctx.width, this->scale_, this->imageScale_,
                                  messageFlags);
 
+    const bool lane = ctx.flags.has(MessageElementFlag::HighlightLane);
+    this->laneTag_.reset();
+    this->laneChip_.reset();
+    this->laneChipIcon_.reset();
+    this->laidOutChip_ = this->message_->moderationChip;
+    if (lane && this->message_->flags.has(MessageFlag::Highlighted) &&
+        !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
+        !this->message_->highlightTag.isEmpty() &&
+        this->message_->highlightColor)
+    {
+        this->laneTag_ = std::make_unique<TextElement>(
+            this->message_->highlightTag, MessageElementFlag::HighlightLane,
+            laneColor(*this->message_->highlightColor),
+            FontStyle::ChatMediumBold);
+    }
+    this->laneRepeat_.reset();
+    if (this->laneTag_ && this->message_->repeatCount > 0)
+    {
+        // one row per spammer (see ChannelView), the counter opens the usercard
+        this->laneRepeat_ = std::make_unique<TextElement>(
+            repeatCounterOf(*this->message_), MessageElementFlag::HighlightLane,
+            laneColor(*this->message_->highlightColor),
+            FontStyle::ChatMediumBold);
+        this->laneRepeat_->setLink({Link::UserInfo, this->message_->loginName});
+    }
+    if (lane && !this->message_->moderationChip.isEmpty())
+    {
+        if (this->message_->moderationChip.startsWith(u"BAN"))
+        {
+            this->laneChipIcon_ = std::make_unique<LaneIconElement>(
+                Image::fromResourcePixmap(getResources().buttons.ban));
+        }
+        this->laneChip_ = std::make_unique<TextElement>(
+            this->message_->moderationChip, MessageElementFlag::HighlightLane,
+            this->message_->moderationChip.startsWith(u"BAN")
+                ? QColor(0xff, 0x55, 0x55)
+                : QColor(0xff, 0xa0, 0x40),
+            FontStyle::ChatMediumBold);
+    }
+
+    bool tagAdded = false;
     for (const auto &element : this->message_->elements)
     {
+        // the tag goes right after the timestamp
+        if (this->laneTag_ && !tagAdded &&
+            !element->getFlags().has(MessageElementFlag::Timestamp))
+        {
+            this->laneTag_->addToContainer(this->container_, ctx);
+            tagAdded = true;
+        }
+
         if (hideModerated && this->message_->flags.has(MessageFlag::Disabled))
         {
             continue;
@@ -204,6 +318,20 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         }
 
         element->addToContainer(this->container_, ctx);
+    }
+
+    if (this->laneRepeat_)
+    {
+        this->laneRepeat_->addToContainer(this->container_, ctx);
+    }
+    if (this->laneChip_ &&
+        !(hideModerated && this->message_->flags.has(MessageFlag::Disabled)))
+    {
+        if (this->laneChipIcon_)
+        {
+            this->laneChipIcon_->addToContainer(this->container_, ctx);
+        }
+        this->laneChip_->addToContainer(this->container_, ctx);
     }
 
     if (this->height_ != this->container_.getHeight())
@@ -458,6 +586,17 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     }
 
     painter.fillRect(buffer->rect(), backgroundColor);
+
+    // lane-style splits: a solid stripe in the highlight color on the left
+    if (this->currentWordFlags_.has(MessageElementFlag::HighlightLane) &&
+        this->message_->flags.has(MessageFlag::Highlighted) &&
+        !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
+        this->message_->highlightColor)
+    {
+        painter.fillRect(
+            QRectF{0, 0, 4 * this->scale_, this->container_.getHeight()},
+            laneColor(*this->message_->highlightColor));
+    }
 
     // draw message
     this->container_.paintElements(painter, ctx);

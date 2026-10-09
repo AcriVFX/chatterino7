@@ -110,38 +110,54 @@ bool hasEmotes(const Message &message)
 /// - short spam like "W", "Ww", "Wwww": the same user sent it
 ///   SHORT_SPAM_PREVIOUS_NEEDED times in the last SHORT_SPAM_WINDOW_SECONDS
 ///   and nobody else in chat is spamming the same thing
-bool isRepeatedMessage(Channel *channel, const Message &message)
+/// - spam with small variations ("NINJAGO TEMPEL", "NINJAGOOOO",
+///   "ninjago Tempel pls"): the same user sent VARIANT_PREVIOUS_NEEDED
+///   variants of it in the last VARIANT_WINDOW_SECONDS
+/// Returns how many of these messages the user sent (this one included),
+/// or 0 if it is not a repeat. `spanSeconds` is set to the time between
+/// the oldest counted message and this one.
+int countRepeats(Channel *channel, const Message &message, qint64 &spanSeconds)
 {
+    spanSeconds = 0;
     if (!message.serverReceivedTime.isValid() ||
         message.messageText.startsWith('!'))
     {
-        return false;
+        return 0;
     }
 
     auto words = textWordsOf(message);
     auto key = modhelpers::repeatKey(words);
+    auto variantTokens = modhelpers::variantTokens(words);
     QString shortKey;
-    if (key.isEmpty())
+    if (key.isEmpty() && !hasEmotes(message))
     {
-        if (hasEmotes(message))
-        {
-            return false;
-        }
         shortKey = modhelpers::shortSpamKey(words);
-        if (shortKey.isEmpty())
-        {
-            return false;
-        }
+    }
+    if (key.isEmpty() && shortKey.isEmpty() && variantTokens.isEmpty())
+    {
+        return 0;
     }
 
-    const auto window = key.isEmpty()
-                            ? std::max({modhelpers::SHORT_SPAM_WINDOW_SECONDS,
-                                        modhelpers::SHORT_SPAM_OTHERS_SECONDS,
-                                        modhelpers::HEAVY_SPAM_WINDOW_SECONDS})
-                            : modhelpers::REPEAT_WINDOW_SECONDS;
+    auto window = modhelpers::VARIANT_WINDOW_SECONDS;
+    if (!key.isEmpty())
+    {
+        window = std::max(window, modhelpers::REPEAT_WINDOW_SECONDS);
+    }
+    if (!shortKey.isEmpty())
+    {
+        window = std::max({window, modhelpers::SHORT_SPAM_WINDOW_SECONDS,
+                           modhelpers::SHORT_SPAM_OTHERS_SECONDS,
+                           modhelpers::HEAVY_SPAM_WINDOW_SECONDS});
+    }
 
+    int repeats = 0;
+    qint64 repeatsSpan = 0;
+    int variants = 0;
+    qint64 variantsSpan = 0;
     int previous = 0;
+    qint64 previousSpan = 0;
     int previousTotal = 0;
+    qint64 previousTotalSpan = 0;
     int others = 0;
     bool othersRecently = false;
     auto snapshot = channel->getMessageSnapshot();
@@ -160,26 +176,42 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
         {
             continue;
         }
+        const bool sameUser = prev->loginName == message.loginName;
+        if ((sameUser && prev->messageText.startsWith('!')) ||
+            (!sameUser && shortKey.isEmpty()))
+        {
+            continue;
+        }
+        const auto prevWords = textWordsOf(*prev);
+
+        if (sameUser && !variantTokens.isEmpty() &&
+            age <= modhelpers::VARIANT_WINDOW_SECONDS &&
+            modhelpers::isVariantOf(variantTokens,
+                                    modhelpers::variantTokens(prevWords)))
+        {
+            variants++;
+            variantsSpan = age;
+        }
 
         if (!key.isEmpty())
         {
-            if (prev->loginName == message.loginName &&
-                modhelpers::isSameRepeatKey(
-                    modhelpers::repeatKey(textWordsOf(*prev)), key) &&
-                ++previous >= modhelpers::REPEAT_PREVIOUS_NEEDED)
+            if (sameUser && age <= modhelpers::REPEAT_WINDOW_SECONDS &&
+                modhelpers::isSameRepeatKey(modhelpers::repeatKey(prevWords),
+                                            key))
             {
-                return true;
+                repeats++;
+                repeatsSpan = age;
             }
             continue;
         }
 
         // short spam
-        if (modhelpers::shortSpamKey(textWordsOf(*prev)) != shortKey ||
-            hasEmotes(*prev))
+        if (shortKey.isEmpty() ||
+            modhelpers::shortSpamKey(prevWords) != shortKey || hasEmotes(*prev))
         {
             continue;
         }
-        if (prev->loginName != message.loginName)
+        if (!sameUser)
         {
             // others are spamming it too, e.g. "W" in the whole chat
             others++;
@@ -192,24 +224,48 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
         if (age <= modhelpers::HEAVY_SPAM_WINDOW_SECONDS)
         {
             previousTotal++;
+            previousTotalSpan = age;
         }
         if (age <= modhelpers::SHORT_SPAM_WINDOW_SECONDS)
         {
             previous++;
+            previousSpan = age;
         }
     }
-    if (!key.isEmpty())
+
+    int count = 0;
+    auto take = [&](int previousCount, qint64 span) {
+        if (previousCount + 1 > count)
+        {
+            count = previousCount + 1;
+            spanSeconds = span;
+        }
+    };
+    if (variants >= modhelpers::VARIANT_PREVIOUS_NEEDED)
     {
-        return false;
+        take(variants, variantsSpan);
     }
-    if (!othersRecently && previous >= modhelpers::SHORT_SPAM_PREVIOUS_NEEDED)
+    if (repeats >= modhelpers::REPEAT_PREVIOUS_NEEDED)
     {
-        return true;
+        take(repeats, repeatsSpan);
     }
-    // one user sending it again and again stands out even in a chat spam,
-    // as long as they sent at least as many as everyone else together
-    return previousTotal >= modhelpers::HEAVY_SPAM_PREVIOUS_NEEDED &&
-           previousTotal + 1 >= others;
+    if (!shortKey.isEmpty())
+    {
+        if (!othersRecently &&
+            previous >= modhelpers::SHORT_SPAM_PREVIOUS_NEEDED)
+        {
+            take(previous, previousSpan);
+        }
+        // one user sending it again and again stands out even in a chat
+        // spam, as long as they sent at least as many as everyone else
+        // together
+        if (previousTotal >= modhelpers::HEAVY_SPAM_PREVIOUS_NEEDED &&
+            previousTotal + 1 >= others)
+        {
+            take(previousTotal, previousTotalSpan);
+        }
+    }
+    return count;
 }
 
 const QString regexHelpString("(\\w+)[.,!?;:]*?$");
@@ -1868,7 +1924,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
 
-    // repeated messages: same text from the same user 3 times in 5 minutes.
+    // repeated messages and variant spam from one user (see countRepeats).
     // Faint highlights (spam, streamer names) are replaced by the repeat color.
     if ((!builder->flags.has(MessageFlag::Highlighted) ||
          (builder->highlightColor != nullptr &&
@@ -1876,13 +1932,20 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         twitchChannel != nullptr && !args.isReceivedWhisper &&
         !args.isSentWhisper && builder->loginName != channel->getName() &&
         builder->loginName !=
-            getApp()->getAccounts()->twitch.getCurrent()->getUserName() &&
-        isRepeatedMessage(channel, builder.message()))
+            getApp()->getAccounts()->twitch.getCurrent()->getUserName())
+    {
+        qint64 span = 0;
+        builder->repeatCount = countRepeats(channel, builder.message(), span);
+        builder->repeatSeconds = span;
+    }
+    if (builder->repeatCount > 0)
     {
         static const auto repeatColor =
             std::make_shared<QColor>(0x28, 0xa0, 0x8c, 0x80);
         builder->flags.set(MessageFlag::Highlighted);
         builder->highlightColor = repeatColor;
+        builder->highlightLabel = QStringLiteral("REPEAT");
+        builder->highlightTag = QStringLiteral("REPEAT");
     }
     if (tags.contains("historical"))
     {
@@ -2330,6 +2393,8 @@ HighlightAlert MessageBuilder::parseHighlights(const QVariantMap &tags,
     this->message().flags.set(MessageFlag::Highlighted);
 
     this->message().highlightColor = highlightResult.color;
+    this->message().highlightLabel = highlightResult.label;
+    this->message().highlightTag = highlightTagFromLabel(highlightResult.label);
 
     if (highlightResult.showInMentions)
     {

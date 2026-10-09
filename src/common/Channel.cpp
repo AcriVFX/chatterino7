@@ -314,6 +314,11 @@ void Channel::replaceMessage(const MessagePtr &message,
     }
 }
 
+bool Channel::removeMessage(const MessagePtr &message)
+{
+    return this->messages_.removeItem(message);
+}
+
 void Channel::replaceMessage(size_t index, const MessagePtr &replacement)
 {
     replacement->freeze();

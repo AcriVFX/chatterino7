@@ -4,6 +4,8 @@
 
 #include "controllers/highlights/HighlightResult.hpp"
 
+#include <QRegularExpression>
+
 namespace chatterino {
 
 HighlightResult::HighlightResult(bool _alert, bool _playSound,
@@ -81,12 +83,43 @@ std::ostream &operator<<(std::ostream &os, const HighlightResult &result)
        << (result.customSoundUrl
                ? result.customSoundUrl->toString().toStdString()
                : "")
-       << ")"
-       << ", "
+       << ")" << ", "
        << "Color: " << (result.color ? result.color->name().toStdString() : "")
        << ", "
        << "Show in mentions: " << (result.showInMentions ? "Yes" : "No");
     return os;
+}
+
+QString highlightLabelFromPattern(const QString &pattern)
+{
+    if (!pattern.startsWith(u"(?#"))
+    {
+        return {};
+    }
+    auto end = pattern.indexOf(u')');
+    if (end < 0)
+    {
+        return {};
+    }
+    return pattern.mid(3, end - 3).trimmed();
+}
+
+QString highlightTagFromLabel(const QString &label)
+{
+    static const QRegularExpression bracketTag(R"(\[([^\]]+)\])");
+    static const QRegularExpression firstWord(R"([A-Za-z0-9]+)");
+
+    auto match = bracketTag.match(label);
+    if (match.hasMatch())
+    {
+        return match.captured(1).trimmed().toUpper();
+    }
+    match = firstWord.match(label);
+    if (match.hasMatch())
+    {
+        return match.captured(0).toUpper();
+    }
+    return {};
 }
 
 }  // namespace chatterino

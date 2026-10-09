@@ -879,6 +879,8 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
         result.type_ = channelTypeToString(channelType);
         result.channelName_ = currentNode->split_->getChannel()->getName();
         result.filters_ = currentNode->split_->getFilters();
+        result.laneStyle = currentNode->split_->getLaneStyle();
+        result.compactRows = currentNode->split_->getCompactRows();
         return result;
     }
 
@@ -909,6 +911,8 @@ void SplitContainer::applyFromDescriptorRecursively(
         const auto &splitNode = *n;
 
         auto *split = new Split(this);
+        split->setLaneStyle(splitNode.laneStyle);
+        split->setCompactRows(splitNode.compactRows);
         split->setChannel(WindowManager::decodeChannel(splitNode));
         split->setModerationMode(splitNode.moderationMode_);
         split->setFilters(splitNode.filters_);
@@ -945,6 +949,8 @@ void SplitContainer::applyFromDescriptorRecursively(
                 }
                 const auto &splitNode = *inner;
                 auto *split = new Split(this);
+                split->setLaneStyle(splitNode.laneStyle);
+                split->setCompactRows(splitNode.compactRows);
                 split->setFilters(splitNode.filters_);
                 split->setChannel(WindowManager::decodeChannel(splitNode));
                 split->setModerationMode(splitNode.moderationMode_);

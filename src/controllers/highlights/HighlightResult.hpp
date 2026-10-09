@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QColor>
+#include <QString>
 #include <QUrl>
 
 #include <memory>
@@ -50,6 +51,13 @@ struct HighlightResult {
      **/
     bool showInMentions{false};
 
+    /**
+     * @brief Label of the highlight rule that provided the color
+     *
+     * Taken from a leading `(?#...)` comment in the rule's pattern
+     **/
+    QString label;
+
     bool operator==(const HighlightResult &other) const;
     bool operator!=(const HighlightResult &other) const;
 
@@ -66,5 +74,14 @@ struct HighlightResult {
     friend std::ostream &operator<<(std::ostream &os,
                                     const HighlightResult &result);
 };
+
+/// Returns the text of a leading `(?#...)` comment in a highlight pattern,
+/// e.g. "🔴 BAN: N-word 2" for `(?#🔴 BAN: N-word 2)\bn...`, or an empty string
+QString highlightLabelFromPattern(const QString &pattern);
+
+/// Returns the short tag for a highlight label: the text inside `[...]` if
+/// there is one, otherwise the first word of the label ("BAN" for
+/// "🔴 BAN: N-word 2", "TO" for "🟠 TIMEOUT [TO]: Insults")
+QString highlightTagFromLabel(const QString &label);
 
 }  // namespace chatterino

@@ -45,6 +45,23 @@ QString shortSpamKey(const QStringList &textWords);
 /// typo per 10 characters ("hällst" / "hältst").
 bool isSameRepeatKey(const QString &a, const QString &b);
 
+/// Spam with small variations ("NINJAGO TEMPEL", "NINJAGOOOO",
+/// "ninjago Tempel pls", "marinefort" / "marinefortttt"): counted when the
+/// same user sent VARIANT_PREVIOUS_NEEDED variants of the message within
+/// VARIANT_WINDOW_SECONDS, no matter what the rest of chat is doing.
+inline constexpr int VARIANT_PREVIOUS_NEEDED = 6;
+inline constexpr qint64 VARIANT_WINDOW_SECONDS = 120;
+
+/// Words of a message for variant detection: letters/digits only, lowercase,
+/// repeated characters collapsed ("TEMPELLLL" -> "tempel"), without mentions,
+/// words shorter than 3 characters and duplicates.
+QStringList variantTokens(const QStringList &textWords);
+
+/// Are two messages (as variantTokens) variants of each other? At least half
+/// of the words of the shorter one appear in the longer one (words of 6+
+/// characters may have a typo), and one of them has 4+ characters.
+bool isVariantOf(const QStringList &a, const QStringList &b);
+
 struct LogTimeout {
     QDateTime time;
     /// -1 for a permanent ban

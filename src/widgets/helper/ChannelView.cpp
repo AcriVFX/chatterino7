@@ -77,6 +77,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <ranges>
 
 namespace {
 
@@ -85,6 +86,33 @@ constexpr size_t TOOLTIP_EMOTE_ENTRIES_LIMIT = 7;
 using namespace chatterino;
 
 constexpr int SCROLLBAR_PADDING = 8;
+
+/// Lane-style splits show one row per spammer: a repeat row is hidden once
+/// the same user sends another repeat within this many seconds.
+constexpr qint64 REPEAT_FOLD_SECONDS = 300;
+
+/// Seconds from `older` to `newer`, or -1 if one of them has no time
+qint64 secondsBetween(const Message &older, const Message &newer)
+{
+    if (!older.serverReceivedTime.isValid() ||
+        !newer.serverReceivedTime.isValid())
+    {
+        return -1;
+    }
+    return older.serverReceivedTime.secsTo(newer.serverReceivedTime);
+}
+
+/// Does the repeat row `older` fold into the newer repeat `newer`?
+bool foldsInto(const Message &older, const Message &newer)
+{
+    if (older.repeatCount <= 0 || newer.repeatCount <= 0 ||
+        older.loginName != newer.loginName)
+    {
+        return false;
+    }
+    auto secs = secondsBetween(older, newer);
+    return secs >= 0 && secs <= REPEAT_FOLD_SECONDS;
+}
 
 void addEmoteContextMenuItems(QMenu *menu, const Emote &emote, QStringView kind)
 {
@@ -952,8 +980,34 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
         underlyingChannel->messageAppended,
         [this](MessagePtr &message,
                std::optional<MessageFlags> overridingFlags) {
+            if (message->flags.has(MessageFlag::Timeout) && this->isLaneStyle())
+            {
+                // a message here may have just got a timeout chip
+                this->queueLayout();
+            }
             if (this->shouldIncludeMessage(message))
             {
+                // lane style: the spammer's previous repeat row moves down
+                // to this one
+                MessagePtr folded;
+                if (message->repeatCount > 0 && this->isLaneStyle())
+                {
+                    auto snapshot = this->channel_->getMessageSnapshot();
+                    for (const auto &prev : snapshot | std::views::reverse)
+                    {
+                        if (foldsInto(*prev, *message))
+                        {
+                            folded = prev;
+                            break;
+                        }
+                        if (secondsBetween(*prev, *message) >
+                            REPEAT_FOLD_SECONDS)
+                        {
+                            break;
+                        }
+                    }
+                }
+
                 if (this->channel_->lastDate_ != QDate::currentDate())
                 {
                     // Day change message
@@ -968,6 +1022,14 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
                 this->channel_->addMessage(message, MessageContext::Repost,
                                            overridingFlags);
                 this->messageAddedToChannel(message);
+
+                if (folded && this->channel_->removeMessage(folded))
+                {
+                    // rebuild the rows without the folded one
+                    this->messagesUpdated();
+                    this->pauseScrollMaximumOffset_ = 0;
+                    this->pauseScrollMinimumOffset_ = 0;
+                }
             }
         });
 
@@ -989,6 +1051,11 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     this->channelConnections_.managedConnect(
         underlyingChannel->messageReplaced,
         [this](auto index, const auto &prev, const auto &replacement) {
+            if (replacement->flags.has(MessageFlag::Timeout) &&
+                this->isLaneStyle())
+            {
+                this->queueLayout();
+            }
             if (this->shouldIncludeMessage(replacement))
             {
                 this->channel_->replaceMessage(index, prev, replacement);
@@ -1015,10 +1082,31 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     // and the ui.
     auto snapshot = underlyingChannel->getMessageSnapshot();
 
+    // lane style: only the newest row of each spammer's repeats is shown
+    std::unordered_set<const Message *> foldedRepeats;
+    if (this->isLaneStyle())
+    {
+        std::unordered_map<QString, const Message *> newerRepeat;
+        for (const auto &msg : snapshot | std::views::reverse)
+        {
+            if (msg->repeatCount <= 0 || !this->shouldIncludeMessage(msg))
+            {
+                continue;
+            }
+            auto it = newerRepeat.find(msg->loginName);
+            if (it != newerRepeat.end() && foldsInto(*msg, *it->second))
+            {
+                foldedRepeats.insert(msg.get());
+            }
+            newerRepeat[msg->loginName] = msg.get();
+        }
+    }
+
     size_t nMessagesAdded = 0;
     for (const auto &msg : snapshot)
     {
-        if (!this->shouldIncludeMessage(msg))
+        if (!this->shouldIncludeMessage(msg) ||
+            foldedRepeats.contains(msg.get()))
         {
             continue;
         }
@@ -1139,8 +1227,20 @@ FilterSetPtr ChannelView::getFilterSet() const
     return this->channelFilters_;
 }
 
+bool ChannelView::isLaneStyle() const
+{
+    const auto *split = dynamic_cast<const Split *>(this->parentWidget());
+    return split != nullptr && split->getLaneStyle();
+}
+
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
+    // lane-style splits show timeouts as a chip on the message instead
+    if (m->flags.has(MessageFlag::Timeout) && this->isLaneStyle())
+    {
+        return false;
+    }
+
     if (this->channelFilters_)
     {
         if (getSettings()->excludeUserMessagesFromFilter &&
@@ -1431,6 +1531,15 @@ MessageElementFlags ChannelView::getFlags() const
         if (split->getModerationMode())
         {
             flags.set(MessageElementFlag::ModeratorTools);
+        }
+        if (split->getLaneStyle())
+        {
+            flags.set(MessageElementFlag::HighlightLane);
+        }
+        if (split->getCompactRows())
+        {
+            flags.set(MessageElementFlag::CompactRows);
+            flags.unset(MessageElementFlag::Timestamp);
         }
         if (this->underlyingChannel_ ==
                 getApp()->getTwitch()->getMentionsChannel() ||

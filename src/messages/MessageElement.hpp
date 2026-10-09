@@ -143,11 +143,13 @@ enum class MessageElementFlag : int64_t {
     // A mention of a username that isn't the author of the message
     Mention = (1LL << 27),
 
-    // Unused = (1LL << 28),
+    // lane-style split: colored stripe, highlight tag and timeout chips
+    HighlightLane = (1LL << 28),
 
     // used to check if links should be lowercased
     LowercaseLinks = (1LL << 29),
-    // Unused = (1LL << 30)
+    // compact split: links shortened to their domain
+    CompactRows = (1LL << 30),
     // Unused: (1LL << 31)
 
     // for elements of the message reply
