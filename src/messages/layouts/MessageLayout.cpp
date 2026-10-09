@@ -520,7 +520,7 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
             ctx.painter.save();
             ctx.painter.translate(0, ctx.y);
             this->container_.paintStrikeout(ctx.painter,
-                                            QColor(0x9a, 0x9a, 0xa3));
+                                            QColor(0x9a, 0x9a, 0xa3, 0x70));
             ctx.painter.restore();
         }
     }

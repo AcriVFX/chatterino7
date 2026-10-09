@@ -623,6 +623,8 @@ set(SOURCE_FILES
         util/LoadPixmap.hpp
         util/ModHelpers.cpp
         util/ModHelpers.hpp
+        util/ModNameCache.cpp
+        util/ModNameCache.hpp
         util/OnceFlag.cpp
         util/OnceFlag.hpp
         util/RapidjsonHelpers.cpp

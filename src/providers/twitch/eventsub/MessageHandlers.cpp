@@ -14,6 +14,7 @@
 #include "singletons/WindowManager.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
+#include "util/ModNameCache.hpp"
 #include "util/PostToThread.hpp"
 
 namespace chatterino::eventsub {
@@ -99,6 +100,8 @@ void handleModerateMessage(
 
     builder.setMessageAndSearchText(text);
     builder->timeoutUser = action.userLogin.qt();
+    modnames::remember(action.userLogin.qt(), time,
+                       event.moderatorUserLogin.qt());
 
     auto msg = builder.release();
     runInGuiThread([chan, msg, time] {
@@ -145,6 +148,8 @@ void handleModerateMessage(
 
     builder.setMessageAndSearchText(text);
     builder->timeoutUser = action.userLogin.qt();
+    modnames::remember(action.userLogin.qt(), time,
+                       event.moderatorUserLogin.qt());
 
     auto msg = builder.release();
     runInGuiThread([chan, msg, time] {
