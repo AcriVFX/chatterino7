@@ -37,13 +37,14 @@ class LanePillLayoutElement : public TextLayoutElement
 public:
     LanePillLayoutElement(MessageElement &creator, QString &text, QSizeF size,
                           QColor color, QColor background, ImagePtr icon,
-                          bool centered, float scale)
+                          bool centered, qreal radius, float scale)
         : TextLayoutElement(creator, text, size, color,
                             FontStyle::ChatMediumSmall, MessageColor::Text,
                             scale)
         , background_(std::move(background))
         , icon_(std::move(icon))
         , centered_(centered)
+        , radius_(radius)
     {
     }
 
@@ -63,7 +64,8 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
         painter.setBrush(this->background_);
-        painter.drawRoundedRect(rect, 3 * this->scale_, 3 * this->scale_);
+        painter.drawRoundedRect(rect, this->radius_ * this->scale_,
+                                this->radius_ * this->scale_);
 
         qreal textX = rect.x() + pad;
         if (this->icon_)
@@ -101,6 +103,7 @@ private:
     QColor background_;
     ImagePtr icon_;
     bool centered_;
+    qreal radius_;
 };
 
 class LanePillElement : public MessageElement
@@ -109,13 +112,15 @@ public:
     /// fixedWidth: as wide as the longest category tag, so every row of a
     /// lane starts its timestamp and message at the same x
     LanePillElement(QString text, QColor color, QColor background,
-                    ImagePtr icon = nullptr, bool fixedWidth = false)
+                    ImagePtr icon = nullptr, bool fixedWidth = false,
+                    qreal radius = 3)
         : MessageElement(MessageElementFlag::HighlightLane)
         , text_(std::move(text))
         , color_(std::move(color))
         , background_(std::move(background))
         , icon_(std::move(icon))
         , fixedWidth_(fixedWidth)
+        , radius_(radius)
     {
     }
 
@@ -148,7 +153,7 @@ public:
         }
         auto *element = new LanePillLayoutElement(
             *this, text, QSizeF(width, height), this->color_, this->background_,
-            this->icon_, this->fixedWidth_, scale);
+            this->icon_, this->fixedWidth_, this->radius_, scale);
         element->setTrailingSpace(true);
         container.addElement(element);
     }
@@ -157,7 +162,7 @@ public:
     {
         auto element = std::make_unique<LanePillElement>(
             this->text_, this->color_, this->background_, this->icon_,
-            this->fixedWidth_);
+            this->fixedWidth_, this->radius_);
         element->setLink(this->getLink());
         return element;
     }
@@ -173,6 +178,7 @@ private:
     QColor background_;
     ImagePtr icon_;
     bool fixedWidth_;
+    qreal radius_;
 };
 
 /// Repeat counter in lane-style splits, e.g. "8 in 49s ▸" or "17 in 2 min ▸"
@@ -353,9 +359,10 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     if (tagged && this->message_->repeatCount > 0)
     {
         // one row per spammer (see ChannelView), the counter opens the usercard
+        // round teal pill from the approved repeat mockup (C+D)
         this->laneRepeat_ = std::make_unique<LanePillElement>(
-            repeatCounterOf(*this->message_), QColor(0x11, 0x11, 0x11),
-            pillColor(*this->message_->highlightColor));
+            repeatCounterOf(*this->message_), QColor(Qt::white),
+            QColor(0x28, 0xa0, 0x8c), nullptr, false, 8);
         this->laneRepeat_->setLink({Link::UserInfo, this->message_->loginName});
     }
     if (lane && !this->message_->moderationChip.isEmpty())
