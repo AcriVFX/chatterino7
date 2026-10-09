@@ -110,6 +110,9 @@ bool hasEmotes(const Message &message)
 /// - short spam like "W", "Ww", "Wwww": the same user sent it
 ///   SHORT_SPAM_PREVIOUS_NEEDED times in the last SHORT_SPAM_WINDOW_SECONDS
 ///   and nobody else in chat is spamming the same thing
+/// - spam with small variations ("NINJAGO TEMPEL", "NINJAGOOOO",
+///   "ninjago Tempel pls"): the same user sent VARIANT_PREVIOUS_NEEDED
+///   variants of it in the last VARIANT_WINDOW_SECONDS
 bool isRepeatedMessage(Channel *channel, const Message &message)
 {
     if (!message.serverReceivedTime.isValid() ||
@@ -120,26 +123,31 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
 
     auto words = textWordsOf(message);
     auto key = modhelpers::repeatKey(words);
+    auto variantTokens = modhelpers::variantTokens(words);
     QString shortKey;
-    if (key.isEmpty())
+    if (key.isEmpty() && !hasEmotes(message))
     {
-        if (hasEmotes(message))
-        {
-            return false;
-        }
         shortKey = modhelpers::shortSpamKey(words);
-        if (shortKey.isEmpty())
-        {
-            return false;
-        }
+    }
+    if (key.isEmpty() && shortKey.isEmpty() && variantTokens.isEmpty())
+    {
+        return false;
     }
 
-    const auto window = key.isEmpty()
-                            ? std::max({modhelpers::SHORT_SPAM_WINDOW_SECONDS,
-                                        modhelpers::SHORT_SPAM_OTHERS_SECONDS,
-                                        modhelpers::HEAVY_SPAM_WINDOW_SECONDS})
-                            : modhelpers::REPEAT_WINDOW_SECONDS;
+    auto window = modhelpers::VARIANT_WINDOW_SECONDS;
+    if (!key.isEmpty())
+    {
+        window = std::max(window, modhelpers::REPEAT_WINDOW_SECONDS);
+    }
+    if (!shortKey.isEmpty())
+    {
+        window = std::max({window, modhelpers::SHORT_SPAM_WINDOW_SECONDS,
+                           modhelpers::SHORT_SPAM_OTHERS_SECONDS,
+                           modhelpers::HEAVY_SPAM_WINDOW_SECONDS});
+    }
 
+    int repeats = 0;
+    int variants = 0;
     int previous = 0;
     int previousTotal = 0;
     int others = 0;
@@ -160,13 +168,29 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
         {
             continue;
         }
+        const bool sameUser = prev->loginName == message.loginName;
+        if ((sameUser && prev->messageText.startsWith('!')) ||
+            (!sameUser && shortKey.isEmpty()))
+        {
+            continue;
+        }
+        const auto prevWords = textWordsOf(*prev);
+
+        if (sameUser && !variantTokens.isEmpty() &&
+            age <= modhelpers::VARIANT_WINDOW_SECONDS &&
+            modhelpers::isVariantOf(variantTokens,
+                                    modhelpers::variantTokens(prevWords)) &&
+            ++variants >= modhelpers::VARIANT_PREVIOUS_NEEDED)
+        {
+            return true;
+        }
 
         if (!key.isEmpty())
         {
-            if (prev->loginName == message.loginName &&
-                modhelpers::isSameRepeatKey(
-                    modhelpers::repeatKey(textWordsOf(*prev)), key) &&
-                ++previous >= modhelpers::REPEAT_PREVIOUS_NEEDED)
+            if (sameUser && age <= modhelpers::REPEAT_WINDOW_SECONDS &&
+                modhelpers::isSameRepeatKey(modhelpers::repeatKey(prevWords),
+                                            key) &&
+                ++repeats >= modhelpers::REPEAT_PREVIOUS_NEEDED)
             {
                 return true;
             }
@@ -174,12 +198,12 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
         }
 
         // short spam
-        if (modhelpers::shortSpamKey(textWordsOf(*prev)) != shortKey ||
-            hasEmotes(*prev))
+        if (shortKey.isEmpty() ||
+            modhelpers::shortSpamKey(prevWords) != shortKey || hasEmotes(*prev))
         {
             continue;
         }
-        if (prev->loginName != message.loginName)
+        if (!sameUser)
         {
             // others are spamming it too, e.g. "W" in the whole chat
             others++;
@@ -198,7 +222,7 @@ bool isRepeatedMessage(Channel *channel, const Message &message)
             previous++;
         }
     }
-    if (!key.isEmpty())
+    if (shortKey.isEmpty())
     {
         return false;
     }
@@ -1868,7 +1892,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
 
-    // repeated messages: same text from the same user 3 times in 5 minutes.
+    // repeated messages and variant spam from one user (see isRepeatedMessage).
     // Faint highlights (spam, streamer names) are replaced by the repeat color.
     if ((!builder->flags.has(MessageFlag::Highlighted) ||
          (builder->highlightColor != nullptr &&

@@ -118,6 +118,62 @@ bool isSameRepeatKey(const QString &a, const QString &b)
     return row[b.size()] <= allowed;
 }
 
+QStringList variantTokens(const QStringList &textWords)
+{
+    QStringList tokens;
+    for (const auto &word : textWords)
+    {
+        if (word.startsWith('@'))
+        {
+            continue;
+        }
+        QString token;
+        for (QChar c : word)
+        {
+            if (!c.isLetterOrNumber())
+            {
+                continue;
+            }
+            c = c.toLower();
+            if (token.isEmpty() || token.back() != c)
+            {
+                token.append(c);
+            }
+        }
+        if (token.size() >= 3 && !tokens.contains(token))
+        {
+            tokens.append(token);
+        }
+    }
+    return tokens;
+}
+
+bool isVariantOf(const QStringList &a, const QStringList &b)
+{
+    if (a.isEmpty() || b.isEmpty())
+    {
+        return false;
+    }
+    const auto &shorter = a.size() <= b.size() ? a : b;
+    const auto &longer = a.size() <= b.size() ? b : a;
+
+    qsizetype matched = 0;
+    bool strong = false;
+    for (const auto &token : shorter)
+    {
+        bool found = std::ranges::any_of(longer, [&](const QString &other) {
+            return token == other || (token.size() >= 6 && other.size() >= 6 &&
+                                      isSameRepeatKey(token, other));
+        });
+        if (found)
+        {
+            matched++;
+            strong = strong || token.size() >= 4;
+        }
+    }
+    return strong && matched * 2 >= shorter.size();
+}
+
 qint64 parseLogDuration(const QString &text)
 {
     static const QRegularExpression part(R"((\d+)\s*([smhdw]))");
