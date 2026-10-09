@@ -96,7 +96,7 @@ void remember(const QString &user, const QDateTime &time,
         return;
     }
     auto &st = store();
-    std::lock_guard lock(st.mutex);
+    std::scoped_lock lock(st.mutex);
     loadLocked(st);
 
     const auto msecs = time.toMSecsSinceEpoch();
@@ -117,7 +117,7 @@ QString lookup(const QString &user, const QDateTime &time)
         return {};
     }
     auto &st = store();
-    std::lock_guard lock(st.mutex);
+    std::scoped_lock lock(st.mutex);
     loadLocked(st);
 
     const auto msecs = time.toMSecsSinceEpoch();
