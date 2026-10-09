@@ -49,8 +49,8 @@ struct SplitDescriptor {
     bool moderationMode_{false};
 
     // Lane style (highlight stripe + tag, timeout chips) and compact rows
-    bool laneStyle_{false};
-    bool compactRows_{false};
+    bool laneStyle{false};
+    bool compactRows{false};
 
     std::optional<bool> spellCheckOverride;
 

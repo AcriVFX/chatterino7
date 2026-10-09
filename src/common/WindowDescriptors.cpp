@@ -106,8 +106,8 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
     descriptor.type_ = data.value("type").toString();
     descriptor.server_ = data.value("server").toInt(-1);
     descriptor.moderationMode_ = root.value("moderationMode").toBool();
-    descriptor.laneStyle_ = root.value("laneStyle").toBool();
-    descriptor.compactRows_ = root.value("compactRows").toBool();
+    descriptor.laneStyle = root.value("laneStyle").toBool();
+    descriptor.compactRows = root.value("compactRows").toBool();
     if (data.contains("channel"))
     {
         descriptor.channelName_ = data.value("channel").toString();

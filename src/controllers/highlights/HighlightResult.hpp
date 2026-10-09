@@ -56,7 +56,7 @@ struct HighlightResult {
      *
      * Taken from a leading `(?#...)` comment in the rule's pattern
      **/
-    QString label{};
+    QString label;
 
     bool operator==(const HighlightResult &other) const;
     bool operator!=(const HighlightResult &other) const;
