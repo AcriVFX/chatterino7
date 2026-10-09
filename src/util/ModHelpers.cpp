@@ -1,5 +1,5 @@
 // Chatterino9: helpers for the usercard (account age, timeout history) and
-// the repeat/spam highlight.
+// the repeat/spam highlight (see MessageBuilder.cpp).
 
 #include "util/ModHelpers.hpp"
 
