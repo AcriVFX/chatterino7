@@ -392,6 +392,8 @@ TEST_F(FiltersF, TypingContextChecks)
         {"flags.watch_streak", false},
 
         {"message.content", "Kappa"},
+        {"message.highlight", QString{}},
+        {"message.highlight_tag", QString{}},
         {"message.length", 5},
 
         {"reward.cost", -1},
