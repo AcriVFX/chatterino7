@@ -1070,6 +1070,7 @@ void SplitHeader::updateChannelText()
         }
     }
 
+    this->laneAccent_ = QColor();
     if (!title.isEmpty() && !this->split_->getFilters().empty())
     {
         // show the filter names, so lanes read e.g. "papaplatte - Check"
@@ -1082,11 +1083,32 @@ void SplitHeader::updateChannelText()
                 names.append(record->getName());
             }
         }
+        // the lane colors from mockup H: red Urgent, yellow Check, blue FYI
+        for (const auto &name : names)
+        {
+            if (this->laneAccent_.isValid())
+            {
+                break;
+            }
+            if (name.contains(u"urgent", Qt::CaseInsensitive))
+            {
+                this->laneAccent_ = QColor(0xe2, 0x57, 0x4c);
+            }
+            else if (name.contains(u"check", Qt::CaseInsensitive))
+            {
+                this->laneAccent_ = QColor(0xe3, 0xc3, 0x41);
+            }
+            else if (name.compare(u"fyi", Qt::CaseInsensitive) == 0)
+            {
+                this->laneAccent_ = QColor(0x4f, 0xa8, 0xe0);
+            }
+        }
         title += names.isEmpty() ? QStringLiteral(" - filtered")
                                  : " - " + names.join(", ");
     }
 
     this->titleLabel_->setText(title.isEmpty() ? "<empty>" : title);
+    this->update();
 }
 
 void SplitHeader::updateIcons()
@@ -1155,6 +1177,12 @@ void SplitHeader::paintEvent(QPaintEvent * /*event*/)
     painter.setPen(border);
     painter.drawRect(0, 0, this->width() - 1, this->height() - 2);
     painter.fillRect(0, this->height() - 1, this->width(), 1, background);
+
+    if (this->laneAccent_.isValid())
+    {
+        painter.fillRect(QRectF(0, 0, this->width(), 2 * this->scale()),
+                         this->laneAccent_);
+    }
 }
 
 void SplitHeader::mousePressEvent(QMouseEvent *event)

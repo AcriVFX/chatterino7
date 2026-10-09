@@ -74,6 +74,8 @@ private:
     QString tooltipText_{};
     TooltipWidget *const tooltipWidget_{};
     bool isLive_{false};
+    /// Top line color of an Urgent / Check / FYI lane, invalid otherwise
+    QColor laneAccent_;
     QString thumbnail_;
     QElapsedTimer lastThumbnail_;
     std::chrono::steady_clock::time_point lastReloadedChannelEmotes_;
