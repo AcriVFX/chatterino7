@@ -140,6 +140,7 @@ private:
     // lane-style splits: highlight tag in front, timeout/ban chip at the end
     std::unique_ptr<MessageElement> laneTag_;
     std::unique_ptr<MessageElement> laneChip_;
+    std::unique_ptr<MessageElement> laneChipIcon_;
     QString laidOutChip_;
 
 #ifdef FOURTF
