@@ -66,6 +66,14 @@ public:
     void setModerationMode(bool value);
     bool getModerationMode() const;
 
+    /// Lane style: highlight stripe + tag, timeout chips instead of timeout lines
+    void setLaneStyle(bool value);
+    bool getLaneStyle() const;
+
+    /// Compact rows for narrow lanes: no timestamps, links shortened to the domain
+    void setCompactRows(bool value);
+    bool getCompactRows() const;
+
     std::optional<bool> checkSpellingOverride() const;
     void setCheckSpellingOverride(std::optional<bool> override);
 
@@ -157,6 +165,8 @@ private:
     IndirectChannel channel_;
 
     bool moderationMode_{};
+    bool laneStyle_{};
+    bool compactRows_{};
     bool isTopRightSplit_{};
 
     bool isMouseOver_{};

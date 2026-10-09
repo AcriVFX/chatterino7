@@ -46,6 +46,8 @@ const QMap<QString, Type> MESSAGE_TYPING_CONTEXT{
     {"flags.watch_streak", Type::Bool},
     {"message.content", Type::String},
     {"message.length", Type::Int},
+    {"message.highlight", Type::String},
+    {"message.highlight_tag", Type::String},
     {"reward.title", Type::String},
     {"reward.cost", Type::Int},
     {"reward.id", Type::String},
@@ -95,6 +97,8 @@ ContextMap buildContextMap(const MessagePtr &m, chatterino::Channel *channel)
      *
      * message.content
      * message.length
+     * message.highlight
+     * message.highlight_tag
      *
      * reward.title
      * reward.cost
@@ -163,6 +167,8 @@ ContextMap buildContextMap(const MessagePtr &m, chatterino::Channel *channel)
 
         {"message.content", m->messageText},
         {"message.length", m->messageText.length()},
+        {"message.highlight", m->highlightLabel},
+        {"message.highlight_tag", m->highlightTag},
     };
     {
         auto *tc = dynamic_cast<TwitchChannel *>(channel);

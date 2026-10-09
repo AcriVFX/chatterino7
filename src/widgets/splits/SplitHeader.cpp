@@ -10,6 +10,7 @@
 #include "common/network/NetworkResult.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/commands/CommandController.hpp"
+#include "controllers/filters/FilterRecord.hpp"
 #include "controllers/hotkeys/Hotkey.hpp"
 #include "controllers/hotkeys/HotkeyCategory.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
@@ -626,6 +627,32 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             this->split_->setModerationMode(!this->split_->getModerationMode());
         });
 
+    {
+        auto *action = new QAction(this);
+        action->setText("Lane style (highlight tags, timeout chips)");
+        action->setCheckable(true);
+        QObject::connect(moreMenu, &QMenu::aboutToShow, this, [action, this]() {
+            action->setChecked(this->split_->getLaneStyle());
+        });
+        QObject::connect(action, &QAction::triggered, this, [this]() {
+            this->split_->setLaneStyle(!this->split_->getLaneStyle());
+        });
+        moreMenu->addAction(action);
+    }
+
+    {
+        auto *action = new QAction(this);
+        action->setText("Compact rows (no timestamps, short links)");
+        action->setCheckable(true);
+        QObject::connect(moreMenu, &QMenu::aboutToShow, this, [action, this]() {
+            action->setChecked(this->split_->getCompactRows());
+        });
+        QObject::connect(action, &QAction::triggered, this, [this]() {
+            this->split_->setCompactRows(!this->split_->getCompactRows());
+        });
+        moreMenu->addAction(action);
+    }
+
     if (this->split_->getChannel()->getType() == Channel::Type::TwitchMentions)
     {
         auto *action = new QAction(this);
@@ -1045,7 +1072,18 @@ void SplitHeader::updateChannelText()
 
     if (!title.isEmpty() && !this->split_->getFilters().empty())
     {
-        title += " - filtered";
+        // show the filter names, so lanes read e.g. "papaplatte - Check"
+        QStringList names;
+        const auto filterIds = this->split_->getFilters();
+        for (const auto &record : *getSettings()->filterRecords.readOnly())
+        {
+            if (filterIds.contains(record->getId()))
+            {
+                names.append(record->getName());
+            }
+        }
+        title += names.isEmpty() ? QStringLiteral(" - filtered")
+                                 : " - " + names.join(", ");
     }
 
     this->titleLabel_->setText(title.isEmpty() ? "<empty>" : title);

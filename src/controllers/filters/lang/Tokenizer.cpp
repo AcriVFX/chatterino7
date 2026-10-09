@@ -54,6 +54,8 @@ const QMap<QString, QString> VALID_IDENTIFIERS_MAP{
     {"flags.watch_streak", "watch streak message?"},
     {"message.content", "message text"},
     {"message.length", "message length"},
+    {"message.highlight", "highlight rule label"},
+    {"message.highlight_tag", "highlight tag"},
     {"reward.title", "point reward title"},
     {"reward.cost", "point reward cost"},
     {"reward.id", "point reward id"},

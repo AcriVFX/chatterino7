@@ -10,8 +10,27 @@
 #include "singletons/Settings.hpp"
 
 #include <QDateTime>
+#include <QRegularExpression>
 
 namespace chatterino {
+
+/// Short chip for a timeout/ban system message: "BAN", "TO 10m" or "TO"
+inline QString moderationChipFromTimeout(const QString &text)
+{
+    static const QRegularExpression duration(
+        R"(\btimed out\b.*?\bfor ((?:\d+[smhdw]\s?)+))");
+
+    if (text.contains(u"banned") && !text.contains(u"unbanned"))
+    {
+        return QStringLiteral("BAN");
+    }
+    auto match = duration.match(text);
+    if (match.hasMatch())
+    {
+        return QStringLiteral("TO ") + match.captured(1).trimmed();
+    }
+    return QStringLiteral("TO");
+}
 
 /// Adds a timeout or replaces a previous one sent in the last 20 messages and in the last 5s.
 /// This function accepts any buffer to store the messsages in.
@@ -107,6 +126,19 @@ void addOrReplaceChannelTimeout(const Buf &buffer, MessagePtr message,
             replaceMessage(i, s, replacement.release());
 
             shouldAddMessage = false;
+            break;
+        }
+    }
+
+    // put a timeout/ban chip on the user's last message (shown in lane-style splits)
+    for (auto i = snapshotLength - 1; i >= 0; --i)
+    {
+        const auto &s = buffer[i];
+        if (s->loginName == message->timeoutUser &&
+            s->flags.hasNone({MessageFlag::ModerationAction,
+                              MessageFlag::Whisper, MessageFlag::System}))
+        {
+            s->moderationChip = moderationChipFromTimeout(message->messageText);
             break;
         }
     }

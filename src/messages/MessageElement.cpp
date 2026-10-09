@@ -24,6 +24,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QUrl>
 
 #include <memory>
 
@@ -1137,6 +1138,19 @@ void LinkElement::addToContainer(MessageLayoutContainer &container,
 {
     this->words_ =
         getSettings()->lowercaseDomains ? this->lowercase_ : this->original_;
+    if (ctx.flags.has(MessageElementFlag::CompactRows))
+    {
+        // narrow lanes: show only the domain, the link still opens the full URL
+        auto host = QUrl(this->linkInfo_.url()).host();
+        if (host.startsWith(u"www."))
+        {
+            host = host.mid(4);
+        }
+        if (!host.isEmpty())
+        {
+            this->words_ = {host + QStringLiteral("/…")};
+        }
+    }
     TextElement::addToContainer(container, ctx);
 }
 

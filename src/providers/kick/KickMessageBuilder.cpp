@@ -404,6 +404,8 @@ HighlightAlert processHighlights(KickMessageBuilder &builder,
 
     builder->flags.set(MessageFlag::Highlighted);
     builder->highlightColor = highlightResult.color;
+    builder->highlightLabel = highlightResult.label;
+    builder->highlightTag = highlightTagFromLabel(highlightResult.label);
 
     if (highlightResult.showInMentions)
     {
