@@ -942,6 +942,43 @@ bool Split::getModerationMode() const
     return this->moderationMode_;
 }
 
+void Split::setLaneStyle(bool value)
+{
+    if (this->laneStyle_ == value)
+    {
+        return;
+    }
+    this->laneStyle_ = value;
+    // reload the view so timeout lines are hidden/shown again
+    if (auto underlying = this->view_->underlyingChannel())
+    {
+        this->view_->setChannel(underlying);
+    }
+    this->view_->queueLayout();
+    getApp()->getWindows()->queueSave();
+}
+
+bool Split::getLaneStyle() const
+{
+    return this->laneStyle_;
+}
+
+void Split::setCompactRows(bool value)
+{
+    if (this->compactRows_ == value)
+    {
+        return;
+    }
+    this->compactRows_ = value;
+    this->view_->queueLayout();
+    getApp()->getWindows()->queueSave();
+}
+
+bool Split::getCompactRows() const
+{
+    return this->compactRows_;
+}
+
 std::optional<bool> Split::checkSpellingOverride() const
 {
     return this->input_->checkSpellingOverride();
@@ -1134,6 +1171,8 @@ void Split::popup()
 
     split->setChannel(this->getIndirectChannel());
     split->setModerationMode(this->getModerationMode());
+    split->setLaneStyle(this->getLaneStyle());
+    split->setCompactRows(this->getCompactRows());
     split->setFilters(this->getFilters());
 
     window.getNotebook().getOrAddSelectedPage()->insertSplit(split);

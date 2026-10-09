@@ -48,6 +48,10 @@ struct SplitDescriptor {
     // Whether "Moderation Mode" (the sword icon) is enabled in this split or not
     bool moderationMode_{false};
 
+    // Lane style (highlight stripe + tag, timeout chips) and compact rows
+    bool laneStyle_{false};
+    bool compactRows_{false};
+
     std::optional<bool> spellCheckOverride;
 
     QList<QUuid> filters_;

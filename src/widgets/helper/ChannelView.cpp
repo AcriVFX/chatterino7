@@ -952,6 +952,11 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
         underlyingChannel->messageAppended,
         [this](MessagePtr &message,
                std::optional<MessageFlags> overridingFlags) {
+            if (message->flags.has(MessageFlag::Timeout) && this->isLaneStyle())
+            {
+                // a message here may have just got a timeout chip
+                this->queueLayout();
+            }
             if (this->shouldIncludeMessage(message))
             {
                 if (this->channel_->lastDate_ != QDate::currentDate())
@@ -989,6 +994,11 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     this->channelConnections_.managedConnect(
         underlyingChannel->messageReplaced,
         [this](auto index, const auto &prev, const auto &replacement) {
+            if (replacement->flags.has(MessageFlag::Timeout) &&
+                this->isLaneStyle())
+            {
+                this->queueLayout();
+            }
             if (this->shouldIncludeMessage(replacement))
             {
                 this->channel_->replaceMessage(index, prev, replacement);
@@ -1139,8 +1149,20 @@ FilterSetPtr ChannelView::getFilterSet() const
     return this->channelFilters_;
 }
 
+bool ChannelView::isLaneStyle() const
+{
+    const auto *split = dynamic_cast<const Split *>(this->parentWidget());
+    return split != nullptr && split->getLaneStyle();
+}
+
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
+    // lane-style splits show timeouts as a chip on the message instead
+    if (m->flags.has(MessageFlag::Timeout) && this->isLaneStyle())
+    {
+        return false;
+    }
+
     if (this->channelFilters_)
     {
         if (getSettings()->excludeUserMessagesFromFilter &&
@@ -1431,6 +1453,15 @@ MessageElementFlags ChannelView::getFlags() const
         if (split->getModerationMode())
         {
             flags.set(MessageElementFlag::ModeratorTools);
+        }
+        if (split->getLaneStyle())
+        {
+            flags.set(MessageElementFlag::HighlightLane);
+        }
+        if (split->getCompactRows())
+        {
+            flags.set(MessageElementFlag::CompactRows);
+            flags.unset(MessageElementFlag::Timestamp);
         }
         if (this->underlyingChannel_ ==
                 getApp()->getTwitch()->getMentionsChannel() ||

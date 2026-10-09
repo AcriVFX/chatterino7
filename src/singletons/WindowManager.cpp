@@ -679,6 +679,8 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
         case SplitNode::Type::Split: {
             obj.insert("type", "split");
             obj.insert("moderationMode", node->getSplit()->getModerationMode());
+            obj.insert("laneStyle", node->getSplit()->getLaneStyle());
+            obj.insert("compactRows", node->getSplit()->getCompactRows());
 
             QJsonObject split;
             WindowManager::encodeChannel(node->getSplit()->getIndirectChannel(),
