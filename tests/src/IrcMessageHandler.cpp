@@ -684,7 +684,7 @@ QByteArray spamMessage(int i)
            "tmi-sent-ts=%2;user-id=123 "
            ":spammer!spammer@spammer.tmi.twitch.tv PRIVMSG #pajlada "
            ":follow my channel for free stuff"_s.arg(i)
-               .arg(1662206235000 + (i * 5000))
+               .arg(1662206235000 + (static_cast<qint64>(i) * 5000))
                .toUtf8();
 }
 
