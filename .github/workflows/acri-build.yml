@@ -3,7 +3,8 @@
 # Runs on pushes to "acri" and "claude/**" branches, or by hand from the Actions tab.
 # Builds of the release branch are published as a GitHub release
 # ("chatterino3-build-<run number>"), which Chatterino3's update button finds.
-# Release line: claude/project-thread-7tkw9z (Chatterino7 7.5.5 + Chatterino3 changes).
+# Release line: claude/project-thread-7tkw9z (Chatterino7 7.5.5 + Chatterino9 changes).
+# The app was called Chatterino3 before build 15; the tag prefix stays for the updater.
 name: Acri Windows build
 
 on:
@@ -94,7 +95,7 @@ jobs:
               -DCHATTERINO_LTO=OFF `
               -DCHATTERINO_UPDATER=ON `
               -DCHATTERINO3_BUILD="${{ github.run_number }}" `
-              -DCHATTERINO_EXTRA_BUILD_STRING="Chatterino3 build ${{ github.run_number }}" `
+              -DCHATTERINO_EXTRA_BUILD_STRING="Chatterino9 build ${{ github.run_number }}" `
               -DFORCE_JSON_GENERATION=On `
               ..
           set cl=/MP
@@ -145,9 +146,9 @@ jobs:
         run: |
           version=$(sed -n 's/.*CHATTERINO_VERSION = QStringLiteral("\([^"]*\)").*/\1/p' src/common/Version.hpp)
           tag="chatterino3-build-${{ github.run_number }}"
-          cp build/chatterino-acri-windows-x86-64.zip Chatterino3-windows-x86-64.zip
-          gh release create "$tag" Chatterino3-windows-x86-64.zip \
+          cp build/chatterino-acri-windows-x86-64.zip Chatterino9-windows-x86-64.zip
+          gh release create "$tag" Chatterino9-windows-x86-64.zip \
             --target "${{ github.sha }}" \
-            --title "Chatterino3 $version (build ${{ github.run_number }})" \
-            --notes "Chatterino $version (7TV) plus the Chatterino3 changes, commit ${{ github.sha }}." \
+            --title "Chatterino9 build ${{ github.run_number }} (Chatterino7 $version)" \
+            --notes "Chatterino $version (7TV) plus the Chatterino9 changes, commit ${{ github.sha }}." \
             --latest

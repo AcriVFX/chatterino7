@@ -18,13 +18,14 @@ Version::Version()
     , dateOfBuild_(QStringLiteral(CHATTERINO_CMAKE_GEN_DATE))
     , isNightly_(CHATTERINO_NIGHTLY_BUILD == 1)
 {
-    this->fullVersion_ = "Chatterino ";
+    // Chatterino9: own name, with the Chatterino7 version it is based on
+    this->fullVersion_ = "Chatterino9 (";
     if (this->isNightly())
     {
         this->fullVersion_ += "Nightly ";
     }
 
-    this->fullVersion_ += this->version_;
+    this->fullVersion_ += this->version_ + ")";
 
 #ifndef NDEBUG
     this->fullVersion_ += " DEBUG";
@@ -42,9 +43,9 @@ Version::Version()
 
 #ifdef Q_OS_WIN
     // keep in sync with .CI/chatterino-installer.iss
-    // Chatterino3: own ID, so Windows doesn't mix it up with Chatterino7
+    // Chatterino9: own ID, so Windows doesn't mix it up with Chatterino7
     // (taskbar icon and pins come from the shortcut with the same ID)
-    this->appUserModelID_ = L"AcriVFX.Chatterino3";
+    this->appUserModelID_ = L"AcriVFX.Chatterino9";
 #endif
 }
 
@@ -142,7 +143,7 @@ void Version::generateBuildString()
     // Add commit information
     s +=
         QString(
-            R"( (commit <a href="https://github.com/SevenTV/chatterino7/commit/%1">%1</a>)")
+            R"( (commit <a href="https://github.com/AcriVFX/chatterino7/commit/%1">%1</a>)")
             .arg(this->commitHash());
     if (this->isModified())
     {
