@@ -74,6 +74,8 @@ public:
     bool isRegex() const;
     bool isValid() const;
     bool isMatch(const QString &subject) const;
+    /// The part of subject this phrase matches, empty if it doesn't match
+    QString matchedText(const QString &subject) const;
     bool isCaseSensitive() const;
     const QUrl &getSoundUrl() const;
     const std::shared_ptr<QColor> getColor() const;

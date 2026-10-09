@@ -124,6 +124,15 @@ bool HighlightPhrase::isMatch(const QString &subject) const
     return this->isValid() && this->regex_.match(subject).hasMatch();
 }
 
+QString HighlightPhrase::matchedText(const QString &subject) const
+{
+    if (!this->isValid())
+    {
+        return {};
+    }
+    return this->regex_.match(subject).captured(0);
+}
+
 bool HighlightPhrase::isCaseSensitive() const
 {
     return this->isCaseSensitive_;

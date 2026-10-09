@@ -57,6 +57,8 @@ struct HighlightResult {
      * Taken from a leading `(?#...)` comment in the rule's pattern
      **/
     QString label;
+    /// The words the coloring rule matched (marked in lane-style splits)
+    QString matchedText;
 
     bool operator==(const HighlightResult &other) const;
     bool operator!=(const HighlightResult &other) const;
