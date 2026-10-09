@@ -50,7 +50,7 @@ bool isSameRepeatKey(const QString &a, const QString &b);
 /// same user sent VARIANT_PREVIOUS_NEEDED variants of the message within
 /// VARIANT_WINDOW_SECONDS, no matter what the rest of chat is doing.
 inline constexpr int VARIANT_PREVIOUS_NEEDED = 6;
-inline constexpr qint64 VARIANT_WINDOW_SECONDS = 2 * 60;
+inline constexpr qint64 VARIANT_WINDOW_SECONDS = 120;
 
 /// Words of a message for variant detection: letters/digits only, lowercase,
 /// repeated characters collapsed ("TEMPELLLL" -> "tempel"), without mentions,
