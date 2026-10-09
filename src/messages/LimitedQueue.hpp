@@ -328,6 +328,31 @@ public:
         return false;
     }
 
+    /**
+     * @brief Removes the first item equal to needle
+     *
+     * @param[in] needle the item to remove
+     * @tparam Equality function object to use for comparison
+     * @return true if an item was removed
+     */
+    template <typename Equals = std::equal_to<T>>
+    bool removeItem(const T &needle)
+    {
+        std::unique_lock lock(this->mutex_);
+
+        Equals eq;
+        for (auto it = this->buffer_.begin(); it != this->buffer_.end(); ++it)
+        {
+            if (eq(*it, needle))
+            {
+                this->buffer_.erase(it);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     [[nodiscard]] std::vector<T> getSnapshot() const
     {
         std::shared_lock lock(this->mutex_);

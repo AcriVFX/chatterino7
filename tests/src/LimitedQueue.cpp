@@ -109,6 +109,24 @@ TEST(LimitedQueue, ReplaceItem)
                     "first snapshot");
 }
 
+TEST(LimitedQueue, RemoveItem)
+{
+    LimitedQueue<int> queue(3);
+    queue.pushBack(1);
+    queue.pushBack(2);
+    queue.pushBack(3);
+
+    EXPECT_TRUE(queue.removeItem(2));
+    EXPECT_FALSE(queue.removeItem(7));
+    SNAPSHOT_EQUALS(queue.getSnapshot(), {1, 3}, "after remove");
+
+    // the freed slot is used again before the oldest item is dropped
+    queue.pushBack(4);
+    SNAPSHOT_EQUALS(queue.getSnapshot(), {1, 3, 4}, "after push");
+    queue.pushBack(5);
+    SNAPSHOT_EQUALS(queue.getSnapshot(), {3, 4, 5}, "after full push");
+}
+
 TEST(LimitedQueue, Find)
 {
     LimitedQueue<int> queue(10);

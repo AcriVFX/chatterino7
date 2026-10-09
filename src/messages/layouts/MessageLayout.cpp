@@ -39,26 +39,16 @@ QColor laneColor(const QColor &highlight)
     return color;
 }
 
-/// Stripe and tag color of a highlighted message. Repeats take the
-/// spammer's name color, so each spammer's run reads as one color.
-QColor laneColorOf(const Message &message)
+/// Repeat counter in lane-style splits, e.g. "8 in 49s ▸" or "17 in 2 min ▸"
+QString repeatCounterOf(const Message &message)
 {
-    if (message.repeatCount > 0 && message.usernameColor.isValid())
-    {
-        return laneColor(message.usernameColor);
-    }
-    return laneColor(*message.highlightColor);
-}
-
-/// Tag text in lane-style splits, e.g. "BAN" or "REPEAT ×7"
-QString laneTagOf(const Message &message)
-{
-    if (message.repeatCount > 0)
-    {
-        return message.highlightTag + QStringLiteral(" \u00D7") +
-               QString::number(message.repeatCount);
-    }
-    return message.highlightTag;
+    QString span =
+        message.repeatSeconds < 90
+            ? QString::number(message.repeatSeconds) + QStringLiteral("s")
+            : QString::number((message.repeatSeconds + 30) / 60) +
+                  QStringLiteral(" min");
+    return QString::number(message.repeatCount) + QStringLiteral(" in ") +
+           span + QStringLiteral(" \u25B8");
 }
 
 QColor blendColors(const QColor &base, const QColor &apply)
@@ -202,8 +192,19 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         this->message_->highlightColor)
     {
         this->laneTag_ = std::make_unique<TextElement>(
-            laneTagOf(*this->message_), MessageElementFlag::HighlightLane,
-            laneColorOf(*this->message_), FontStyle::ChatMediumBold);
+            this->message_->highlightTag, MessageElementFlag::HighlightLane,
+            laneColor(*this->message_->highlightColor),
+            FontStyle::ChatMediumBold);
+    }
+    this->laneRepeat_.reset();
+    if (this->laneTag_ && this->message_->repeatCount > 0)
+    {
+        // one row per spammer (see ChannelView), the counter opens the usercard
+        this->laneRepeat_ = std::make_unique<TextElement>(
+            repeatCounterOf(*this->message_), MessageElementFlag::HighlightLane,
+            laneColor(*this->message_->highlightColor),
+            FontStyle::ChatMediumBold);
+        this->laneRepeat_->setLink({Link::UserInfo, this->message_->loginName});
     }
     if (lane && !this->message_->moderationChip.isEmpty())
     {
@@ -276,6 +277,10 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         element->addToContainer(this->container_, ctx);
     }
 
+    if (this->laneRepeat_)
+    {
+        this->laneRepeat_->addToContainer(this->container_, ctx);
+    }
     if (this->laneChip_ &&
         !(hideModerated && this->message_->flags.has(MessageFlag::Disabled)))
     {
@@ -543,7 +548,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     {
         painter.fillRect(
             QRectF{0, 0, 4 * this->scale_, this->container_.getHeight()},
-            laneColorOf(*this->message_));
+            laneColor(*this->message_->highlightColor));
     }
 
     // draw message

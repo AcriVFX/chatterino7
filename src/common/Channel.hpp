@@ -120,6 +120,9 @@ public:
     void replaceMessage(size_t hint, const MessagePtr &message,
                         const MessagePtr &replacement);
     void disableMessage(const QString &messageID);
+    /// Removes the message without notifying views. Returns true if it was
+    /// in this channel.
+    bool removeMessage(const MessagePtr &message);
 
     /// Removes all messages from this channel and invokes #messagesCleared
     void clearMessages();
