@@ -138,7 +138,26 @@ void addOrReplaceChannelTimeout(const Buf &buffer, MessagePtr message,
             s->flags.hasNone({MessageFlag::ModerationAction,
                               MessageFlag::Whisper, MessageFlag::System}))
         {
-            s->moderationChip = moderationChipFromTimeout(message->messageText);
+            auto chip = moderationChipFromTimeout(message->messageText);
+            // only EventSub moderation messages name the moderator
+            bool hasModerator = message->flags.has(MessageFlag::PubSub) &&
+                                !message->loginName.isEmpty() &&
+                                message->loginName != message->timeoutUser;
+            if (hasModerator)
+            {
+                chip += QStringLiteral(" · ") + message->loginName;
+            }
+            // the IRC line for the same action can arrive after the named one
+            // (its duration may differ by a second)
+            bool keepNamed =
+                !hasModerator &&
+                s->moderationChip.contains(QStringLiteral(" · ")) &&
+                s->moderationChip.section(u' ', 0, 0) ==
+                    chip.section(u' ', 0, 0);
+            if (!keepNamed)
+            {
+                s->moderationChip = chip;
+            }
             break;
         }
     }
