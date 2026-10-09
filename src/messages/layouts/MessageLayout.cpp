@@ -57,11 +57,6 @@ protected:
         const qreal inset = 2 * this->scale_;
         QRectF rect = QRectF(this->getRect()).adjusted(0, inset, 0, -inset);
 
-        if (this->background_.alpha() == 0)
-        {
-            return;  // spacer on untagged rows
-        }
-
         painter.save();
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
@@ -351,12 +346,6 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         this->laneTag_ = std::make_unique<LanePillElement>(
             this->message_->highlightTag, QColor(0x11, 0x11, 0x11),
             pillColor(*this->message_->highlightColor), nullptr, true);
-    }
-    else if (lane)
-    {
-        // same room on untagged rows, so all rows of a lane line up
-        this->laneTag_ = std::make_unique<LanePillElement>(
-            QString(), QColor(), QColor(Qt::transparent), nullptr, true);
     }
     this->laneRepeat_.reset();
     if (tagged && this->message_->repeatCount > 0)
