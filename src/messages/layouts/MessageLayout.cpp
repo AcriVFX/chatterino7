@@ -375,17 +375,23 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
             QColor(0x3a, 0x3a, 0x40), std::move(icon));
     }
 
-    bool tagAdded = false;
+    // the tag goes right after the timestamp (Twitch messages start with a
+    // hidden channel name, so the timestamp is not always the first element)
+    const MessageElement *tagAfter = nullptr;
     for (const auto &element : this->message_->elements)
     {
-        // the tag goes right after the timestamp
-        if (this->laneTag_ && !tagAdded &&
-            !element->getFlags().has(MessageElementFlag::Timestamp))
+        if (element->getFlags().has(MessageElementFlag::Timestamp))
         {
-            this->laneTag_->addToContainer(this->container_, ctx);
-            tagAdded = true;
+            tagAfter = element.get();
+            break;
         }
-
+    }
+    if (this->laneTag_ && tagAfter == nullptr)
+    {
+        this->laneTag_->addToContainer(this->container_, ctx);
+    }
+    for (const auto &element : this->message_->elements)
+    {
         if (hideModerated && this->message_->flags.has(MessageFlag::Disabled))
         {
             continue;
@@ -434,6 +440,10 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         }
 
         element->addToContainer(this->container_, ctx);
+        if (this->laneTag_ && element.get() == tagAfter)
+        {
+            this->laneTag_->addToContainer(this->container_, ctx);
+        }
     }
 
     if (this->laneRepeat_)
