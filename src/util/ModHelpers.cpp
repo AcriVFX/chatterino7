@@ -1,3 +1,6 @@
+// Chatterino9: helpers for the usercard (account age, timeout history) and
+// the repeat/spam highlight.
+
 #include "util/ModHelpers.hpp"
 
 #include "common/Literals.hpp"
