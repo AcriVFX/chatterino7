@@ -140,7 +140,6 @@ private:
     // lane-style splits: highlight tag in front, timeout/ban chip at the end
     std::unique_ptr<MessageElement> laneTag_;
     std::unique_ptr<MessageElement> laneChip_;
-    std::unique_ptr<MessageElement> laneChipIcon_;
     // repeat counter at the end, e.g. "8 in 49s ▸"
     std::unique_ptr<MessageElement> laneRepeat_;
     QString laidOutChip_;

@@ -13,6 +13,7 @@
 #include "messages/MessageElement.hpp"
 #include "messages/Selection.hpp"
 #include "providers/colors/ColorProvider.hpp"
+#include "singletons/Fonts.hpp"
 #include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/StreamerMode.hpp"
@@ -29,39 +30,120 @@ namespace chatterino {
 
 namespace {
 
-/// The ban icon of the moderation actions, in front of a lane BAN chip
-class LaneIconElement : public MessageElement
+/// A lane tag or moderation chip drawn as a pill: rounded background, small
+/// dark or light text, optional icon (the mod-action ban icon) in front
+class LanePillLayoutElement : public TextLayoutElement
 {
 public:
-    explicit LaneIconElement(ImagePtr image)
+    LanePillLayoutElement(MessageElement &creator, QString &text, QSizeF size,
+                          QColor color, QColor background, ImagePtr icon,
+                          float scale)
+        : TextLayoutElement(creator, text, size, color,
+                            FontStyle::ChatMediumSmall, MessageColor::Text,
+                            scale)
+        , background_(std::move(background))
+        , icon_(std::move(icon))
+    {
+    }
+
+protected:
+    void paint(QPainter &painter, const MessageColors & /*colors*/) override
+    {
+        const qreal pad = 5 * this->scale_;
+        const qreal inset = 2 * this->scale_;
+        QRectF rect = QRectF(this->getRect()).adjusted(0, inset, 0, -inset);
+
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(this->background_);
+        painter.drawRoundedRect(rect, 3 * this->scale_, 3 * this->scale_);
+
+        qreal textX = rect.x() + pad;
+        if (this->icon_)
+        {
+            auto pixmap = this->icon_->pixmapOrLoad();
+            const qreal iconSize = rect.height() - 2 * this->scale_;
+            if (pixmap)
+            {
+                painter.drawPixmap(
+                    QRectF(textX, rect.center().y() - iconSize / 2, iconSize,
+                           iconSize),
+                    *pixmap, QRectF());
+            }
+            textX += iconSize + 3 * this->scale_;
+        }
+
+        painter.setPen(this->color_);
+        painter.setFont(
+            getApp()->getFonts()->getFont(this->style_, this->scale_));
+        painter.drawText(
+            QRectF(textX, rect.y(), rect.right() - textX, rect.height()),
+            this->getText(), QTextOption(Qt::AlignLeft | Qt::AlignVCenter));
+        painter.restore();
+    }
+
+private:
+    QColor background_;
+    ImagePtr icon_;
+};
+
+class LanePillElement : public MessageElement
+{
+public:
+    LanePillElement(QString text, QColor color, QColor background,
+                    ImagePtr icon = nullptr)
         : MessageElement(MessageElementFlag::HighlightLane)
-        , image_(std::move(image))
+        , text_(std::move(text))
+        , color_(std::move(color))
+        , background_(std::move(background))
+        , icon_(std::move(icon))
     {
     }
 
     void addToContainer(MessageLayoutContainer &container,
                         const MessageLayoutContext &ctx) override
     {
-        if (ctx.flags.has(MessageElementFlag::HighlightLane))
+        if (!ctx.flags.has(MessageElementFlag::HighlightLane))
         {
-            QSizeF size{container.getScale() * 16, container.getScale() * 16};
-            container.addElement(
-                new ImageLayoutElement(*this, this->image_, size));
+            return;
         }
+        const float scale = container.getScale();
+        auto *fonts = getApp()->getFonts();
+        // as tall as a chat line, so the pill sits centered on the row
+        const qreal height =
+            fonts->getFontMetrics(FontStyle::ChatMedium, scale).height();
+        qreal width = fonts->getFontMetrics(FontStyle::ChatMediumSmall, scale)
+                          .horizontalAdvance(this->text_) +
+                      10 * scale;
+        if (this->icon_)
+        {
+            width += height - 4 * scale - 2 * scale + 3 * scale;
+        }
+        QString text = this->text_;
+        auto *element = new LanePillLayoutElement(
+            *this, text, QSizeF(width, height), this->color_, this->background_,
+            this->icon_, scale);
+        element->setTrailingSpace(true);
+        container.addElement(element);
     }
 
     std::unique_ptr<MessageElement> clone() const override
     {
-        return std::make_unique<LaneIconElement>(this->image_);
+        return std::make_unique<LanePillElement>(
+            this->text_, this->color_, this->background_, this->icon_);
     }
 
     std::string_view type() const override
     {
-        return "LaneIconElement";
+        return "LanePillElement";
     }
 
 private:
-    ImagePtr image_;
+    QString text_;
+    QColor color_;
+    QColor background_;
+    ImagePtr icon_;
 };
 
 /// Opaque, readable version of a highlight color for stripes and tags
@@ -86,6 +168,16 @@ QString repeatCounterOf(const Message &message)
                   QStringLiteral(" min");
     return QString::number(message.repeatCount) + QStringLiteral(" in ") +
            span + QStringLiteral(" \u25B8");
+}
+
+/// Solid tag background: the category color, lifted a quarter towards white
+QColor pillColor(const QColor &highlight)
+{
+    auto lift = [](int c) {
+        return std::min(255, static_cast<int>(c + (255 - c) * 0.25 + 0.5));
+    };
+    return {lift(highlight.red()), lift(highlight.green()),
+            lift(highlight.blue())};
 }
 
 QColor blendColors(const QColor &base, const QColor &apply)
@@ -222,17 +314,15 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     const bool lane = ctx.flags.has(MessageElementFlag::HighlightLane);
     this->laneTag_.reset();
     this->laneChip_.reset();
-    this->laneChipIcon_.reset();
     this->laidOutChip_ = this->message_->moderationChip;
     if (lane && this->message_->flags.has(MessageFlag::Highlighted) &&
         !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
         !this->message_->highlightTag.isEmpty() &&
         this->message_->highlightColor)
     {
-        this->laneTag_ = std::make_unique<TextElement>(
-            this->message_->highlightTag, MessageElementFlag::HighlightLane,
-            laneColor(*this->message_->highlightColor),
-            FontStyle::ChatMediumBold);
+        this->laneTag_ = std::make_unique<LanePillElement>(
+            this->message_->highlightTag, QColor(0x11, 0x11, 0x11),
+            pillColor(*this->message_->highlightColor));
     }
     this->laneRepeat_.reset();
     if (this->laneTag_ && this->message_->repeatCount > 0)
@@ -246,17 +336,14 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     }
     if (lane && !this->message_->moderationChip.isEmpty())
     {
+        ImagePtr icon;
         if (this->message_->moderationChip.startsWith(u"BAN"))
         {
-            this->laneChipIcon_ = std::make_unique<LaneIconElement>(
-                Image::fromResourcePixmap(getResources().buttons.ban));
+            icon = Image::fromResourcePixmap(getResources().buttons.ban);
         }
-        this->laneChip_ = std::make_unique<TextElement>(
-            this->message_->moderationChip, MessageElementFlag::HighlightLane,
-            this->message_->moderationChip.startsWith(u"BAN")
-                ? QColor(0xff, 0x55, 0x55)
-                : QColor(0xff, 0xa0, 0x40),
-            FontStyle::ChatMediumBold);
+        this->laneChip_ = std::make_unique<LanePillElement>(
+            this->message_->moderationChip, QColor(0xdd, 0xdd, 0xdd),
+            QColor(0x3a, 0x3a, 0x40), std::move(icon));
     }
 
     bool tagAdded = false;
@@ -327,10 +414,6 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     if (this->laneChip_ &&
         !(hideModerated && this->message_->flags.has(MessageFlag::Disabled)))
     {
-        if (this->laneChipIcon_)
-        {
-            this->laneChipIcon_->addToContainer(this->container_, ctx);
-        }
         this->laneChip_->addToContainer(this->container_, ctx);
     }
 
@@ -595,7 +678,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     {
         painter.fillRect(
             QRectF{0, 0, 4 * this->scale_, this->container_.getHeight()},
-            laneColor(*this->message_->highlightColor));
+            pillColor(*this->message_->highlightColor));
     }
 
     // draw message
