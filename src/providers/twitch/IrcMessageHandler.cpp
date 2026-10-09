@@ -1223,6 +1223,7 @@ void IrcMessageHandler::addMessage(Communi::IrcMessage *message,
     }
 
     args.allowIgnore = !isSub;
+    args.pendingMessages = sink.pendingMessages();
     auto [msg, alert] = MessageBuilder::makeIrcMessage(
         chan, message, args, content, messageOffset, replyCtx.thread,
         replyCtx.parent);

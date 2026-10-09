@@ -78,6 +78,8 @@
 #include <functional>
 #include <memory>
 #include <ranges>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -87,7 +89,7 @@ using namespace chatterino;
 
 constexpr int SCROLLBAR_PADDING = 8;
 
-/// Lane-style splits show one row per spammer: a repeat row is hidden once
+/// Lanes show one row per spammer: a repeat row is hidden once
 /// the same user sends another repeat within this many seconds.
 constexpr qint64 REPEAT_FOLD_SECONDS = 300;
 
@@ -112,6 +114,41 @@ bool foldsInto(const Message &older, const Message &newer)
     }
     auto secs = secondsBetween(older, newer);
     return secs >= 0 && secs <= REPEAT_FOLD_SECONDS;
+}
+
+/// The repeat rows in `messages` that fold into a newer row of the same
+/// spammer. Only messages that `shown` returns true for count.
+template <typename Shown>
+std::unordered_set<const Message *> foldedRepeatsIn(
+    const std::vector<MessagePtr> &messages, Shown shown)
+{
+    std::unordered_set<const Message *> folded;
+    std::unordered_map<QString, const Message *> newerRepeat;
+    for (const auto &msg : messages | std::views::reverse)
+    {
+        if (msg->repeatCount <= 0 || !shown(msg))
+        {
+            continue;
+        }
+        auto it = newerRepeat.find(msg->loginName);
+        if (it != newerRepeat.end() && foldsInto(*msg, *it->second))
+        {
+            folded.insert(msg.get());
+        }
+        newerRepeat[msg->loginName] = msg.get();
+    }
+    return folded;
+}
+
+/// Removes the repeat rows that fold into a newer row of the same spammer
+void removeFoldedRepeats(std::vector<MessagePtr> &messages)
+{
+    auto folded = foldedRepeatsIn(messages, [](const auto &) {
+        return true;
+    });
+    std::erase_if(messages, [&](const auto &msg) {
+        return folded.contains(msg.get());
+    });
 }
 
 void addEmoteContextMenuItems(QMenu *menu, const Emote &emote, QStringView kind)
@@ -990,7 +1027,7 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
                 // lane style: the spammer's previous repeat row moves down
                 // to this one
                 MessagePtr folded;
-                if (message->repeatCount > 0 && this->isLaneStyle())
+                if (message->repeatCount > 0 && this->foldsRepeats())
                 {
                     auto snapshot = this->channel_->getMessageSnapshot();
                     for (const auto &prev : snapshot | std::views::reverse)
@@ -1041,6 +1078,10 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
                          std::back_inserter(filtered), [this](const auto &msg) {
                              return this->shouldIncludeMessage(msg);
                          });
+            if (this->foldsRepeats())
+            {
+                removeFoldedRepeats(filtered);
+            }
 
             if (!filtered.empty())
             {
@@ -1070,6 +1111,10 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
                          std::back_inserter(filtered), [this](const auto &msg) {
                              return this->shouldIncludeMessage(msg);
                          });
+            if (this->foldsRepeats())
+            {
+                removeFoldedRepeats(filtered);
+            }
             this->channel_->fillInMissingMessages(filtered);
         });
 
@@ -1082,24 +1127,13 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     // and the ui.
     auto snapshot = underlyingChannel->getMessageSnapshot();
 
-    // lane style: only the newest row of each spammer's repeats is shown
+    // lanes: only the newest row of each spammer's repeats is shown
     std::unordered_set<const Message *> foldedRepeats;
-    if (this->isLaneStyle())
+    if (this->foldsRepeats())
     {
-        std::unordered_map<QString, const Message *> newerRepeat;
-        for (const auto &msg : snapshot | std::views::reverse)
-        {
-            if (msg->repeatCount <= 0 || !this->shouldIncludeMessage(msg))
-            {
-                continue;
-            }
-            auto it = newerRepeat.find(msg->loginName);
-            if (it != newerRepeat.end() && foldsInto(*msg, *it->second))
-            {
-                foldedRepeats.insert(msg.get());
-            }
-            newerRepeat[msg->loginName] = msg.get();
-        }
+        foldedRepeats = foldedRepeatsIn(snapshot, [this](const auto &msg) {
+            return this->shouldIncludeMessage(msg);
+        });
     }
 
     size_t nMessagesAdded = 0;
@@ -1231,6 +1265,12 @@ bool ChannelView::isLaneStyle() const
 {
     const auto *split = dynamic_cast<const Split *>(this->parentWidget());
     return split != nullptr && split->getLaneStyle();
+}
+
+bool ChannelView::foldsRepeats() const
+{
+    // the unfiltered chat keeps every row, even in lane style
+    return this->isLaneStyle() && !this->getFilterIds().isEmpty();
 }
 
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const

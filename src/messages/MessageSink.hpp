@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 class QStringView;
 class QDateTime;
@@ -71,6 +72,13 @@ public:
 
     /// Behaviour to be exercised when parsing/building messages for this sink.
     virtual MessageSinkTraits sinkTraits() const = 0;
+
+    /// Messages added to this sink that aren't in a channel yet, like the
+    /// recent messages loaded on join. Repeat detection looks at them too.
+    virtual const std::vector<MessagePtr> *pendingMessages() const
+    {
+        return nullptr;
+    }
 };
 
 }  // namespace chatterino
