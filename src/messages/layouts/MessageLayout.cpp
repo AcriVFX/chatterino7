@@ -202,6 +202,35 @@ QString repeatCounterOf(const Message &message)
            span + QStringLiteral(" \u25B8");
 }
 
+struct RepeatHeat {
+    QColor background;
+    QColor text;
+};
+
+/// repeat counter heat: yellow at the first repeats, dark red for heavy spam
+RepeatHeat repeatHeat(int count)
+{
+    const QColor dark(0x11, 0x11, 0x11);
+    const QColor white(Qt::white);
+    if (count >= 15)
+    {
+        return {QColor(0x82, 0x10, 0x0f), white};
+    }
+    if (count >= 10)
+    {
+        return {QColor(0xa5, 0x1c, 0x1c), white};
+    }
+    if (count >= 6)
+    {
+        return {QColor(0xd6, 0x3a, 0x2f), white};
+    }
+    if (count >= 4)
+    {
+        return {QColor(0xe8, 0x79, 0x2a), dark};
+    }
+    return {QColor(0xe8, 0xb6, 0x2a), dark};
+}
+
 /// Solid tag background: the category color, lifted a quarter towards white
 QColor pillColor(const QColor &highlight)
 {
@@ -363,10 +392,12 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     if (tagged && this->message_->repeatCount > 0)
     {
         // one row per spammer (see ChannelView), the counter opens the usercard
-        // round teal pill from the approved repeat mockup (C+D)
+        // round pill, its color heats up with the count
         this->laneRepeat_ = std::make_unique<LanePillElement>(
-            repeatCounterOf(*this->message_), QColor(Qt::white),
-            QColor(0x28, 0xa0, 0x8c), nullptr, false, 8);
+            repeatCounterOf(*this->message_),
+            repeatHeat(this->message_->repeatCount).text,
+            repeatHeat(this->message_->repeatCount).background, nullptr, false,
+            8);
         this->laneRepeat_->setLink({Link::UserInfo, this->message_->loginName});
     }
     if (lane && !ctx.flags.has(MessageElementFlag::TimeoutLines) &&
