@@ -985,6 +985,7 @@ TEST_F(PluginTest, MessageElementFlag)
                          "RepliedMessage=0x100000000,"
                          "ReplyButton=0x200000000,"
                          "Text=0x2,"
+                         "TimeoutLines=0x80000000,"
                          "Timestamp=0x8,"
                          "Username=0x4";
 

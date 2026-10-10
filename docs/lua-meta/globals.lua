@@ -639,6 +639,7 @@ c2.MessageElementFlag = {
     HighlightLane = 0,
     LowercaseLinks = 0,
     CompactRows = 0,
+    TimeoutLines = 0,
     RepliedMessage = 0,
     ReplyButton = 0,
     Default = 0,
