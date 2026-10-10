@@ -1275,6 +1275,14 @@ bool ChannelView::foldsRepeats() const
 
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
+    // filtered lanes show timeouts only as the chip on the message; the
+    // unfiltered chat keeps the timeout line too
+    if (m->flags.has(MessageFlag::Timeout) && this->isLaneStyle() &&
+        !this->getFilterIds().isEmpty())
+    {
+        return false;
+    }
+
     if (this->channelFilters_)
     {
         if (getSettings()->excludeUserMessagesFromFilter &&
