@@ -224,21 +224,29 @@ RepeatHeat repeatHeat(int count)
         {.count = 25, .color = QColor(0x2b, 0x1d, 0x1d)},
     }};
     const int n = std::clamp(count, stops.front().count, stops.back().count);
-    // the first stop at or above the count, and the one before it
-    const auto to =
-        std::find_if(stops.begin() + 1, stops.end() - 1, [n](const Stop &stop) {
-            return n <= stop.count;
-        });
-    const auto &from = *std::prev(to);
+    // the stops on both sides of the count
+    const Stop *from = &stops.front();
+    const Stop *to = &stops.back();
+    for (const auto &stop : stops)
+    {
+        if (stop.count >= n && &stop != &stops.front())
+        {
+            to = &stop;
+            break;
+        }
+        from = &stop;
+    }
     const double t =
-        static_cast<double>(n - from.count) / (to->count - from.count);
+        to->count == from->count
+            ? 1.0
+            : static_cast<double>(n - from->count) / (to->count - from->count);
     auto mix = [t](int a, int b) {
         return static_cast<int>(std::lround(a + ((b - a) * t)));
     };
     return {
-        .background = QColor(mix(from.color.red(), to->color.red()),
-                             mix(from.color.green(), to->color.green()),
-                             mix(from.color.blue(), to->color.blue())),
+        .background = QColor(mix(from->color.red(), to->color.red()),
+                             mix(from->color.green(), to->color.green()),
+                             mix(from->color.blue(), to->color.blue())),
         .text = n >= 7 ? QColor(Qt::white) : QColor(0x11, 0x11, 0x11),
     };
 }
