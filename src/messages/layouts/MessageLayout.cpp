@@ -216,12 +216,12 @@ RepeatHeat repeatHeat(int count)
         QColor color;
     };
     static const std::array<Stop, 6> stops{{
-        {2, QColor(0xe8, 0xb6, 0x2a)},
-        {5, QColor(0xe8, 0x79, 0x2a)},
-        {9, QColor(0xd6, 0x3a, 0x2f)},
-        {14, QColor(0xa5, 0x1c, 0x1c)},
-        {20, QColor(0x55, 0x06, 0x06)},
-        {25, QColor(0x2b, 0x1d, 0x1d)},
+        {.count = 2, .color = QColor(0xe8, 0xb6, 0x2a)},
+        {.count = 5, .color = QColor(0xe8, 0x79, 0x2a)},
+        {.count = 9, .color = QColor(0xd6, 0x3a, 0x2f)},
+        {.count = 14, .color = QColor(0xa5, 0x1c, 0x1c)},
+        {.count = 20, .color = QColor(0x55, 0x06, 0x06)},
+        {.count = 25, .color = QColor(0x2b, 0x1d, 0x1d)},
     }};
     const int n = std::clamp(count, stops.front().count, stops.back().count);
     size_t i = 0;
@@ -237,10 +237,10 @@ RepeatHeat repeatHeat(int count)
         return static_cast<int>(std::lround(a + ((b - a) * t)));
     };
     return {
-        QColor(mix(from.color.red(), to.color.red()),
-               mix(from.color.green(), to.color.green()),
-               mix(from.color.blue(), to.color.blue())),
-        n >= 7 ? QColor(Qt::white) : QColor(0x11, 0x11, 0x11),
+        .background = QColor(mix(from.color.red(), to.color.red()),
+                             mix(from.color.green(), to.color.green()),
+                             mix(from.color.blue(), to.color.blue())),
+        .text = n >= 7 ? QColor(Qt::white) : QColor(0x11, 0x11, 0x11),
     };
 }
 
