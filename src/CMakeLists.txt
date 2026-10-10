@@ -107,6 +107,8 @@ set(SOURCE_FILES
         controllers/commands/builtin/twitch/GetVIPs.hpp
         controllers/commands/builtin/twitch/LowTrust.cpp
         controllers/commands/builtin/twitch/LowTrust.hpp
+        controllers/commands/builtin/twitch/Pin.cpp
+        controllers/commands/builtin/twitch/Pin.hpp
         controllers/commands/builtin/twitch/Poll.cpp
         controllers/commands/builtin/twitch/Poll.hpp
         controllers/commands/builtin/twitch/Prediction.cpp
@@ -540,6 +542,8 @@ set(SOURCE_FILES
         providers/twitch/pubsubmessages/Listen.cpp
         providers/twitch/pubsubmessages/Listen.hpp
         providers/twitch/pubsubmessages/Message.hpp
+        providers/twitch/pubsubmessages/PinnedChatUpdates.cpp
+        providers/twitch/pubsubmessages/PinnedChatUpdates.hpp
         providers/twitch/pubsubmessages/Unlisten.cpp
         providers/twitch/pubsubmessages/Unlisten.hpp
 
@@ -900,6 +904,8 @@ set(SOURCE_FILES
         widgets/splits/InputCompletionPopup.hpp
         widgets/splits/InputHighlighter.cpp
         widgets/splits/InputHighlighter.hpp
+        widgets/splits/PinnedMessageWidget.cpp
+        widgets/splits/PinnedMessageWidget.hpp
         widgets/splits/Split.cpp
         widgets/splits/Split.hpp
         widgets/splits/SplitCommon.hpp

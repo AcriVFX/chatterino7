@@ -254,6 +254,11 @@ TwitchChannel::~TwitchChannel()
     this->destroyed.invoke();
 }
 
+std::weak_ptr<TwitchChannel> TwitchChannel::weakFromThis()
+{
+    return std::static_pointer_cast<TwitchChannel>(this->shared_from_this());
+}
+
 void TwitchChannel::initialize()
 {
     this->refreshChatters();
@@ -767,6 +772,7 @@ void TwitchChannel::roomIdChanged()
     this->listenSevenTVCosmetics();
     getApp()->getTwitchLiveController()->add(
         std::dynamic_pointer_cast<TwitchChannel>(shared_from_this()));
+    this->refreshPinnedMessage();
 }
 
 QString TwitchChannel::prepareMessage(const QString &message) const
@@ -920,6 +926,12 @@ void TwitchChannel::setMod(bool value)
         this->mod_ = value;
 
         this->userStateChanged.invoke();
+
+        if (value)
+        {
+            // Gained mod privileges - fetch the current pin
+            this->refreshPinnedMessage();
+        }
     }
 }
 
@@ -1581,6 +1593,7 @@ void TwitchChannel::refreshPubSub()
     auto currentAccount = getApp()->getAccounts()->twitch.getCurrent();
 
     getApp()->getTwitchPubSub()->listenToChannelPointRewards(roomId);
+    getApp()->getTwitchPubSub()->listenToPinnedChatUpdates(roomId);
 
     if (currentAccount->isAnon())
     {
@@ -2182,6 +2195,148 @@ void TwitchChannel::deleteMessagesAs(const QString &messageID,
         });
 }
 
+void TwitchChannel::pinMessageAs(const QString &messageID,
+                                 std::optional<std::chrono::seconds> duration,
+                                 const TwitchAccount &moderator,
+                                 QString textHint)
+{
+    this->pinOrUpdateMessage(false, messageID, duration, moderator,
+                             std::move(textHint));
+}
+
+void TwitchChannel::updatePinnedMessageAs(
+    const QString &messageID, std::optional<std::chrono::seconds> duration,
+    const TwitchAccount &moderator, QString textHint)
+{
+    this->pinOrUpdateMessage(true, messageID, duration, moderator,
+                             std::move(textHint));
+}
+
+void TwitchChannel::pinOrUpdateMessage(
+    bool update, const QString &messageID,
+    std::optional<std::chrono::seconds> duration,
+    const TwitchAccount &moderator, QString textHint)
+{
+    (void)textHint;
+    auto onSuccess = [weak = this->weakFromThis()]() {
+        auto self = weak.lock();
+        if (!self)
+        {
+            return;
+        }
+
+        // Chatterino9: no chat line on success, the pin banner shows it
+        self->refreshPinnedMessage();
+    };
+    auto onError = [weak = this->weakFromThis(), id = messageID](
+                       HelixPinMessageError error, auto message) {
+        auto chan = weak.lock();
+        if (!chan)
+        {
+            return;
+        }
+
+        if (message.isEmpty())
+        {
+            message = "(empty message)";
+        }
+
+        using Error = HelixPinMessageError;
+
+        auto errorMessage = [&]() -> QString {
+            switch (error)
+            {
+                case Error::InvalidParameter:
+                    return "Failed to pin message: " + message;
+                case Error::MissingScope:
+                    return "Missing required scope. Re-login with your "
+                           "account and try again.";
+                case Error::Forbidden:
+                    return "You are not allowed to pin messages in this "
+                           "channel.";
+                case Error::NotFound:
+                    return "Failed to find message with id \"" % id % "\".";
+                case Error::AlreadyPinned:
+                    return "The message is already pinned.";
+
+                case Error::Forwarded:
+                    return message;
+                case Error::Unknown:
+                default:
+                    return "Unknown error: " + message;
+            }
+        }();
+        chan->addSystemMessage(errorMessage);
+    };
+
+    if (update)
+    {
+        getHelix()->updatePinnedChatMessage(
+            this->roomId(), moderator.getUserId(), messageID, duration,
+            std::move(onSuccess), std::move(onError));
+    }
+    else
+    {
+        getHelix()->pinChatMessage(this->roomId(), moderator.getUserId(),
+                                   messageID, duration, std::move(onSuccess),
+                                   std::move(onError));
+    }
+}
+
+void TwitchChannel::unpinMessageAs(const QString &messageID,
+                                   const TwitchAccount &moderator)
+{
+    getHelix()->unpinChatMessage(
+        this->roomId(), moderator.getUserId(), messageID,
+        [weak = this->weakFromThis()] {
+            auto chan = weak.lock();
+            if (!chan)
+            {
+                return;
+            }
+
+            // Chatterino9: no chat line on success, the pin banner hides
+            chan->clearPinnedMessage();
+        },
+        [weak = this->weakFromThis(), messageID](HelixUnpinMessageError error,
+                                                 auto message) {
+            auto chan = weak.lock();
+            if (!chan)
+            {
+                return;
+            }
+
+            if (message.isEmpty())
+            {
+                message = "(empty message)";
+            }
+
+            using Error = HelixUnpinMessageError;
+
+            auto errorMessage = [&]() -> QString {
+                switch (error)
+                {
+                    case Error::MissingScope:
+                        return "Missing required scope. Re-login with your "
+                               "account and try again.";
+                    case Error::Forbidden:
+                        return "You are not allowed to unpin messages in this "
+                               "channel.";
+                    case Error::NotFound:
+                        return "Failed to find message with id \"" % messageID %
+                               "\".";
+
+                    case Error::Forwarded:
+                        return message;
+                    case Error::Unknown:
+                    default:
+                        return "Unknown error: " + message;
+                }
+            }();
+            chan->addSystemMessage(errorMessage);
+        });
+}
+
 std::optional<EmotePtr> TwitchChannel::twitchBadge(const QString &set,
                                                    const QString &version) const
 {
@@ -2401,6 +2556,88 @@ void TwitchChannel::setSendWait(int seconds)
 bool TwitchChannel::isLoadingRecentMessages() const
 {
     return this->loadingRecentMessages_.test();
+}
+
+void TwitchChannel::refreshPinnedMessage()
+{
+    auto currentAccount = getApp()->getAccounts()->twitch.getCurrent();
+    if (!currentAccount || currentAccount->isAnon())
+    {
+        return;
+    }
+
+    const auto requestId = ++this->pinnedMessageRequestId_;
+    getHelix()->getPinnedChatMessage(
+        this->roomId(), currentAccount->getUserId(),
+        [weak = this->weakFromThis(),
+         requestId](std::optional<HelixPinnedChatMessage> msg) {
+            auto self = weak.lock();
+            if (!self || self->pinnedMessageRequestId_ != requestId)
+            {
+                return;
+            }
+            if (msg)
+            {
+                self->pinnedMessage_ =
+                    std::make_unique<const HelixPinnedChatMessage>(
+                        std::move(*msg));
+            }
+            else
+            {
+                self->pinnedMessage_ = nullptr;
+            }
+            self->pinnedMessageChanged.invoke();
+        },
+        [](const QString &error) {
+            qCWarning(chatterinoTwitch)
+                << "Failed to fetch pinned message:" << error;
+        });
+}
+
+const HelixPinnedChatMessage *TwitchChannel::getPinnedMessage() const
+{
+    return this->pinnedMessage_.get();
+}
+
+void TwitchChannel::clearPinnedMessage()
+{
+    if (!this->pinnedMessage_)
+    {
+        return;
+    }
+    this->pinnedMessage_.reset();
+    this->pinnedMessageChanged.invoke();
+}
+
+void TwitchChannel::unpinCurrentMessage()
+{
+    if (!this->pinnedMessage_)
+    {
+        return;
+    }
+
+    auto currentAccount = getApp()->getAccounts()->twitch.getCurrent();
+    if (!currentAccount || currentAccount->isAnon())
+    {
+        return;
+    }
+
+    const auto msgId = this->pinnedMessage_->messageID;
+    getHelix()->unpinChatMessage(
+        this->roomId(), currentAccount->getUserId(), msgId,
+        [weak = this->weakFromThis()] {
+            auto self = weak.lock();
+            if (!self)
+            {
+                return;
+            }
+            self->pinnedMessage_.reset();
+            self->pinnedMessageChanged.invoke();
+        },
+        [](HelixUnpinMessageError /*error*/, const QString &message) {
+            qCWarning(chatterinoTwitch)
+                << "Failed to unpin message:" << message;
+        });
 }
 
 }  // namespace chatterino
