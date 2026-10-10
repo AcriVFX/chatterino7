@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
 
@@ -175,6 +176,40 @@ bool isVariantOf(const QStringList &a, const QStringList &b)
         }
     }
     return strong && matched * 2 >= shorter.size();
+}
+
+bool startsWithRequest(const QString &text)
+{
+    // up to 3 lead words (Papaplatte's names, "bitte", "bro", "mal", ...),
+    // then a request word and at least one more word
+    static const QRegularExpression request(
+        uR"(^\W*(?:(?:@?papaplatte|papa|kevin|bitte|pls|plz|bruder|bro|ey|hey|yo|alter|digga|ok|okay|jetzt|mal|ma|doch|einfach)\W+){0,3})"
+        uR"((?:sag|frag|schreib|ruf|lad|hol|zeig|erzähl|erzaehl|erklär|erklaer|antworte?|reagier|react|lies|les|lese|spiel|mach|guck|schau|kauf|probier|nimm|geh)\b\W+\w)"_s,
+        QRegularExpression::CaseInsensitiveOption |
+            QRegularExpression::UseUnicodePropertiesOption);
+    return request.match(text).hasMatch();
+}
+
+QStringList requestTokens(const QStringList &variantTokens)
+{
+    // as variantTokens writes them ("nimm" -> "nim")
+    static const QSet<QString> requestWords{
+        u"sag"_s,     u"frag"_s,     u"schreib"_s, u"ruf"_s,     u"lad"_s,
+        u"hol"_s,     u"zeig"_s,     u"erzähl"_s,  u"erzaehl"_s, u"erklär"_s,
+        u"erklaer"_s, u"antworte"_s, u"antwort"_s, u"reagier"_s, u"react"_s,
+        u"lies"_s,    u"les"_s,      u"lese"_s,    u"spiel"_s,   u"mach"_s,
+        u"guck"_s,    u"schau"_s,    u"kauf"_s,    u"probier"_s, u"nim"_s,
+        u"geh"_s,     u"mal"_s,      u"doch"_s,
+    };
+    QStringList tokens;
+    for (const auto &token : variantTokens)
+    {
+        if (!requestWords.contains(token))
+        {
+            tokens.append(token);
+        }
+    }
+    return tokens;
 }
 
 qint64 parseLogDuration(const QString &text)

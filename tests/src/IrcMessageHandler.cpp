@@ -699,6 +699,18 @@ QByteArray naggerMessage(int i, const QString &text)
                .toUtf8();
 }
 
+/// A message from one user, `seconds` after the first one
+QByteArray requesterMessage(int i, qint64 seconds, const QString &text)
+{
+    return u"@display-name=requester;id=req-%1;room-id=11148817;"
+           "tmi-sent-ts=%2;user-id=125 "
+           ":requester!requester@requester.tmi.twitch.tv PRIVMSG #pajlada "
+           ":%3"_s.arg(i)
+               .arg(1662206235000 + (seconds * 1000))
+               .arg(text)
+               .toUtf8();
+}
+
 }  // namespace
 
 /// The recent messages loaded on join are built into a sink before any of
@@ -768,4 +780,60 @@ TEST_F(TestIrcMessageHandlerRepeats, VariantsThatPingTheStreamer)
           plain);
     ASSERT_EQ(plain.messages().size(), 3);
     EXPECT_EQ(plain.messages()[2]->repeatCount, 0);
+}
+
+/// The same request reworded three times within 3 minutes counts as a repeat,
+/// the request words ("Sag", "Frag") don't matter
+TEST_F(TestIrcMessageHandlerRepeats, RewordedRequests)
+{
+    auto channel = std::make_shared<TwitchChannel>(u"pajlada"_s);
+    auto parse = [&](const std::vector<std::pair<qint64, QString>> &texts,
+                     VectorMessageSink &sink) {
+        for (int i = 0; i < static_cast<int>(texts.size()); i++)
+        {
+            auto *ircMessage = Communi::IrcMessage::fromData(
+                requesterMessage(i, texts[i].first, texts[i].second), nullptr);
+            ASSERT_NE(ircMessage, nullptr);
+            IrcMessageHandler::parseMessageInto(ircMessage, sink,
+                                                channel.get());
+            delete ircMessage;
+        }
+    };
+
+    VectorMessageSink reworded;
+    parse(
+        {{0, u"Sag nooreax das er dir das Zeug liefern soll"_s},
+         {41, u"Sag nooreax das er mit seinem Amazon Laden dir das Zeug Farmen "
+              "soll"_s},
+         {154,
+          u"Frag nooreax mit seinem amazonladen das er dir das Zeug Farmen "
+          "soll"_s}},
+        reworded);
+    ASSERT_EQ(reworded.messages().size(), 3);
+    EXPECT_EQ(reworded.messages()[1]->repeatCount, 0);
+    EXPECT_EQ(reworded.messages()[2]->repeatCount, 3);
+    EXPECT_EQ(reworded.messages()[2]->repeatSeconds, 154);
+    EXPECT_EQ(reworded.messages()[2]->highlightTag, u"REPEAT"_s);
+
+    // the first one is more than 3 minutes old
+    VectorMessageSink late;
+    parse(
+        {{0, u"Sag nooreax das er dir das Zeug liefern soll"_s},
+         {41, u"Sag nooreax das er mit seinem Amazon Laden dir das Zeug Farmen "
+              "soll"_s},
+         {200,
+          u"Frag nooreax mit seinem amazonladen das er dir das Zeug Farmen "
+          "soll"_s}},
+        late);
+    ASSERT_EQ(late.messages().size(), 3);
+    EXPECT_EQ(late.messages()[2]->repeatCount, 0);
+
+    // different requests that only share the request word
+    VectorMessageSink different;
+    parse({{0, u"mach Backflip"_s},
+           {20, u"mach 50 Liegestütze"_s},
+           {40, u"mach Handstand"_s}},
+          different);
+    ASSERT_EQ(different.messages().size(), 3);
+    EXPECT_EQ(different.messages()[2]->repeatCount, 0);
 }

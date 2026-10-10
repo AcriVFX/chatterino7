@@ -128,6 +128,10 @@ bool pingsUser(const Message &message, const QString &login)
 ///   "ninjago Tempel pls"): the same user sent VARIANT_PREVIOUS_NEEDED
 ///   variants of it in the last VARIANT_WINDOW_SECONDS
 ///   (STREAMER_VARIANT_PREVIOUS_NEEDED if it pings the streamer)
+/// - the same request to the streamer, reworded ("Sag nooreax ...",
+///   "Frag nooreax ..."): the same user sent REQUEST_PREVIOUS_NEEDED
+///   variants of a message aimed at the streamer in the last
+///   REQUEST_WINDOW_SECONDS, request words ignored
 /// Returns how many of these messages the user sent (this one included),
 /// or 0 if it is not a repeat. `spanSeconds` is set to the time between
 /// the oldest counted message and this one.
@@ -156,10 +160,24 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
         return 0;
     }
 
+    // aimed at the streamer: pings them, is a question or request (REQUEST
+    // highlight) or starts with a request ("Sag ...", "Frag mal ...")
+    const bool pingsStreamer = pingsUser(message, channel->getName());
+    QStringList requestTokens;
+    if (pingsStreamer || message.highlightTag == u"REQUEST" ||
+        modhelpers::startsWithRequest(message.messageText))
+    {
+        requestTokens = modhelpers::requestTokens(variantTokens);
+    }
+
     auto window = modhelpers::VARIANT_WINDOW_SECONDS;
     if (!key.isEmpty())
     {
         window = std::max(window, modhelpers::REPEAT_WINDOW_SECONDS);
+    }
+    if (!requestTokens.isEmpty())
+    {
+        window = std::max(window, modhelpers::REQUEST_WINDOW_SECONDS);
     }
     if (!shortKey.isEmpty())
     {
@@ -172,6 +190,8 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     qint64 repeatsSpan = 0;
     int variants = 0;
     qint64 variantsSpan = 0;
+    int requests = 0;
+    qint64 requestsSpan = 0;
     int previous = 0;
     qint64 previousSpan = 0;
     int previousTotal = 0;
@@ -206,13 +226,24 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
         }
         const auto prevWords = textWordsOf(*prev);
 
-        if (sameUser && !variantTokens.isEmpty() &&
-            age <= modhelpers::VARIANT_WINDOW_SECONDS &&
-            modhelpers::isVariantOf(variantTokens,
-                                    modhelpers::variantTokens(prevWords)))
+        if (sameUser && (!variantTokens.isEmpty() || !requestTokens.isEmpty()))
         {
-            variants++;
-            variantsSpan = age;
+            const auto prevTokens = modhelpers::variantTokens(prevWords);
+            if (!variantTokens.isEmpty() &&
+                age <= modhelpers::VARIANT_WINDOW_SECONDS &&
+                modhelpers::isVariantOf(variantTokens, prevTokens))
+            {
+                variants++;
+                variantsSpan = age;
+            }
+            if (!requestTokens.isEmpty() &&
+                age <= modhelpers::REQUEST_WINDOW_SECONDS &&
+                modhelpers::isVariantOf(requestTokens,
+                                        modhelpers::requestTokens(prevTokens)))
+            {
+                requests++;
+                requestsSpan = age;
+            }
         }
 
         if (!key.isEmpty())
@@ -297,12 +328,15 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     };
     // asking the streamer the same thing again and again counts sooner
     const auto variantsNeeded =
-        pingsUser(message, channel->getName())
-            ? modhelpers::STREAMER_VARIANT_PREVIOUS_NEEDED
-            : modhelpers::VARIANT_PREVIOUS_NEEDED;
+        pingsStreamer ? modhelpers::STREAMER_VARIANT_PREVIOUS_NEEDED
+                      : modhelpers::VARIANT_PREVIOUS_NEEDED;
     if (variants >= variantsNeeded)
     {
         take(variants, variantsSpan);
+    }
+    if (requests >= modhelpers::REQUEST_PREVIOUS_NEEDED)
+    {
+        take(requests, requestsSpan);
     }
     if (repeats >= modhelpers::REPEAT_PREVIOUS_NEEDED)
     {
