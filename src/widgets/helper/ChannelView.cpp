@@ -1275,12 +1275,6 @@ bool ChannelView::foldsRepeats() const
 
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
-    // lane-style splits show timeouts as a chip on the message instead
-    if (m->flags.has(MessageFlag::Timeout) && this->isLaneStyle())
-    {
-        return false;
-    }
-
     if (this->channelFilters_)
     {
         if (getSettings()->excludeUserMessagesFromFilter &&
