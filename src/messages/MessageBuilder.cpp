@@ -327,6 +327,15 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     return count;
 }
 
+/// Did the SPAM highlight rule match an "L" ("L", "LLL", the L in "L game")?
+bool isLoneL(const QString &matchedText)
+{
+    return !matchedText.isEmpty() &&
+           std::ranges::all_of(matchedText, [](QChar c) {
+               return c == u'L' || c == u'l';
+           });
+}
+
 /// Did the same user send another spammy message (see Message::spammy)
 /// within SPAM_SECOND_WINDOW_SECONDS before this one?
 /// `pending` as in countRepeats.
@@ -2038,14 +2047,15 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
 
-    // spam ("L", "67", emote walls) only keeps the SPAM color when the user
-    // sent another spammy message shortly before, walls of text keep it
+    // spam ("67", emote walls) only keeps the SPAM color when the user sent
+    // another spammy message shortly before. Walls of text and a lone "L"
+    // ("L", "L game") keep it right away.
     if (builder->highlightTag == u"SPAM")
     {
         builder->spammy = true;
         if (content.size() < modhelpers::SPAM_WALL_LENGTH &&
-            twitchChannel != nullptr && !highlight.playSound &&
-            !highlight.windowAlert &&
+            !isLoneL(builder->highlightMatch) && twitchChannel != nullptr &&
+            !highlight.playSound && !highlight.windowAlert &&
             !builder->flags.has(MessageFlag::ShowInMentions) &&
             !hasRecentSpam(channel, args.pendingMessages, builder.message()))
         {

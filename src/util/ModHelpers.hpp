@@ -62,7 +62,8 @@ inline constexpr int STREAMER_VARIANT_PREVIOUS_NEEDED = 2;
 /// SPAM_WALL_LENGTH ("L", "67", emote walls, long emote names) only keeps the
 /// color when the same user sent another spammy message within
 /// SPAM_SECOND_WINDOW_SECONDS. A single one is mostly harmless (2% get a
-/// timeout in papaplatte's chat).
+/// timeout in papaplatte's chat). A lone "L" ("L", "L game") keeps the color
+/// right away.
 inline constexpr int SPAM_WALL_LENGTH = 200;
 inline constexpr qint64 SPAM_SECOND_WINDOW_SECONDS = 120;
 
