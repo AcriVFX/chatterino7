@@ -2915,21 +2915,21 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
     {
         // Chatterino9: Delete, Pin and Unpin sit directly in the menu
         menu->addSeparator();
-        menu->addAction(
-            "&Delete message", [this, id = layout->getMessage()->id] {
-                auto *twitchChannel = dynamic_cast<TwitchChannel *>(
-                    this->underlyingChannel_.get());
-                if (twitchChannel)
-                {
-                    twitchChannel->deleteMessagesAs(
-                        id, getApp()->getAccounts()->twitch.getCurrent().get());
-                }
-                else if (auto *kc = dynamic_cast<KickChannel *>(
-                             this->underlyingChannel_.get()))
-                {
-                    kc->deleteMessage(id);
-                }
-            });
+        menu->addAction("&Delete message", [this,
+                                            id = layout->getMessage()->id] {
+            auto *twitchChannel =
+                dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get());
+            if (twitchChannel)
+            {
+                twitchChannel->deleteMessagesAs(
+                    id, getApp()->getAccounts()->twitch.getCurrent().get());
+            }
+            else if (auto *kc = dynamic_cast<KickChannel *>(
+                         this->underlyingChannel_.get()))
+            {
+                kc->deleteMessage(id);
+            }
+        });
 
         if (dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get()))
         {
