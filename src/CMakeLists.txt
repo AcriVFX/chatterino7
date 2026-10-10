@@ -906,6 +906,8 @@ set(SOURCE_FILES
         widgets/splits/InputHighlighter.hpp
         widgets/splits/PinnedMessageWidget.cpp
         widgets/splits/PinnedMessageWidget.hpp
+        widgets/splits/PredictionStripWidget.cpp
+        widgets/splits/PredictionStripWidget.hpp
         widgets/splits/Split.cpp
         widgets/splits/Split.hpp
         widgets/splits/SplitCommon.hpp

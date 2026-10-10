@@ -38,6 +38,7 @@
 #include "widgets/Scrollbar.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
 #include "widgets/splits/PinnedMessageWidget.hpp"
+#include "widgets/splits/PredictionStripWidget.hpp"
 #include "widgets/splits/SplitContainer.hpp"
 #include "widgets/splits/SplitHeader.hpp"
 #include "widgets/splits/SplitInput.hpp"
@@ -93,6 +94,7 @@ Split::Split(QWidget *parent)
     , vbox_(new QVBoxLayout(this))
     , header_(new SplitHeader(this))
     , pinnedBanner_(new PinnedMessageWidget(this))
+    , predictionStrip_(new PredictionStripWidget(this))
     , view_(new ChannelView(this, this, ChannelView::Context::None,
                             getSettings()->scrollbackSplitLimit))
     , input_(new SplitInput(this))
@@ -108,6 +110,7 @@ Split::Split(QWidget *parent)
 
     this->vbox_->addWidget(this->header_);
     this->vbox_->addWidget(this->pinnedBanner_);
+    this->vbox_->addWidget(this->predictionStrip_);
     this->vbox_->addWidget(this->view_, 1);
     this->vbox_->addWidget(this->input_);
 
@@ -762,9 +765,10 @@ PinnedMessageWidget *Split::getPinnedBanner() const
 
 void Split::updatePinnedBannerChannel()
 {
-    // Chatterino9: lane splits never show the pinned message
+    // Chatterino9: lane splits never show the pinned message or prediction
     auto *tc = dynamic_cast<TwitchChannel *>(this->getChannel().get());
     this->pinnedBanner_->setChannel(this->laneStyle_ ? nullptr : tc);
+    this->predictionStrip_->setChannel(this->laneStyle_ ? nullptr : tc);
     this->header_->updatePinButton();
 }
 

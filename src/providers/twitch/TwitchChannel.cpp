@@ -40,6 +40,7 @@
 #include "providers/twitch/IrcMessageHandler.hpp"
 #include "providers/twitch/PubSubManager.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
+#include "providers/twitch/TwitchBadge.hpp"
 #include "providers/twitch/TwitchCommon.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/twitch/TwitchUsers.hpp"
@@ -263,6 +264,15 @@ void TwitchChannel::initialize()
 {
     this->refreshChatters();
     this->refreshBadges();
+
+    this->signalHolder_.managedConnect(
+        this->messageAppended,
+        [this](MessagePtr &message, std::optional<MessageFlags> /*flags*/) {
+            if (message)
+            {
+                this->trackPredictionBadge(*message);
+            }
+        });
 }
 
 bool TwitchChannel::isEmpty() const
@@ -2638,6 +2648,121 @@ void TwitchChannel::unpinCurrentMessage()
             qCWarning(chatterinoTwitch)
                 << "Failed to unpin message:" << message;
         });
+}
+
+namespace {
+
+/// A prediction counts as gone when no badge was seen for this long
+constexpr auto SEEN_PREDICTION_TIMEOUT = std::chrono::minutes(5);
+
+}  // namespace
+
+void TwitchChannel::trackPredictionBadge(const Message &message)
+{
+    if (message.loginName.isEmpty())
+    {
+        return;
+    }
+
+    const TwitchBadge *badge = nullptr;
+    for (const auto &b : message.twitchBadges)
+    {
+        if (b.key_ == u"predictions")
+        {
+            badge = &b;
+            break;
+        }
+    }
+    if (badge == nullptr || badge->value_.isEmpty())
+    {
+        return;
+    }
+
+    auto seenAt = message.serverReceivedTime.isValid()
+                      ? message.serverReceivedTime
+                      : QDateTime::currentDateTimeUtc();
+    auto now = QDateTime::currentDateTimeUtc();
+    if (seenAt.secsTo(now) >
+        std::chrono::seconds(SEEN_PREDICTION_TIMEOUT).count())
+    {
+        // e.g. old messages from the history
+        return;
+    }
+
+    QString title;
+    auto infoIt = message.twitchBadgeInfos.find(u"predictions"_s);
+    if (infoIt != message.twitchBadgeInfos.end())
+    {
+        title = infoIt->second;
+    }
+
+    // A badge we know with a different title, or a long gap, means a new
+    // prediction started
+    bool expired = !this->predictionLastSeen_.isValid() ||
+                   this->predictionLastSeen_.secsTo(seenAt) >
+                       std::chrono::seconds(SEEN_PREDICTION_TIMEOUT).count();
+    auto titleIt = this->predictionTitles_.find(badge->value_);
+    if (expired || (titleIt != this->predictionTitles_.end() &&
+                    !title.isEmpty() && titleIt->second != title))
+    {
+        this->predictionVoters_.clear();
+        this->predictionTitles_.clear();
+    }
+
+    if (!title.isEmpty() || !this->predictionTitles_.contains(badge->value_))
+    {
+        this->predictionTitles_[badge->value_] = title;
+    }
+    this->predictionVoters_[message.loginName] = badge->value_;
+    if (!this->predictionLastSeen_.isValid() ||
+        seenAt > this->predictionLastSeen_ || expired)
+    {
+        this->predictionLastSeen_ = seenAt;
+    }
+
+    this->seenPredictionChanged.invoke();
+}
+
+std::vector<TwitchChannel::SeenPredictionOutcome>
+    TwitchChannel::seenPrediction() const
+{
+    std::vector<SeenPredictionOutcome> outcomes;
+    if (!this->predictionLastSeen_.isValid() ||
+        this->predictionLastSeen_.secsTo(QDateTime::currentDateTimeUtc()) >
+            std::chrono::seconds(SEEN_PREDICTION_TIMEOUT).count())
+    {
+        return outcomes;
+    }
+
+    for (const auto &[badge, title] : this->predictionTitles_)
+    {
+        outcomes.push_back({.badge = badge, .title = title, .chatters = 0});
+    }
+    for (const auto &[login, badge] : this->predictionVoters_)
+    {
+        for (auto &outcome : outcomes)
+        {
+            if (outcome.badge == badge)
+            {
+                outcome.chatters++;
+                break;
+            }
+        }
+    }
+
+    // blue before pink, then by number: blue-1, blue-2, ..., pink-1
+    std::sort(outcomes.begin(), outcomes.end(),
+              [](const auto &a, const auto &b) {
+                  auto colorA = a.badge.section('-', 0, 0);
+                  auto colorB = b.badge.section('-', 0, 0);
+                  if (colorA != colorB)
+                  {
+                      return colorA < colorB;
+                  }
+                  return a.badge.section('-', 1).toInt() <
+                         b.badge.section('-', 1).toInt();
+              });
+    return outcomes;
 }
 
 }  // namespace chatterino

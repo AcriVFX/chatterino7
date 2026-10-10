@@ -5,8 +5,8 @@
 #pragma once
 
 #include "common/ChatterinoSetting.hpp"
-#include "common/enums/UsernameDisplayMode.hpp"
 #include "common/enums/MessageOverflow.hpp"
+#include "common/enums/UsernameDisplayMode.hpp"
 #include "common/LastMessageLineStyle.hpp"
 #include "common/Modes.hpp"
 #include "common/SignalVector.hpp"

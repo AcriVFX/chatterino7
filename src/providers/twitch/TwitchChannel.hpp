@@ -426,6 +426,25 @@ public:
     /// Fires when the pinned message changes (set, cleared, or updated).
     pajlada::Signals::NoArgSignal pinnedMessageChanged;
 
+    // Prediction seen in chat (Chatterino9)
+    // Moderators can't read predictions through the Twitch API, so the
+    // outcomes are collected from the prediction badges chatters wear.
+    struct SeenPredictionOutcome {
+        /// Badge version, e.g. "blue-1" or "pink-2"
+        QString badge;
+        /// Outcome title from badge-info
+        QString title;
+        /// Unique chatters seen with this badge
+        int chatters = 0;
+    };
+
+    /// Outcomes of the prediction seen in chat in the last few minutes,
+    /// ordered by badge. Empty when no prediction badge was seen recently.
+    std::vector<SeenPredictionOutcome> seenPrediction() const;
+
+    /// Fires when a chatter with a prediction badge is seen.
+    pajlada::Signals::NoArgSignal seenPredictionChanged;
+
 private:
     struct NameOptions {
         // displayName is the non-CJK-display name for this user
@@ -454,6 +473,7 @@ private:
     void loadRecentMessages();
     void loadRecentMessagesReconnect();
     void cleanUpReplyThreads();
+    void trackPredictionBadge(const Message &message);
     void pinOrUpdateMessage(bool update, const QString &messageID,
                             std::optional<std::chrono::seconds> duration,
                             const TwitchAccount &moderator, QString textHint);
@@ -632,6 +652,12 @@ private:
     /// Incremented before each getPinnedChatMessage request so that stale
     /// responses from earlier requests are discarded.
     uint64_t pinnedMessageRequestId_ = 0;
+
+    /// login -> prediction badge version
+    std::unordered_map<QString, QString> predictionVoters_;
+    /// prediction badge version -> outcome title
+    std::unordered_map<QString, QString> predictionTitles_;
+    QDateTime predictionLastSeen_;
 
     friend class TwitchIrcServer;
     friend class MessageBuilder;
