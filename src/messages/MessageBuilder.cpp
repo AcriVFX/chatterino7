@@ -105,6 +105,19 @@ bool hasEmotes(const Message &message)
     });
 }
 
+/// Does the message ping `login` with "@login"?
+bool pingsUser(const Message &message, const QString &login)
+{
+    return std::ranges::any_of(message.elements, [&](const auto &element) {
+        auto *mention = dynamic_cast<MentionElement *>(element.get());
+        // "@name", not a bare name found by findAllUsernames
+        return mention != nullptr &&
+               mention->words().value(0).startsWith('@') &&
+               mention->userLoginName().compare(login, Qt::CaseInsensitive) ==
+                   0;
+    });
+}
+
 /// Is this message a repeat?
 /// - longer text: the same user sent (nearly) the same text
 ///   REPEAT_PREVIOUS_NEEDED times in the last REPEAT_WINDOW_SECONDS
@@ -114,6 +127,7 @@ bool hasEmotes(const Message &message)
 /// - spam with small variations ("NINJAGO TEMPEL", "NINJAGOOOO",
 ///   "ninjago Tempel pls"): the same user sent VARIANT_PREVIOUS_NEEDED
 ///   variants of it in the last VARIANT_WINDOW_SECONDS
+///   (STREAMER_VARIANT_PREVIOUS_NEEDED if it pings the streamer)
 /// Returns how many of these messages the user sent (this one included),
 /// or 0 if it is not a repeat. `spanSeconds` is set to the time between
 /// the oldest counted message and this one.
@@ -281,7 +295,12 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
             spanSeconds = span;
         }
     };
-    if (variants >= modhelpers::VARIANT_PREVIOUS_NEEDED)
+    // asking the streamer the same thing again and again counts sooner
+    const auto variantsNeeded =
+        pingsUser(message, channel->getName())
+            ? modhelpers::STREAMER_VARIANT_PREVIOUS_NEEDED
+            : modhelpers::VARIANT_PREVIOUS_NEEDED;
+    if (variants >= variantsNeeded)
     {
         take(variants, variantsSpan);
     }

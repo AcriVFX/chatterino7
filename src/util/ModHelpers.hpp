@@ -52,6 +52,12 @@ bool isSameRepeatKey(const QString &a, const QString &b);
 inline constexpr int VARIANT_PREVIOUS_NEEDED = 6;
 inline constexpr qint64 VARIANT_WINDOW_SECONDS = 120;
 
+/// Asking the streamer the same thing again and again ("@Papaplatte mach bitte
+/// musik an"): a variant that pings the channel owner already counts when the
+/// same user sent STREAMER_VARIANT_PREVIOUS_NEEDED variants of it within
+/// VARIANT_WINDOW_SECONDS.
+inline constexpr int STREAMER_VARIANT_PREVIOUS_NEEDED = 2;
+
 /// A message colored by a SPAM highlight rule that is shorter than
 /// SPAM_SHORT_LENGTH ("L", "67", a few emotes) only keeps the color when the
 /// same user sent another spammy message within SPAM_SECOND_WINDOW_SECONDS.

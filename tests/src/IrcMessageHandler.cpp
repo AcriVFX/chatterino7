@@ -688,6 +688,17 @@ QByteArray spamMessage(int i)
                .toUtf8();
 }
 
+/// The i-th message from one user, 20 seconds apart
+QByteArray naggerMessage(int i, const QString &text)
+{
+    return u"@display-name=nagger;id=nag-%1;room-id=11148817;"
+           "tmi-sent-ts=%2;user-id=124 "
+           ":nagger!nagger@nagger.tmi.twitch.tv PRIVMSG #pajlada :%3"_s.arg(i)
+               .arg(1662206235000 + (static_cast<qint64>(i) * 20000))
+               .arg(text)
+               .toUtf8();
+}
+
 }  // namespace
 
 /// The recent messages loaded on join are built into a sink before any of
@@ -721,4 +732,40 @@ TEST_F(TestIrcMessageHandlerRepeats, RepeatsInRecentMessages)
     delete ircMessage;
     ASSERT_EQ(other.messages().size(), 1);
     EXPECT_EQ(other.messages()[0]->repeatCount, 0);
+}
+
+/// Asking the streamer the same thing three times counts as a repeat, the
+/// same variants without the ping need more
+TEST_F(TestIrcMessageHandlerRepeats, VariantsThatPingTheStreamer)
+{
+    auto channel = std::make_shared<TwitchChannel>(u"pajlada"_s);
+    auto parse = [&](const QStringList &texts, VectorMessageSink &sink) {
+        for (int i = 0; i < texts.size(); i++)
+        {
+            auto *ircMessage = Communi::IrcMessage::fromData(
+                naggerMessage(i, texts[i]), nullptr);
+            ASSERT_NE(ircMessage, nullptr);
+            IrcMessageHandler::parseMessageInto(ircMessage, sink,
+                                                channel.get());
+            delete ircMessage;
+        }
+    };
+
+    VectorMessageSink pinged;
+    parse({u"ideee: versteckt ein one pice unter euerer base"_s,
+           u"Versteckt doch ein One Piece unter der Base"_s,
+           u"@pajlada Versteckt ein One Piece unter euerer Base"_s},
+          pinged);
+    ASSERT_EQ(pinged.messages().size(), 3);
+    EXPECT_EQ(pinged.messages()[1]->repeatCount, 0);
+    EXPECT_EQ(pinged.messages()[2]->repeatCount, 3);
+    EXPECT_EQ(pinged.messages()[2]->repeatSeconds, 40);
+
+    VectorMessageSink plain;
+    parse({u"ideee: versteckt ein one pice unter euerer base"_s,
+           u"Versteckt doch ein One Piece unter der Base"_s,
+           u"Versteckt ein One Piece unter euerer Base"_s},
+          plain);
+    ASSERT_EQ(plain.messages().size(), 3);
+    EXPECT_EQ(plain.messages()[2]->repeatCount, 0);
 }
