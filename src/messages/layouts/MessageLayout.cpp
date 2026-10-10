@@ -26,6 +26,7 @@
 #include <QtGlobal>
 #include <QThread>
 
+#include <array>
 #include <cmath>
 
 namespace chatterino {
@@ -103,10 +104,17 @@ private:
     qreal radius_;
 };
 
+/// every category tag a lane can show; the tag pill is as wide as the widest
+constexpr std::array LANE_TAGS{
+    "ME",      "BAN",     "TO",      "HATE",      "NSFW", "POLITICS",
+    "LINK",    "SPOILER", "CONTEXT", "MODS",      "SPAM", "REQUEST",
+    "HOPPING", "NAME",    "REPEAT",  "INSTIGATE", "BEG",  "PROMO",
+};
+
 class LanePillElement : public MessageElement
 {
 public:
-    /// fixedWidth: as wide as the longest category tag, so every row of a
+    /// fixedWidth: as wide as the widest LANE_TAGS entry, so every row of a
     /// lane starts its timestamp and message at the same x
     LanePillElement(QString text, QColor color, QColor background,
                     ImagePtr icon = nullptr, bool fixedWidth = false,
@@ -139,9 +147,13 @@ public:
         qreal textWidth = metrics.horizontalAdvance(text);
         if (this->fixedWidth_)
         {
-            textWidth = metrics.horizontalAdvance(QStringLiteral("POLITICS"));
-            text = metrics.elidedText(text, Qt::ElideRight,
-                                      static_cast<int>(textWidth));
+            // never cut a tag: a tag wider than the known ones gets its own
+            // width (only that row shifts)
+            for (const auto *tag : LANE_TAGS)
+            {
+                textWidth = std::max<qreal>(
+                    textWidth, metrics.horizontalAdvance(QString(tag)));
+            }
         }
         qreal width = textWidth + (10 * scale);
         if (this->icon_)
