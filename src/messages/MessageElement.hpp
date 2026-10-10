@@ -150,7 +150,9 @@ enum class MessageElementFlag : int64_t {
     LowercaseLinks = (1LL << 29),
     // compact split: links shortened to their domain
     CompactRows = (1LL << 30),
-    // Unused: (1LL << 31)
+    // Lane style view that also shows the timeout line (no filters): the line
+    // already says who and how long, so the timeout chip is left out
+    TimeoutLines = (1LL << 31),
 
     // for elements of the message reply
     RepliedMessage = (1LL << 32),

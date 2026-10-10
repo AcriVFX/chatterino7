@@ -66,7 +66,7 @@ public:
     void setModerationMode(bool value);
     bool getModerationMode() const;
 
-    /// Lane style: highlight stripe + tag, timeout chips instead of timeout lines
+    /// Lane style: highlight stripe + tag, timeout chips on the punished message
     void setLaneStyle(bool value);
     bool getLaneStyle() const;
 

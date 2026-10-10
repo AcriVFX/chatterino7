@@ -1275,8 +1275,10 @@ bool ChannelView::foldsRepeats() const
 
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
-    // lane-style splits show timeouts as a chip on the message instead
-    if (m->flags.has(MessageFlag::Timeout) && this->isLaneStyle())
+    // filtered lanes show timeouts only as the chip on the message; the
+    // unfiltered chat keeps the timeout line too
+    if (m->flags.has(MessageFlag::Timeout) && this->isLaneStyle() &&
+        !this->getFilterIds().isEmpty())
     {
         return false;
     }
@@ -1575,6 +1577,10 @@ MessageElementFlags ChannelView::getFlags() const
         if (split->getLaneStyle())
         {
             flags.set(MessageElementFlag::HighlightLane);
+            if (this->getFilterIds().isEmpty())
+            {
+                flags.set(MessageElementFlag::TimeoutLines);
+            }
         }
         if (split->getCompactRows())
         {

@@ -949,7 +949,7 @@ void Split::setLaneStyle(bool value)
         return;
     }
     this->laneStyle_ = value;
-    // reload the view so timeout lines are hidden/shown again
+    // reload the view so repeat rows fold/unfold again
     if (auto underlying = this->view_->underlyingChannel())
     {
         this->view_->setChannel(underlying);
