@@ -58,6 +58,23 @@ inline constexpr qint64 VARIANT_WINDOW_SECONDS = 120;
 /// VARIANT_WINDOW_SECONDS.
 inline constexpr int STREAMER_VARIANT_PREVIOUS_NEEDED = 2;
 
+/// The same request to the streamer, reworded ("Sag nooreax das er ...",
+/// "Frag nooreax mit seinem ..."): a message aimed at the streamer (pings
+/// them, is colored by the REQUEST rule or starts with a request word, see
+/// startsWithRequest) counts when the same user sent REQUEST_PREVIOUS_NEEDED
+/// variants of it within REQUEST_WINDOW_SECONDS. The request words themselves
+/// are ignored when comparing (see requestTokens).
+inline constexpr int REQUEST_PREVIOUS_NEEDED = 2;
+inline constexpr qint64 REQUEST_WINDOW_SECONDS = 180;
+
+/// Does the message start with a request to the streamer ("Sag ...",
+/// "Frag mal ...", "papa spiel ...", "bitte mach ...")?
+bool startsWithRequest(const QString &text);
+
+/// variantTokens without the request words ("sag", "frag", "mach", "mal",
+/// ...), so "Sag nooreax ..." and "Frag nooreax ..." compare by what is asked.
+QStringList requestTokens(const QStringList &variantTokens);
+
 /// A message colored by a SPAM highlight rule that is shorter than
 /// SPAM_WALL_LENGTH ("67", emote walls, long emote names) only keeps the
 /// color when the same user sent another spammy message within

@@ -862,6 +862,7 @@ void UserInfoPopup::installEvents()
                     this->ui_.ignoreHighlights->setEnabled(true);
                 }
             }
+            this->updateSpamNow();
         });
 
     // user notes
@@ -1124,6 +1125,12 @@ void UserInfoPopup::updateSpamNow()
     auto *label = this->ui_.spamNowLabel;
     if (label == nullptr)
     {
+        return;
+    }
+    // users on the "Ignore highlights" list (bots like Fossabot) get no line
+    if (getSettings()->isBlacklistedUser(this->userName_))
+    {
+        label->setVisible(false);
         return;
     }
 
