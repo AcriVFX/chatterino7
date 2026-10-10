@@ -3046,4 +3046,61 @@ MessageColor MessageBuilder::textColor() const
     return this->textColor_;
 }
 
+MessagePtrMut MessageBuilder::makeCurrentPinnedMessage(
+    const TwitchChannel &chan, const HelixPinnedChatMessage &pin)
+{
+    MessageBuilder builder;
+    builder->channelName = chan.getName();
+    builder.emplace<TimestampElement>();
+    builder->flags.set(MessageFlag::System,
+                       MessageFlag::DoNotTriggerNotification);
+
+    QString text = pin.pinnedBy.login + ' ';
+    builder.emplace<MentionElement>(pin.pinnedBy.displayName,
+                                    pin.pinnedBy.login, MessageColor::System,
+                                    chan.getUserColor(pin.pinnedBy.login));
+    builder.emplaceSystemTextAndUpdate("pinned a message", text);
+
+    auto now = QDateTime::currentDateTimeUtc();
+    builder.appendOrEmplaceSystemTextAndUpdate(
+        formatTime(std::chrono::duration_cast<std::chrono::seconds>(
+            now - pin.startsAt)),
+        text);
+    builder.appendOrEmplaceSystemTextAndUpdate("ago", text);
+    if (pin.endsAt)
+    {
+        auto remaining =
+            std::chrono::duration_cast<std::chrono::seconds>(*pin.endsAt - now);
+        builder.appendOrEmplaceSystemTextAndUpdate(
+            '(' % formatTime(remaining) % " remaining)", text);
+    }
+    else
+    {
+        builder.appendOrEmplaceSystemTextAndUpdate("until the stream ends",
+                                                   text);
+    }
+    builder.appendOrEmplaceSystemTextAndUpdate("from", text);
+    builder
+        .emplace<MentionElement>(pin.sender.displayName, pin.sender.login,
+                                 MessageColor::System,
+                                 chan.getUserColor(pin.sender.login))
+        ->setTrailingSpace(false);
+    text += pin.sender.login;
+    builder.appendOrEmplaceSystemTextAndUpdate(u":"_s, text);
+
+    auto pinMessageText = pin.messageText;
+    if (pinMessageText.length() > 50)
+    {
+        pinMessageText = pinMessageText.left(50) + "…";
+    }
+
+    builder
+        .emplace<TextElement>(pinMessageText, MessageElementFlag::Text,
+                              MessageColor::Text)
+        ->setLink({Link::JumpToMessage, pin.messageID});
+    builder->messageText = pinMessageText;
+    builder->searchText = pinMessageText;
+    return builder.release();
+}
+
 }  // namespace chatterino

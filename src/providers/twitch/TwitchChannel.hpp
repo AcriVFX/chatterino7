@@ -26,6 +26,8 @@
 #include <QRegularExpression>
 
 #include <atomic>
+#include <chrono>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -59,6 +61,7 @@ struct ChannelPointReward;
 class MessageThread;
 struct CheerEmoteSet;
 struct HelixStream;
+struct HelixPinnedChatMessage;
 struct HelixCheermoteSet;
 struct HelixGlobalBadges;
 using HelixChannelBadges = HelixGlobalBadges;
@@ -171,6 +174,8 @@ public:
     TwitchChannel &operator=(const TwitchChannel &) = delete;
     TwitchChannel &operator=(TwitchChannel &&) = delete;
 
+    std::weak_ptr<TwitchChannel> weakFromThis();
+
     void initialize();
 
     // Channel methods
@@ -193,6 +198,19 @@ public:
     /// If the ID is empty, all messages will be deleted, effectively clearing
     /// the chat.
     void deleteMessagesAs(const QString &messageID, TwitchAccount *moderator);
+
+    void pinMessageAs(const QString &messageID,
+                      std::optional<std::chrono::seconds> duration,
+                      const TwitchAccount &moderator,
+                      const QString &textHint = {});
+
+    void updatePinnedMessageAs(const QString &messageID,
+                               std::optional<std::chrono::seconds> duration,
+                               const TwitchAccount &moderator,
+                               const QString &textHint = {});
+
+    void unpinMessageAs(const QString &messageID,
+                        const TwitchAccount &moderator);
 
     // Data
     const QString &subscriptionUrl();
@@ -385,6 +403,49 @@ public:
 
     bool isLoadingRecentMessages() const;
 
+    // Pinned message
+    /**
+     * Fetches the currently pinned message for this channel via the Helix API.
+     * Only has effect when the local user has moderator privileges.
+     */
+    void refreshPinnedMessage();
+
+    /**
+     * Clears the pinned message for this channel immediately (e.g. on unpin
+     * PubSub event).
+     */
+    void clearPinnedMessage();
+
+    /// Returns the currently pinned message, or null if none is pinned.
+    const HelixPinnedChatMessage *getPinnedMessage() const;
+
+    /**
+     * Unpin the currently pinned message. Only valid for moderators.
+     */
+    void unpinCurrentMessage();
+
+    /// Fires when the pinned message changes (set, cleared, or updated).
+    pajlada::Signals::NoArgSignal pinnedMessageChanged;
+
+    // Prediction seen in chat (Chatterino9)
+    // Moderators can't read predictions through the Twitch API, so the
+    // outcomes are collected from the prediction badges chatters wear.
+    struct SeenPredictionOutcome {
+        /// Badge version, e.g. "blue-1" or "pink-2"
+        QString badge;
+        /// Outcome title from badge-info
+        QString title;
+        /// Unique chatters seen with this badge
+        int chatters = 0;
+    };
+
+    /// Outcomes of the prediction seen in chat in the last few minutes,
+    /// ordered by badge. Empty when no prediction badge was seen recently.
+    std::vector<SeenPredictionOutcome> seenPrediction() const;
+
+    /// Fires when a chatter with a prediction badge is seen.
+    pajlada::Signals::NoArgSignal seenPredictionChanged;
+
 private:
     struct NameOptions {
         // displayName is the non-CJK-display name for this user
@@ -413,6 +474,11 @@ private:
     void loadRecentMessages();
     void loadRecentMessagesReconnect();
     void cleanUpReplyThreads();
+    void trackPredictionBadge(const Message &message);
+    void pinOrUpdateMessage(bool update, const QString &messageID,
+                            std::optional<std::chrono::seconds> duration,
+                            const TwitchAccount &moderator,
+                            const QString &textHint);
     void showLoginMessage();
 
     /// roomIdChanged is called whenever this channel's ID has been changed
@@ -582,6 +648,18 @@ private:
     eventsub::SubscriptionHandle eventSubSuspiciousUserUpdateHandle;
     eventsub::SubscriptionHandle eventSubChannelChatUserMessageHoldHandle;
     eventsub::SubscriptionHandle eventSubChannelChatUserMessageUpdateHandle;
+
+    /// May be null if no message is currently pinned.
+    std::unique_ptr<const HelixPinnedChatMessage> pinnedMessage_;
+    /// Incremented before each getPinnedChatMessage request so that stale
+    /// responses from earlier requests are discarded.
+    uint64_t pinnedMessageRequestId_ = 0;
+
+    /// login -> prediction badge version
+    std::unordered_map<QString, QString> predictionVoters_;
+    /// prediction badge version -> outcome title
+    std::unordered_map<QString, QString> predictionTitles_;
+    QDateTime predictionLastSeen_;
 
     friend class TwitchIrcServer;
     friend class MessageBuilder;

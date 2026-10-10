@@ -37,6 +37,7 @@ class TwitchChannel;
 class MessageThread;
 class IgnorePhrase;
 struct HelixVip;
+struct HelixPinnedChatMessage;
 using HelixModerator = HelixVip;
 struct ChannelPointReward;
 struct TwitchEmoteOccurrence;
@@ -261,6 +262,9 @@ public:
                                             TwitchChannel *channel);
 
     static MessagePtrMut makeMissingScopesMessage(const QString &missingScopes);
+
+    static MessagePtrMut makeCurrentPinnedMessage(
+        const TwitchChannel &channel, const HelixPinnedChatMessage &pin);
 
     /// "Chat has been cleared by a moderator." or "{actor} cleared the chat."
     /// @param actor The user who cleared the chat (empty if unknown)

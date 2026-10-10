@@ -2913,12 +2913,10 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
     if (!layout->getMessage()->id.isEmpty() &&
         this->underlyingChannel_->hasModRights())
     {
+        // Chatterino9: Delete, Pin and Unpin sit directly in the menu
         menu->addSeparator();
-        auto *moderateAction = menu->addAction("Mo&derate");
-        auto *moderateMenu = new QMenu(menu);
-        moderateAction->setMenu(moderateMenu);
-        moderateMenu->addAction(
-            "&Delete message", [this, id = layout->getMessage()->id] {
+        menu->addAction(
+            "&Delete message", this, [this, id = layout->getMessage()->id] {
                 auto *twitchChannel = dynamic_cast<TwitchChannel *>(
                     this->underlyingChannel_.get());
                 if (twitchChannel)
@@ -2932,6 +2930,47 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
                     kc->deleteMessage(id);
                 }
             });
+
+        if (dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get()))
+        {
+            std::weak_ptr<Channel> weakChan = this->underlyingChannel_;
+            auto *pinAction = menu->addAction("&Pin");
+            auto *pinMenu = new QMenu(menu);
+            pinAction->setMenu(pinMenu);
+            auto pinFor = [&](std::optional<std::chrono::seconds> dur) {
+                return [weakChan, id = layout->getMessage()->id, dur,
+                        text = layout->getMessage()->messageText] {
+                    auto chan = std::dynamic_pointer_cast<TwitchChannel>(
+                        weakChan.lock());
+                    if (chan)
+                    {
+                        chan->pinMessageAs(
+                            id, dur,
+                            *getApp()->getAccounts()->twitch.getCurrent(),
+                            text);
+                    }
+                };
+            };
+            pinMenu->addAction("&Until stream ends", this,
+                               pinFor(std::nullopt));
+            pinMenu->addAction("&1 minute", this,
+                               pinFor(std::chrono::minutes(1)));
+            pinMenu->addAction("10 minutes", this,
+                               pinFor(std::chrono::minutes(10)));
+            pinMenu->addAction("&30 minutes", this,
+                               pinFor(std::chrono::minutes(30)));
+
+            menu->addAction(
+                "&Unpin", this, [weakChan, id = layout->getMessage()->id] {
+                    auto chan = std::dynamic_pointer_cast<TwitchChannel>(
+                        weakChan.lock());
+                    if (chan)
+                    {
+                        chan->unpinMessageAs(
+                            id, *getApp()->getAccounts()->twitch.getCurrent());
+                    }
+                });
+        }
     }
 
     bool isSearch = this->context_ == Context::Search;

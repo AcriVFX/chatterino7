@@ -37,6 +37,7 @@ public:
 
     void updateChannelText();
     void updateIcons();
+    void updatePinButton();
     // Invoked when SplitHeader should update anything refering to a TwitchChannel's mode
     // has changed (e.g. sub mode toggled)
     void updateRoomModes();
@@ -94,6 +95,7 @@ private:
 
     SvgButton *moderationButton_{};
     SvgButton *chattersButton_{};
+    SvgButton *pinButton_{};
     DrawnButton *addButton_{};
 
     // states
