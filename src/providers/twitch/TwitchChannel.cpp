@@ -49,6 +49,7 @@
 #include "singletons/WindowManager.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
+#include "util/ModActivity.hpp"
 #include "util/PostToThread.hpp"
 #include "util/QStringHash.hpp"
 #include "util/VectorMessageSink.hpp"
@@ -608,6 +609,7 @@ void TwitchChannel::updateStreamStatus(
             status->uptime = QString::number(diff / 3600) + "h " +
                              QString::number(diff % 3600 / 60) + "m";
             status->uptimeSeconds = diff;
+            modactivity::streamSeen(this->getName(), stream.id, since);
 
             status->rerun = false;
             status->streamType = stream.type;
@@ -631,6 +633,7 @@ void TwitchChannel::updateStreamStatus(
     {
         if (this->setLive(false))
         {
+            modactivity::streamEnded(this->getName());
             this->onLiveStatusChanged(false, isInitialUpdate);
             this->streamStatusChanged.invoke();
         }
