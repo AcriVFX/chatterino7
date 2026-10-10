@@ -207,28 +207,41 @@ struct RepeatHeat {
     QColor text;
 };
 
-/// repeat counter heat: yellow at the first repeats, dark red for heavy spam
+/// repeat counter heat: every repeat a little redder, from yellow at 2
+/// through very dark red at 20 to almost black at 25 and more
 RepeatHeat repeatHeat(int count)
 {
-    const QColor dark(0x11, 0x11, 0x11);
-    const QColor white(Qt::white);
-    if (count >= 15)
+    struct Stop {
+        int count;
+        QColor color;
+    };
+    static const std::array<Stop, 6> stops{{
+        {2, QColor(0xe8, 0xb6, 0x2a)},
+        {5, QColor(0xe8, 0x79, 0x2a)},
+        {9, QColor(0xd6, 0x3a, 0x2f)},
+        {14, QColor(0xa5, 0x1c, 0x1c)},
+        {20, QColor(0x55, 0x06, 0x06)},
+        {25, QColor(0x2b, 0x1d, 0x1d)},
+    }};
+    const int n = std::clamp(count, stops.front().count, stops.back().count);
+    size_t i = 0;
+    while (i + 2 < stops.size() && n > stops[i + 1].count)
     {
-        return {QColor(0x82, 0x10, 0x0f), white};
+        i++;
     }
-    if (count >= 10)
-    {
-        return {QColor(0xa5, 0x1c, 0x1c), white};
-    }
-    if (count >= 6)
-    {
-        return {QColor(0xd6, 0x3a, 0x2f), white};
-    }
-    if (count >= 4)
-    {
-        return {QColor(0xe8, 0x79, 0x2a), dark};
-    }
-    return {QColor(0xe8, 0xb6, 0x2a), dark};
+    const auto &from = stops[i];
+    const auto &to = stops[i + 1];
+    const double t =
+        static_cast<double>(n - from.count) / (to.count - from.count);
+    auto mix = [t](int a, int b) {
+        return static_cast<int>(std::lround(a + ((b - a) * t)));
+    };
+    return {
+        QColor(mix(from.color.red(), to.color.red()),
+               mix(from.color.green(), to.color.green()),
+               mix(from.color.blue(), to.color.blue())),
+        n >= 7 ? QColor(Qt::white) : QColor(0x11, 0x11, 0x11),
+    };
 }
 
 /// Solid tag background: the category color, lifted a quarter towards white
