@@ -2069,13 +2069,15 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
 
     // repeated messages and variant spam from one user (see countRepeats).
     // Faint highlights (spam, streamer names) are replaced by the repeat color.
+    // Users on the "Ignore highlights" list (bots like Fossabot) never get it.
     if ((!builder->flags.has(MessageFlag::Highlighted) ||
          (builder->highlightColor != nullptr &&
           builder->highlightColor->alpha() < 0x40)) &&
         twitchChannel != nullptr && !args.isReceivedWhisper &&
         !args.isSentWhisper && builder->loginName != channel->getName() &&
         builder->loginName !=
-            getApp()->getAccounts()->twitch.getCurrent()->getUserName())
+            getApp()->getAccounts()->twitch.getCurrent()->getUserName() &&
+        !getSettings()->isBlacklistedUser(builder->loginName))
     {
         qint64 span = 0;
         builder->repeatCount = countRepeats(channel, args.pendingMessages,
