@@ -201,12 +201,13 @@ public:
 
     void pinMessageAs(const QString &messageID,
                       std::optional<std::chrono::seconds> duration,
-                      const TwitchAccount &moderator, QString textHint = {});
+                      const TwitchAccount &moderator,
+                      const QString &textHint = {});
 
     void updatePinnedMessageAs(const QString &messageID,
                                std::optional<std::chrono::seconds> duration,
                                const TwitchAccount &moderator,
-                               QString textHint = {});
+                               const QString &textHint = {});
 
     void unpinMessageAs(const QString &messageID,
                         const TwitchAccount &moderator);
@@ -476,7 +477,8 @@ private:
     void trackPredictionBadge(const Message &message);
     void pinOrUpdateMessage(bool update, const QString &messageID,
                             std::optional<std::chrono::seconds> duration,
-                            const TwitchAccount &moderator, QString textHint);
+                            const TwitchAccount &moderator,
+                            const QString &textHint);
     void showLoginMessage();
 
     /// roomIdChanged is called whenever this channel's ID has been changed

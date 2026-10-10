@@ -2208,24 +2208,22 @@ void TwitchChannel::deleteMessagesAs(const QString &messageID,
 void TwitchChannel::pinMessageAs(const QString &messageID,
                                  std::optional<std::chrono::seconds> duration,
                                  const TwitchAccount &moderator,
-                                 QString textHint)
+                                 const QString &textHint)
 {
-    this->pinOrUpdateMessage(false, messageID, duration, moderator,
-                             std::move(textHint));
+    this->pinOrUpdateMessage(false, messageID, duration, moderator, textHint);
 }
 
 void TwitchChannel::updatePinnedMessageAs(
     const QString &messageID, std::optional<std::chrono::seconds> duration,
-    const TwitchAccount &moderator, QString textHint)
+    const TwitchAccount &moderator, const QString &textHint)
 {
-    this->pinOrUpdateMessage(true, messageID, duration, moderator,
-                             std::move(textHint));
+    this->pinOrUpdateMessage(true, messageID, duration, moderator, textHint);
 }
 
 void TwitchChannel::pinOrUpdateMessage(
     bool update, const QString &messageID,
     std::optional<std::chrono::seconds> duration,
-    const TwitchAccount &moderator, QString textHint)
+    const TwitchAccount &moderator, const QString &textHint)
 {
     (void)textHint;
     auto onSuccess = [weak = this->weakFromThis()]() {
@@ -2727,6 +2725,7 @@ std::vector<TwitchChannel::SeenPredictionOutcome>
     TwitchChannel::seenPrediction() const
 {
     std::vector<SeenPredictionOutcome> outcomes;
+    outcomes.reserve(this->predictionTitles_.size());
     if (!this->predictionLastSeen_.isValid() ||
         this->predictionLastSeen_.secsTo(QDateTime::currentDateTimeUtc()) >
             std::chrono::seconds(SEEN_PREDICTION_TIMEOUT).count())
@@ -2751,17 +2750,16 @@ std::vector<TwitchChannel::SeenPredictionOutcome>
     }
 
     // blue before pink, then by number: blue-1, blue-2, ..., pink-1
-    std::sort(outcomes.begin(), outcomes.end(),
-              [](const auto &a, const auto &b) {
-                  auto colorA = a.badge.section('-', 0, 0);
-                  auto colorB = b.badge.section('-', 0, 0);
-                  if (colorA != colorB)
-                  {
-                      return colorA < colorB;
-                  }
-                  return a.badge.section('-', 1).toInt() <
-                         b.badge.section('-', 1).toInt();
-              });
+    std::ranges::sort(outcomes, [](const auto &a, const auto &b) {
+        auto colorA = a.badge.section('-', 0, 0);
+        auto colorB = b.badge.section('-', 0, 0);
+        if (colorA != colorB)
+        {
+            return colorA < colorB;
+        }
+        return a.badge.section('-', 1).toInt() <
+               b.badge.section('-', 1).toInt();
+    });
     return outcomes;
 }
 

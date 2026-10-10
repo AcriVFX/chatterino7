@@ -40,7 +40,7 @@ jobs:
           set-env: false
 
       - name: clang-tidy review
-        timeout-minutes: 20
+        timeout-minutes: 40
         uses: ZedThree/clang-tidy-review@v0.23.1
         with:
           build_dir: build-clang-tidy

@@ -75,7 +75,7 @@ void PredictionStripWidget::setChannel(TwitchChannel *channel)
 
 void PredictionStripWidget::refresh()
 {
-    if (!this->channel_ || this->channel_->seenPrediction().empty())
+    if (this->channel_ == nullptr || this->channel_->seenPrediction().empty())
     {
         this->expireTimer_->stop();
         this->hide();
@@ -178,7 +178,7 @@ void PredictionStripWidget::paintEvent(QPaintEvent * /*event*/)
                      Qt::AlignRight | Qt::AlignVCenter, count);
 
     // bar: one segment per outcome, as wide as its share of chatters
-    const QRect bar(pad, top + lineH + int(5 * s), this->width() - 2 * pad,
+    const QRect bar(pad, top + lineH + int(5 * s), this->width() - (2 * pad),
                     int(18 * s));
     QPainterPath clip;
     clip.addRoundedRect(bar, 3 * s, 3 * s);
@@ -207,7 +207,8 @@ void PredictionStripWidget::paintEvent(QPaintEvent * /*event*/)
         // two outcomes: second label sits on the right like on Twitch
         auto align =
             (outcomes.size() == 2 && i == 1) ? Qt::AlignRight : Qt::AlignLeft;
-        painter.drawText(inner, align | Qt::AlignVCenter, text);
+        painter.drawText(inner, static_cast<int>(align | Qt::AlignVCenter),
+                         text);
         segX += w;
     }
     painter.setClipping(false);
@@ -215,7 +216,7 @@ void PredictionStripWidget::paintEvent(QPaintEvent * /*event*/)
 
 void PredictionStripWidget::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton && this->channel_ &&
+    if (event->button() == Qt::LeftButton && this->channel_ != nullptr &&
         this->manageRect_.contains(event->pos()))
     {
         QDesktopServices::openUrl(
