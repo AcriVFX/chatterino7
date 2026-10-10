@@ -1039,8 +1039,8 @@ void ModActivityDialog::reload()
     for (const auto &action : this->actions_)
     {
         this->allTimeCount_[action.moderator] += 1;
-        auto &last = this->lastActive_[action.moderator];
-        last = std::max(last, action.msecs);
+        // actions are oldest first, so the last one wins
+        this->lastActive_.insert(action.moderator, action.msecs);
     }
     QStringList names = this->allTimeCount_.keys();
     std::ranges::sort(names, [this](const QString &a, const QString &b) {
