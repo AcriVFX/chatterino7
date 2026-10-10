@@ -1836,10 +1836,12 @@ void ModActivityDialog::updateDetail()
                 longest <= 0 ? QString("none") : plural(longest, "day"));
     }
 
-    auto *busiest = std::ranges::max_element(hours);
-    if (*busiest > 0)
+    // an index, not an iterator: std::array iterators are pointers only on
+    // some standard libraries
+    const auto hour = static_cast<int>(
+        std::distance(hours.begin(), std::ranges::max_element(hours)));
+    if (hours.at(static_cast<size_t>(hour)) > 0)
     {
-        auto hour = static_cast<int>(std::distance(hours.begin(), busiest));
         addFact("Busiest hour", QString("%1:00 to %2:00")
                                     .arg(hour, 2, 10, QChar('0'))
                                     .arg((hour + 1) % 24, 2, 10, QChar('0')));
