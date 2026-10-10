@@ -65,7 +65,7 @@ inline constexpr int STREAMER_VARIANT_PREVIOUS_NEEDED = 2;
 /// variants of it within REQUEST_WINDOW_SECONDS. The request words themselves
 /// are ignored when comparing (see requestTokens).
 inline constexpr int REQUEST_PREVIOUS_NEEDED = 2;
-inline constexpr qint64 REQUEST_WINDOW_SECONDS = 3 * 60;
+inline constexpr qint64 REQUEST_WINDOW_SECONDS = 180;
 
 /// Does the message start with a request to the streamer ("Sag ...",
 /// "Frag mal ...", "papa spiel ...", "bitte mach ...")?

@@ -789,10 +789,11 @@ TEST_F(TestIrcMessageHandlerRepeats, RewordedRequests)
     auto channel = std::make_shared<TwitchChannel>(u"pajlada"_s);
     auto parse = [&](const std::vector<std::pair<qint64, QString>> &texts,
                      VectorMessageSink &sink) {
-        for (int i = 0; i < static_cast<int>(texts.size()); i++)
+        int i = 0;
+        for (const auto &[seconds, text] : texts)
         {
             auto *ircMessage = Communi::IrcMessage::fromData(
-                requesterMessage(i, texts[i].first, texts[i].second), nullptr);
+                requesterMessage(i++, seconds, text), nullptr);
             ASSERT_NE(ircMessage, nullptr);
             IrcMessageHandler::parseMessageInto(ircMessage, sink,
                                                 channel.get());
