@@ -203,6 +203,55 @@ QString repeatCounterOf(const Message &message)
            span + QStringLiteral(" \u25B8");
 }
 
+struct RepeatHeat {
+    QColor background;
+    QColor text;
+};
+
+/// repeat counter heat: every repeat a little redder, from yellow at 2
+/// through very dark red at 20 to almost black at 25 and more
+RepeatHeat repeatHeat(int count)
+{
+    struct Stop {
+        int count{};
+        QColor color;
+    };
+    static const std::array<Stop, 6> stops{{
+        {.count = 2, .color = QColor(0xe8, 0xb6, 0x2a)},
+        {.count = 5, .color = QColor(0xe8, 0x79, 0x2a)},
+        {.count = 9, .color = QColor(0xd6, 0x3a, 0x2f)},
+        {.count = 14, .color = QColor(0xa5, 0x1c, 0x1c)},
+        {.count = 20, .color = QColor(0x55, 0x06, 0x06)},
+        {.count = 25, .color = QColor(0x2b, 0x1d, 0x1d)},
+    }};
+    const int n = std::clamp(count, stops.front().count, stops.back().count);
+    // the stops on both sides of the count
+    const Stop *from = &stops.front();
+    const Stop *to = &stops.back();
+    for (const auto &stop : stops)
+    {
+        if (stop.count >= n && &stop != &stops.front())
+        {
+            to = &stop;
+            break;
+        }
+        from = &stop;
+    }
+    const double t =
+        to->count == from->count
+            ? 1.0
+            : static_cast<double>(n - from->count) / (to->count - from->count);
+    auto mix = [t](int a, int b) {
+        return static_cast<int>(std::lround(a + ((b - a) * t)));
+    };
+    return {
+        .background = QColor(mix(from->color.red(), to->color.red()),
+                             mix(from->color.green(), to->color.green()),
+                             mix(from->color.blue(), to->color.blue())),
+        .text = n >= 7 ? QColor(Qt::white) : QColor(0x11, 0x11, 0x11),
+    };
+}
+
 /// Solid tag background: the category color, lifted a quarter towards white
 QColor pillColor(const QColor &highlight)
 {
@@ -370,10 +419,12 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     if (tagged && this->message_->repeatCount > 0)
     {
         // one row per spammer (see ChannelView), the counter opens the usercard
-        // round teal pill from the approved repeat mockup (C+D)
+        // round pill, its color heats up with the count
         this->laneRepeat_ = std::make_unique<LanePillElement>(
-            repeatCounterOf(*this->message_), QColor(Qt::white),
-            QColor(0x28, 0xa0, 0x8c), nullptr, false, 8);
+            repeatCounterOf(*this->message_),
+            repeatHeat(this->message_->repeatCount).text,
+            repeatHeat(this->message_->repeatCount).background, nullptr, false,
+            8);
         this->laneRepeat_->setLink({Link::UserInfo, this->message_->loginName});
     }
     if (lane && !ctx.flags.has(MessageElementFlag::TimeoutLines) &&
