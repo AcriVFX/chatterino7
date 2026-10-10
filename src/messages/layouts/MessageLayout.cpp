@@ -212,7 +212,7 @@ struct RepeatHeat {
 RepeatHeat repeatHeat(int count)
 {
     struct Stop {
-        int count;
+        int count{};
         QColor color;
     };
     static const std::array<Stop, 6> stops{{
@@ -224,22 +224,21 @@ RepeatHeat repeatHeat(int count)
         {.count = 25, .color = QColor(0x2b, 0x1d, 0x1d)},
     }};
     const int n = std::clamp(count, stops.front().count, stops.back().count);
-    size_t i = 0;
-    while (i + 2 < stops.size() && n > stops[i + 1].count)
-    {
-        i++;
-    }
-    const auto &from = stops[i];
-    const auto &to = stops[i + 1];
+    // the first stop at or above the count, and the one before it
+    const auto to =
+        std::find_if(stops.begin() + 1, stops.end() - 1, [n](const Stop &stop) {
+            return n <= stop.count;
+        });
+    const auto &from = *std::prev(to);
     const double t =
-        static_cast<double>(n - from.count) / (to.count - from.count);
+        static_cast<double>(n - from.count) / (to->count - from.count);
     auto mix = [t](int a, int b) {
         return static_cast<int>(std::lround(a + ((b - a) * t)));
     };
     return {
-        .background = QColor(mix(from.color.red(), to.color.red()),
-                             mix(from.color.green(), to.color.green()),
-                             mix(from.color.blue(), to.color.blue())),
+        .background = QColor(mix(from.color.red(), to->color.red()),
+                             mix(from.color.green(), to->color.green()),
+                             mix(from.color.blue(), to->color.blue())),
         .text = n >= 7 ? QColor(Qt::white) : QColor(0x11, 0x11, 0x11),
     };
 }
