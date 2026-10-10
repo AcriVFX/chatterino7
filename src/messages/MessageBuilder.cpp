@@ -2048,8 +2048,8 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
 
     // spam ("67", emote walls) only keeps the SPAM color when the user sent
-    // another spammy message shortly before. Walls of text and a lone "L"
-    // ("L", "L game") keep it right away.
+    // another spammy message shortly before. Spam of SPAM_WALL_LENGTH or more
+    // characters and a lone "L" ("L", "L game") keep it right away.
     if (builder->highlightTag == u"SPAM")
     {
         builder->spammy = true;

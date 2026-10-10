@@ -59,7 +59,7 @@ inline constexpr qint64 VARIANT_WINDOW_SECONDS = 120;
 inline constexpr int STREAMER_VARIANT_PREVIOUS_NEEDED = 2;
 
 /// A message colored by a SPAM highlight rule that is shorter than
-/// SPAM_WALL_LENGTH ("L", "67", emote walls, long emote names) only keeps the
+/// SPAM_WALL_LENGTH ("67", emote walls, long emote names) only keeps the
 /// color when the same user sent another spammy message within
 /// SPAM_SECOND_WINDOW_SECONDS. A single one is mostly harmless (2% get a
 /// timeout in papaplatte's chat). A lone "L" ("L", "L game") keeps the color
