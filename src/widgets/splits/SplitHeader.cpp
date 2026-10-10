@@ -1103,8 +1103,16 @@ void SplitHeader::updateChannelText()
                 this->laneAccent_ = QColor(0x4f, 0xa8, 0xe0);
             }
         }
-        title += names.isEmpty() ? QStringLiteral(" - filtered")
-                                 : " - " + names.join(", ");
+        if (this->laneAccent_.isValid())
+        {
+            // lanes only need their name, the stream info is in the main split
+            title = names.join(", ");
+        }
+        else
+        {
+            title += names.isEmpty() ? QStringLiteral(" - filtered")
+                                     : " - " + names.join(", ");
+        }
     }
 
     this->titleLabel_->setText(title.isEmpty() ? "<empty>" : title);
