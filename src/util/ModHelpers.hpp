@@ -52,6 +52,21 @@ bool isSameRepeatKey(const QString &a, const QString &b);
 inline constexpr int VARIANT_PREVIOUS_NEEDED = 6;
 inline constexpr qint64 VARIANT_WINDOW_SECONDS = 120;
 
+/// Asking the streamer the same thing again and again ("@Papaplatte mach bitte
+/// musik an"): a variant that pings the channel owner already counts when the
+/// same user sent STREAMER_VARIANT_PREVIOUS_NEEDED variants of it within
+/// VARIANT_WINDOW_SECONDS.
+inline constexpr int STREAMER_VARIANT_PREVIOUS_NEEDED = 2;
+
+/// A message colored by a SPAM highlight rule that is shorter than
+/// SPAM_WALL_LENGTH ("67", emote walls, long emote names) only keeps the
+/// color when the same user sent another spammy message within
+/// SPAM_SECOND_WINDOW_SECONDS. A single one is mostly harmless (2% get a
+/// timeout in papaplatte's chat). A lone "L" ("L", "L game") keeps the color
+/// right away.
+inline constexpr int SPAM_WALL_LENGTH = 200;
+inline constexpr qint64 SPAM_SECOND_WINDOW_SECONDS = 120;
+
 /// Words of a message for variant detection: letters/digits only, lowercase,
 /// repeated characters collapsed ("TEMPELLLL" -> "tempel"), without mentions,
 /// words shorter than 3 characters and duplicates.
