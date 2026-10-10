@@ -369,7 +369,8 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
             QColor(0x28, 0xa0, 0x8c), nullptr, false, 8);
         this->laneRepeat_->setLink({Link::UserInfo, this->message_->loginName});
     }
-    if (lane && !this->message_->moderationChip.isEmpty())
+    if (lane && !ctx.flags.has(MessageElementFlag::TimeoutLines) &&
+        !this->message_->moderationChip.isEmpty())
     {
         ImagePtr icon;
         if (this->message_->moderationChip.startsWith(u"BAN"))

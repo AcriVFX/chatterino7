@@ -1577,6 +1577,10 @@ MessageElementFlags ChannelView::getFlags() const
         if (split->getLaneStyle())
         {
             flags.set(MessageElementFlag::HighlightLane);
+            if (this->getFilterIds().isEmpty())
+            {
+                flags.set(MessageElementFlag::TimeoutLines);
+            }
         }
         if (split->getCompactRows())
         {
