@@ -41,6 +41,7 @@
 #include <QWidgetAction>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <utility>
@@ -63,17 +64,61 @@ constexpr int SHARE_ROLE = Qt::UserRole + 1;
 constexpr int SORT_ROLE = Qt::UserRole;
 constexpr int NAME_ROLE = Qt::UserRole + 2;
 
-const QColor COLOR_WINDOW("#1b1b1c");
-const QColor COLOR_PANEL("#232324");
-const QColor COLOR_ROW("#2a2a2b");
-const QColor COLOR_LINE("#353537");
-const QColor COLOR_TEXT("#f2f2f2");
-const QColor COLOR_DIM("#9a9a9e");
-const QColor COLOR_FAINT("#66666b");
-const QColor COLOR_ACCENT("#4f8ff7");
-const QColor COLOR_BOT("#8a7cff");
-const QColor COLOR_UP("#4fbf72");
-const QColor COLOR_DOWN("#e0503c");
+const QColor &windowColor()
+{
+    static const QColor color(0x1b1b1c);
+    return color;
+}
+const QColor &panelColor()
+{
+    static const QColor color(0x232324);
+    return color;
+}
+const QColor &rowColor()
+{
+    static const QColor color(0x2a2a2b);
+    return color;
+}
+const QColor &lineColor()
+{
+    static const QColor color(0x353537);
+    return color;
+}
+const QColor &textColor()
+{
+    static const QColor color(0xf2f2f2);
+    return color;
+}
+const QColor &dimColor()
+{
+    static const QColor color(0x9a9a9e);
+    return color;
+}
+const QColor &faintColor()
+{
+    static const QColor color(0x66666b);
+    return color;
+}
+const QColor &accentColor()
+{
+    static const QColor color(0x4f8ff7);
+    return color;
+}
+const QColor &botColor()
+{
+    static const QColor color(0x8a7cff);
+    return color;
+}
+const QColor &upColor()
+{
+    static const QColor color(0x4fbf72);
+    return color;
+}
+const QColor &downColor()
+{
+    static const QColor color(0xe0503c);
+    return color;
+}
 
 struct GroupInfo {
     const char *label;
@@ -82,12 +127,16 @@ struct GroupInfo {
 };
 
 constexpr std::array<GroupInfo, ModActivityDialog::GroupCount> GROUPS{{
-    {"Timeouts", "#e0a03c", "Timeouts"},
-    {"Bans", "#e0503c", "Permanent bans"},
-    {"Unbans", "#4fbf72", "Unbans and removed timeouts"},
-    {"Deleted", "#8f9bb3", "Deleted messages"},
-    {"Warnings", "#d6c94a", "Warnings"},
-    {"AutoMod", "#4fb9c9", "AutoMod messages approved or denied"},
+    {.label = "Timeouts", .color = "#e0a03c", .tooltip = "Timeouts"},
+    {.label = "Bans", .color = "#e0503c", .tooltip = "Permanent bans"},
+    {.label = "Unbans",
+     .color = "#4fbf72",
+     .tooltip = "Unbans and removed timeouts"},
+    {.label = "Deleted", .color = "#8f9bb3", .tooltip = "Deleted messages"},
+    {.label = "Warnings", .color = "#d6c94a", .tooltip = "Warnings"},
+    {.label = "AutoMod",
+     .color = "#4fb9c9",
+     .tooltip = "AutoMod messages approved or denied"},
 }};
 
 constexpr std::array<const char *, 8> RANGE_NAMES{
@@ -203,6 +252,11 @@ class SortItem : public QTableWidgetItem
 {
 public:
     using QTableWidgetItem::QTableWidgetItem;
+    SortItem(const SortItem &) = delete;
+    SortItem(SortItem &&) = delete;
+    SortItem &operator=(const SortItem &) = delete;
+    SortItem &operator=(SortItem &&) = delete;
+    ~SortItem() override = default;
 
     bool operator<(const QTableWidgetItem &other) const override
     {
@@ -315,7 +369,7 @@ protected:
             max = std::max(max, this->totalOf(bar));
         }
 
-        painter.setPen(COLOR_LINE);
+        painter.setPen(lineColor());
         painter.drawLine(0, chartHeight, this->width(), chartHeight);
 
         auto font = this->font();
@@ -340,7 +394,7 @@ protected:
                 y -= h;
                 painter.fillRect(QRect(x, y, barWidth, h), groupColor(g));
             }
-            painter.setPen(COLOR_DIM);
+            painter.setPen(dimColor());
             painter.drawText(
                 QRect(i * (slot + gap), chartHeight + 2, slot, labelHeight),
                 Qt::AlignHCenter | Qt::AlignTop, bar.label);
@@ -408,7 +462,7 @@ ModActivityDialog::ModActivityDialog(QString channel, QWidget *parent)
     this->themeChangedEvent();
 
     this->refreshTimer_->setSingleShot(true);
-    this->refreshTimer_->setInterval(1500);
+    this->refreshTimer_->setInterval(std::chrono::milliseconds(1500));
     QObject::connect(this->refreshTimer_, &QTimer::timeout, this, [this] {
         this->reload();
     });
@@ -421,7 +475,7 @@ ModActivityDialog::ModActivityDialog(QString channel, QWidget *parent)
 
     // keeps "Last active" and the live stream current
     auto *tick = new QTimer(this);
-    tick->setInterval(60 * 1000);
+    tick->setInterval(std::chrono::minutes(1));
     QObject::connect(tick, &QTimer::timeout, this, [this] {
         this->reload();
     });
@@ -435,17 +489,17 @@ void ModActivityDialog::themeChangedEvent()
     BaseWindow::themeChangedEvent();
 
     QPalette palette;
-    palette.setColor(QPalette::Window, COLOR_WINDOW);
-    palette.setColor(QPalette::WindowText, COLOR_TEXT);
-    palette.setColor(QPalette::Base, COLOR_WINDOW);
-    palette.setColor(QPalette::AlternateBase, COLOR_PANEL);
-    palette.setColor(QPalette::Text, COLOR_TEXT);
-    palette.setColor(QPalette::Button, COLOR_PANEL);
-    palette.setColor(QPalette::ButtonText, COLOR_TEXT);
-    palette.setColor(QPalette::Highlight, COLOR_ROW);
-    palette.setColor(QPalette::HighlightedText, COLOR_TEXT);
-    palette.setColor(QPalette::ToolTipBase, COLOR_PANEL);
-    palette.setColor(QPalette::ToolTipText, COLOR_TEXT);
+    palette.setColor(QPalette::Window, windowColor());
+    palette.setColor(QPalette::WindowText, textColor());
+    palette.setColor(QPalette::Base, windowColor());
+    palette.setColor(QPalette::AlternateBase, panelColor());
+    palette.setColor(QPalette::Text, textColor());
+    palette.setColor(QPalette::Button, panelColor());
+    palette.setColor(QPalette::ButtonText, textColor());
+    palette.setColor(QPalette::Highlight, rowColor());
+    palette.setColor(QPalette::HighlightedText, textColor());
+    palette.setColor(QPalette::ToolTipBase, panelColor());
+    palette.setColor(QPalette::ToolTipText, textColor());
     this->setPalette(palette);
 }
 
@@ -698,7 +752,7 @@ void ModActivityDialog::initUi()
     auto *modsHeader = new QLabel("MODERATORS");
     modsHeader->setObjectName("section");
     root->addWidget(modsHeader);
-    this->ui_.mods = makeTable(COLOR_ACCENT);
+    this->ui_.mods = makeTable(accentColor());
     root->addWidget(this->ui_.mods, 3);
 
     // detail of the selected moderator
@@ -762,7 +816,7 @@ void ModActivityDialog::initUi()
     this->ui_.botsHeader = new QLabel("BOTS");
     this->ui_.botsHeader->setObjectName("section");
     root->addWidget(this->ui_.botsHeader);
-    this->ui_.bots = makeTable(COLOR_BOT);
+    this->ui_.bots = makeTable(botColor());
     this->ui_.bots->horizontalHeaderItem(ColName)->setText("Bot");
     root->addWidget(this->ui_.bots, 1);
 
@@ -864,7 +918,7 @@ QWidget *ModActivityDialog::createFilterPopup()
         links->addWidget(link);
     };
     addLink("All", [this] {
-        for (const auto &name : this->allNames_)
+        for (const auto &name : std::as_const(this->allNames_))
         {
             this->marked_.insert(name);
         }
@@ -882,7 +936,7 @@ QWidget *ModActivityDialog::createFilterPopup()
     links->addStretch(1);
     addLink("Only human mods", [this] {
         this->marked_.clear();
-        for (const auto &name : this->allNames_)
+        for (const auto &name : std::as_const(this->allNames_))
         {
             if (!modactivity::isBot(name))
             {
@@ -912,11 +966,13 @@ void ModActivityDialog::loadView()
     this->rangeIndex_ = std::clamp(obj.value("range").toInt(3), 0,
                                    static_cast<int>(RANGE_NAMES.size()) - 1);
     this->excludeMode_ = obj.value("exclude").toBool(false);
-    for (const auto &v : obj.value("marked").toArray())
+    const auto markedArray = obj.value("marked").toArray();
+    for (const auto &v : markedArray)
     {
         this->marked_.insert(v.toString());
     }
-    for (const auto &v : obj.value("known").toArray())
+    const auto knownArray = obj.value("known").toArray();
+    for (const auto &v : knownArray)
     {
         this->knownNames_.insert(v.toString());
     }
@@ -995,7 +1051,7 @@ void ModActivityDialog::reload()
     this->allNames_ = names;
 
     bool changed = false;
-    for (const auto &name : this->allNames_)
+    for (const auto &name : std::as_const(this->allNames_))
     {
         if (!this->knownNames_.contains(name))
         {
@@ -1034,14 +1090,14 @@ void ModActivityDialog::rebuildModList()
     for (auto *group : {mods, bots})
     {
         group->setFlags(Qt::ItemIsEnabled);
-        group->setForeground(0, COLOR_DIM);
+        group->setForeground(0, dimColor());
         auto font = group->font(0);
         font.setPixelSize(11);
         font.setBold(true);
         group->setFont(0, font);
     }
 
-    for (const auto &name : this->allNames_)
+    for (const auto &name : std::as_const(this->allNames_))
     {
         if (!search.isEmpty() && !name.contains(search))
         {
@@ -1056,13 +1112,13 @@ void ModActivityDialog::rebuildModList()
         item->setCheckState(
             0, this->marked_.contains(name) ? Qt::Checked : Qt::Unchecked);
         item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
-        item->setForeground(1, COLOR_DIM);
+        item->setForeground(1, dimColor());
         if (!this->isShown(name))
         {
             auto font = item->font(0);
             font.setStrikeOut(true);
             item->setFont(0, font);
-            item->setForeground(0, COLOR_FAINT);
+            item->setForeground(0, faintColor());
         }
     }
     mods->setHidden(mods->childCount() == 0);
@@ -1079,7 +1135,7 @@ void ModActivityDialog::rebuildModList()
 void ModActivityDialog::updateModsButton()
 {
     int shown = 0;
-    for (const auto &name : this->allNames_)
+    for (const auto &name : std::as_const(this->allNames_))
     {
         if (this->isShown(name))
         {
@@ -1248,7 +1304,7 @@ void ModActivityDialog::refresh()
 
     std::map<QString, Row> humans;
     std::map<QString, Row> bots;
-    for (const auto &name : this->allNames_)
+    for (const auto &name : std::as_const(this->allNames_))
     {
         if (!this->isShown(name))
         {
@@ -1358,7 +1414,7 @@ void ModActivityDialog::refresh()
     {
         auto pct = std::lround((humanTotal - humanPrev) * 100.0 / humanPrev);
         humanText += QString(" <span style=\"color:%1\">%2%3%</span>")
-                         .arg(pct >= 0 ? COLOR_UP.name() : COLOR_DOWN.name(),
+                         .arg(pct >= 0 ? upColor().name() : downColor().name(),
                               pct >= 0 ? QString("+") : QString())
                          .arg(pct);
     }
@@ -1436,9 +1492,10 @@ void ModActivityDialog::fillTable(QTableWidget *table,
     table->clearContents();
     table->setRowCount(static_cast<int>(rows.size()));
 
-    for (int r = 0; r < static_cast<int>(rows.size()); ++r)
+    for (size_t i = 0; i < rows.size(); ++i)
     {
-        const auto &row = rows[static_cast<size_t>(r)];
+        const auto &row = rows[i];
+        const auto r = static_cast<int>(i);
         const bool idle = row.total == 0;
 
         auto set = [&](int col, const QString &text, double sortKey,
@@ -1446,7 +1503,7 @@ void ModActivityDialog::fillTable(QTableWidget *table,
             auto *item = new SortItem(text);
             item->setData(SORT_ROLE, sortKey);
             item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            item->setForeground(idle ? COLOR_FAINT : color);
+            item->setForeground(idle ? faintColor() : color);
             table->setItem(r, col, item);
         };
 
@@ -1454,8 +1511,8 @@ void ModActivityDialog::fillTable(QTableWidget *table,
         name->setData(NAME_ROLE, row.name);
         name->setData(SHARE_ROLE,
                       idle ? 0.0 : static_cast<double>(row.total) / maxTotal);
-        auto nameColor = bot ? COLOR_BOT : COLOR_TEXT;
-        name->setForeground(idle ? COLOR_FAINT : nameColor);
+        auto nameColor = bot ? botColor() : textColor();
+        name->setForeground(idle ? faintColor() : nameColor);
         if (!idle)
         {
             auto font = name->font();
@@ -1468,59 +1525,59 @@ void ModActivityDialog::fillTable(QTableWidget *table,
         {
             auto count = row.counts.at(static_cast<size_t>(g));
             set(ColTimeouts + g, cLocale().toString(count), count,
-                count == 0 ? COLOR_FAINT : groupColor(g));
+                count == 0 ? faintColor() : groupColor(g));
         }
-        set(ColTotal, cLocale().toString(row.total), row.total, COLOR_TEXT);
+        set(ColTotal, cLocale().toString(row.total), row.total, textColor());
 
         if (row.prevTotal == 0 && row.total == 0)
         {
-            set(ColChange, "-", 0, COLOR_FAINT);
+            set(ColChange, "-", 0, faintColor());
         }
         else if (row.prevTotal == 0)
         {
-            set(ColChange, "new", 1e9, COLOR_UP);
+            set(ColChange, "new", 1e9, upColor());
         }
         else
         {
             auto pct = std::lround((row.total - row.prevTotal) * 100.0 /
                                    row.prevTotal);
             set(ColChange, QString("%1%2%").arg(pct >= 0 ? "+" : "").arg(pct),
-                static_cast<double>(pct), pct >= 0 ? COLOR_UP : COLOR_DOWN);
+                static_cast<double>(pct), pct >= 0 ? upColor() : downColor());
             if (idle)
             {
-                table->item(r, ColChange)->setForeground(COLOR_DOWN);
+                table->item(r, ColChange)->setForeground(downColor());
             }
         }
 
         if (streamCount == 0)
         {
-            set(ColStreams, "-", 0, COLOR_FAINT);
-            set(ColPerStream, "-", 0, COLOR_FAINT);
+            set(ColStreams, "-", 0, faintColor());
+            set(ColPerStream, "-", 0, faintColor());
         }
         else
         {
             set(ColStreams,
                 QString("%1 of %2").arg(row.streamsActive).arg(streamCount),
-                row.streamsActive, COLOR_TEXT);
+                row.streamsActive, textColor());
             if (row.streamsActive > 0)
             {
                 auto per = std::lround(static_cast<double>(row.total) /
                                        row.streamsActive);
                 set(ColPerStream, QString::number(per),
-                    static_cast<double>(per), COLOR_TEXT);
+                    static_cast<double>(per), textColor());
             }
             else
             {
-                set(ColPerStream, "0", 0, COLOR_FAINT);
+                set(ColPerStream, "0", 0, faintColor());
             }
         }
 
         auto ago = formatAgo(row.lastActive, now);
         set(ColLastActive, ago, static_cast<double>(row.lastActive),
-            ago == "now" ? COLOR_UP : COLOR_TEXT);
+            ago == "now" ? upColor() : textColor());
         if (idle)
         {
-            table->item(r, ColLastActive)->setForeground(COLOR_FAINT);
+            table->item(r, ColLastActive)->setForeground(faintColor());
         }
     }
 
@@ -1648,7 +1705,7 @@ void ModActivityDialog::updateDetail()
         }
         auto pos = std::ranges::upper_bound(bounds, it->msecs);
         auto index = std::distance(bounds.begin(), pos) - 1;
-        if (index >= 0 && index < static_cast<std::ptrdiff_t>(bars.size()))
+        if (index >= 0 && std::cmp_less(index, bars.size()))
         {
             bars[static_cast<size_t>(index)].counts.at(
                 static_cast<size_t>(groupOf(it->kind))) += 1;
@@ -1765,7 +1822,7 @@ void ModActivityDialog::updateDetail()
         auto firstDay = QDateTime::fromMSecsSinceEpoch(from).date();
         auto lastDay =
             QDateTime::fromMSecsSinceEpoch(std::min(to, now) - 1).date();
-        QList<QDate> days(activeDays.begin(), activeDays.end());
+        std::vector<QDate> days(activeDays.begin(), activeDays.end());
         std::ranges::sort(days);
         qint64 longest = 0;
         auto prev = firstDay.addDays(-1);

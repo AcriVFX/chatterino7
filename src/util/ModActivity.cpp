@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QHash>
 #include <QSet>
+#include <QStringView>
 #include <QTextStream>
 
 #include <algorithm>
@@ -25,15 +26,15 @@ namespace {
 /// A live stream gets its "last seen" time written at most this often
 constexpr qint64 STREAM_WRITE_MSECS = 5LL * 60 * 1000;
 
-constexpr std::array<std::pair<Kind, const char *>, 8> KIND_KEYS{{
-    {Kind::Timeout, "timeout"},
-    {Kind::Ban, "ban"},
-    {Kind::Unban, "unban"},
-    {Kind::Untimeout, "untimeout"},
-    {Kind::Delete, "delete"},
-    {Kind::Warn, "warn"},
-    {Kind::AutomodApprove, "automod_approve"},
-    {Kind::AutomodDeny, "automod_deny"},
+constexpr std::array<std::pair<Kind, QStringView>, 8> KIND_KEYS{{
+    {Kind::Timeout, u"timeout"},
+    {Kind::Ban, u"ban"},
+    {Kind::Unban, u"unban"},
+    {Kind::Untimeout, u"untimeout"},
+    {Kind::Delete, u"delete"},
+    {Kind::Warn, u"warn"},
+    {Kind::AutomodApprove, u"automod_approve"},
+    {Kind::AutomodDeny, u"automod_deny"},
 }};
 
 QString kindKey(Kind kind)
@@ -42,7 +43,7 @@ QString kindKey(Kind kind)
     {
         if (k == kind)
         {
-            return QString::fromLatin1(key);
+            return key.toString();
         }
     }
     return {};
@@ -52,7 +53,7 @@ bool kindFromKey(const QString &key, Kind &out)
 {
     for (const auto &[k, name] : KIND_KEYS)
     {
-        if (key == QLatin1String(name))
+        if (key == name)
         {
             out = k;
             return true;
@@ -309,7 +310,11 @@ void streamSeen(const QString &channel, const QString &streamId,
     auto &live = st.live[key];
     if (live.id != streamId)
     {
-        live = {streamId, startedAt.toMSecsSinceEpoch(), 0};
+        live = {
+            .id = streamId,
+            .start = startedAt.toMSecsSinceEpoch(),
+            .lastWritten = 0,
+        };
     }
     if (now - live.lastWritten < STREAM_WRITE_MSECS)
     {

@@ -13,6 +13,7 @@
 #include <QString>
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -41,7 +42,8 @@ public:
     ModActivityDialog(QString channel, QWidget *parent = nullptr);
 
     /// Columns of both tables
-    enum Column {
+    // NOLINTNEXTLINE(cppcoreguidelines-use-enum-class): used as column index
+    enum Column : std::uint8_t {
         ColName,
         ColTimeouts,
         ColBans,
@@ -59,7 +61,8 @@ public:
 
     /// Action types the user can show or hide (Unbans include removed
     /// timeouts, AutoMod includes approvals and denials)
-    enum Group {
+    // NOLINTNEXTLINE(cppcoreguidelines-use-enum-class): used as array index
+    enum Group : std::uint8_t {
         GroupTimeouts,
         GroupBans,
         GroupUnbans,
@@ -69,7 +72,7 @@ public:
         GroupCount,
     };
 
-    enum class Bucket { Days, Weeks, Months };
+    enum class Bucket : std::uint8_t { Days, Weeks, Months };
 
 protected:
     void themeChangedEvent() override;
