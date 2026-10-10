@@ -627,6 +627,8 @@ set(SOURCE_FILES
         util/LoadPixmap.hpp
         util/ModHelpers.cpp
         util/ModHelpers.hpp
+        util/ModActivity.cpp
+        util/ModActivity.hpp
         util/ModNameCache.cpp
         util/ModNameCache.hpp
         util/OnceFlag.cpp
@@ -759,6 +761,8 @@ set(SOURCE_FILES
         widgets/dialogs/LastRunCrashDialog.hpp
         widgets/dialogs/LoginDialog.cpp
         widgets/dialogs/LoginDialog.hpp
+        widgets/dialogs/ModActivityDialog.cpp
+        widgets/dialogs/ModActivityDialog.hpp
         widgets/dialogs/QualityPopup.cpp
         widgets/dialogs/QualityPopup.hpp
         widgets/dialogs/ReplyThreadPopup.cpp

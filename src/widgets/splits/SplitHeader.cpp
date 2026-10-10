@@ -29,6 +29,7 @@
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
+#include "widgets/dialogs/ModActivityDialog.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/CommonTexts.hpp"
 #include "widgets/Label.hpp"
@@ -547,6 +548,19 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                 OPEN_MOD_VIEW_IN_BROWSER,
                 h->getDisplaySequence(HotkeyCategory::Split, "openModView"),
                 this->split_, &Split::openModViewInBrowser);
+        }
+
+        // Chatterino9: per-mod activity for this channel
+        if (twitchChannel && twitchChannel->hasModRights())
+        {
+            menu->addAction("Mod activity", this->split_,
+                            [this, twitchChannel] {
+                                auto *dialog = new ModActivityDialog(
+                                    twitchChannel->getName(), this->split_);
+                                dialog->show();
+                                dialog->raise();
+                                dialog->activateWindow();
+                            });
         }
 
         if (twitchChannel)

@@ -22,6 +22,7 @@
 #include "singletons/StreamerMode.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/Helpers.hpp"
+#include "util/ModActivity.hpp"
 #include "util/PostToThread.hpp"
 
 #include <boost/json.hpp>
@@ -55,6 +56,52 @@ concept CanHandleModMessage =
              const std::remove_cvref_t<Action> &action) {
         handleModerateMessage(channel, time, event, action);
     };
+
+/// Chatterino9: counts the action for the Mod activity window. Shared chat
+/// actions come from other channels' mods, so they are not counted.
+template <typename Action>
+void recordModActivity(const channel_moderate::Event &event,
+                       std::chrono::system_clock::time_point timestamp,
+                       const QDateTime &time, const Action &action)
+{
+    using modactivity::Kind;
+    const auto channel = event.broadcasterUserLogin.qt();
+    const auto moderator = event.moderatorUserLogin.qt();
+
+    if constexpr (std::is_same_v<Action, channel_moderate::Timeout>)
+    {
+        auto seconds = std::chrono::round<std::chrono::seconds>(
+                           action.expiresAt - timestamp)
+                           .count();
+        modactivity::record(channel, time, Kind::Timeout, moderator,
+                            action.userLogin.qt(), static_cast<int>(seconds));
+    }
+    else if constexpr (std::is_same_v<Action, channel_moderate::Ban>)
+    {
+        modactivity::record(channel, time, Kind::Ban, moderator,
+                            action.userLogin.qt());
+    }
+    else if constexpr (std::is_same_v<Action, channel_moderate::Unban>)
+    {
+        modactivity::record(channel, time, Kind::Unban, moderator,
+                            action.userLogin.qt());
+    }
+    else if constexpr (std::is_same_v<Action, channel_moderate::Untimeout>)
+    {
+        modactivity::record(channel, time, Kind::Untimeout, moderator,
+                            action.userLogin.qt());
+    }
+    else if constexpr (std::is_same_v<Action, channel_moderate::Delete>)
+    {
+        modactivity::record(channel, time, Kind::Delete, moderator,
+                            action.userLogin.qt());
+    }
+    else if constexpr (std::is_same_v<Action, channel_moderate::Warn>)
+    {
+        modactivity::record(channel, time, Kind::Warn, moderator,
+                            action.userLogin.qt());
+    }
+}
 
 }  // namespace
 
@@ -181,6 +228,8 @@ void Connection::onChannelModerate(
     std::visit(
         [&](auto &&action) {
             using Action = std::remove_cvref_t<decltype(action)>;
+            recordModActivity(payload.event, metadata.messageTimestamp, now,
+                              action);
             static_assert(CanMakeModMessage<Action> ||
                               CanHandleModMessage<Action> ||
                               std::is_same_v<Action, std::string>,
@@ -273,7 +322,7 @@ void Connection::onAutomodMessageHold(
     });
 }
 void Connection::onAutomodMessageUpdate(
-    const lib::messages::Metadata & /*metadata*/,
+    const lib::messages::Metadata &metadata,
     const lib::payload::automod_message_update::v2::Payload &payload)
 {
     auto *channel = dynamic_cast<TwitchChannel *>(
@@ -287,6 +336,23 @@ void Connection::onAutomodMessageUpdate(
             << "Automod message hold for broadcaster we're not interested in"
             << payload.event.broadcasterUserLogin.qt();
         return;
+    }
+
+    // Chatterino9: count AutoMod decisions for the Mod activity window
+    const auto automodStatus = QString::fromStdString(payload.event.status);
+    const bool approved =
+        automodStatus.compare(u"approved", Qt::CaseInsensitive) == 0;
+    const bool denied =
+        automodStatus.compare(u"denied", Qt::CaseInsensitive) == 0;
+    if (!payload.event.moderatorUserLogin.empty() && (approved || denied))
+    {
+        modactivity::record(
+            payload.event.broadcasterUserLogin.qt(),
+            chronoToQDateTime(metadata.messageTimestamp),
+            approved ? modactivity::Kind::AutomodApprove
+                     : modactivity::Kind::AutomodDeny,
+            QString::fromStdString(payload.event.moderatorUserLogin),
+            QString::fromStdString(payload.event.userLogin));
     }
 
     // Gray out approve/deny button upon "ALLOWED" and "DENIED" statuses
