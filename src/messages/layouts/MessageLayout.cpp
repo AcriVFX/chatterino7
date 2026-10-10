@@ -19,6 +19,7 @@
 #include "singletons/StreamerMode.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/DebugCount.hpp"
+#include "util/ModHelpers.hpp"
 
 #include <QApplication>
 #include <QDebug>
@@ -345,6 +346,12 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
                                  messageFlags);
 
     const bool lane = ctx.flags.has(MessageElementFlag::HighlightLane);
+    // filtered lane-style splits keep art as it is; everywhere else (normal
+    // chat, usercard) it gets its own rows
+    const bool filteredLane =
+        lane && !ctx.flags.has(MessageElementFlag::TimeoutLines);
+    this->artRows_ =
+        !filteredLane && modhelpers::isTextArt(this->message_->messageText);
     this->laneTag_.reset();
     this->laneChip_.reset();
     this->laidOutChip_ = this->message_->moderationChip;
@@ -446,6 +453,10 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
             continue;
         }
 
+        if (this->artRows_ && element->getFlags().has(MessageElementFlag::Text))
+        {
+            this->container_.setBreakEachWord(true);
+        }
         element->addToContainer(this->container_, ctx);
         if (this->laneTag_ && element.get() == tagAfter)
         {
@@ -506,12 +517,18 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
     // draw disabled
     if (this->message_->flags.has(MessageFlag::Disabled))
     {
+        // braille art stays readable: only its header line gets faded and
+        // crossed out
+        const int fadeHeight =
+            this->artRows_ ? static_cast<int>(
+                                 std::ceil(this->container_.firstLineBottom()))
+                           : pixmap->height();
         ctx.painter.fillRect(
             QRect{
                 0,
                 ctx.y,
                 pixmap->width(),
-                pixmap->height(),
+                std::min(fadeHeight, pixmap->height()),
             },
             ctx.messageColors.disabled);
 
@@ -522,7 +539,8 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
             ctx.painter.save();
             ctx.painter.translate(0, ctx.y);
             this->container_.paintStrikeout(ctx.painter,
-                                            QColor(0x9a, 0x9a, 0xa3, 0x70));
+                                            QColor(0x9a, 0x9a, 0xa3, 0x70),
+                                            this->artRows_ ? 1 : SIZE_MAX);
             ctx.painter.restore();
         }
     }
@@ -743,7 +761,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
         this->message_->flags.has(MessageFlag::Highlighted) &&
         !this->flags.has(MessageLayoutFlag::IgnoreHighlights) &&
         this->message_->highlightColor &&
-        !this->message_->highlightMatch.isEmpty())
+        !this->message_->highlightMatch.isEmpty() && !this->artRows_)
     {
         QColor mark = *this->message_->highlightColor;
         mark.setAlphaF(std::max<float>(mark.alphaF(), 0.45F));

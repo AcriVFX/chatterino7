@@ -736,6 +736,13 @@ void TextElement::addToContainer(MessageLayoutContainer &container,
 
         for (const auto &word : this->words_)
         {
+            // braille art: every long word is one row of the drawing
+            if (container.breakEachWord() && word.size() >= 10 &&
+                !container.atStartOfLine())
+            {
+                container.breakLine();
+            }
+
             auto wordId = container.nextWordId();
 
             auto getTextLayoutElement = [&](QString text, qreal width,

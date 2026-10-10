@@ -120,4 +120,9 @@ std::vector<LogTimeout> readLogTimeouts(const QString &channelLogDirectory,
 /// "31 min ago", "5 h ago", "2 days ago"
 QString formatAgo(const QDateTime &from, const QDateTime &now);
 
+/// True for braille/block art: at least 40 drawn braille, block or box
+/// drawing characters, making up at least half of the visible characters.
+/// Blank braille (U+2800) counts as space.
+bool isTextArt(const QString &text);
+
 }  // namespace chatterino::modhelpers
