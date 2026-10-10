@@ -147,6 +147,10 @@ void addOrReplaceChannelTimeout(const Buf &buffer, MessagePtr message,
             {
                 chip += QStringLiteral(" · ") + message->loginName;
             }
+            else if (!message->historyModerator.isEmpty())
+            {
+                chip += QStringLiteral(" · ") + message->historyModerator;
+            }
             // the IRC line for the same action can arrive after the named one
             // (its duration may differ by a second)
             bool keepNamed =

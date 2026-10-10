@@ -276,7 +276,9 @@ void MessageLayoutContainer::paintWordMarks(QPainter &painter,
     painter.setBrush(color);
     for (const auto &element : this->elements_)
     {
-        if (!element->getCreator().getFlags().has(MessageElementFlag::Text))
+        // links keep their own color: a marker across a whole URL hid it
+        if (!element->getCreator().getFlags().has(MessageElementFlag::Text) ||
+            element->getLink().type == Link::Url)
         {
             continue;
         }

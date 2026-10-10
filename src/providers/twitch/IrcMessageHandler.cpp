@@ -30,6 +30,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/IrcHelpers.hpp"
+#include "util/ModNameCache.hpp"
 
 #include <IrcMessage>
 #include <QLocale>
@@ -333,6 +334,9 @@ void IrcMessageHandler::parseMessageInto(Communi::IrcMessage *message,
         }
         else
         {
+            // history never names the moderator; use one seen live before
+            clearChat.message->historyModerator =
+                modnames::lookup(clearChat.message->timeoutUser, time);
             sink.addOrReplaceTimeout(std::move(clearChat.message), time);
         }
     }

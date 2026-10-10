@@ -94,6 +94,9 @@ struct Message {
     /// Set on a user's last message when they get timed out or banned,
     /// e.g. "TO 10m" or "BAN" (shown in lane-style splits)
     mutable QString moderationChip;
+    /// On a timeout/ban message from chat history: the moderator remembered
+    /// from an earlier live EventSub event (see ModNameCache)
+    mutable QString historyModerator;
     // Each reply holds a reference to the thread. When every reply is dropped,
     // the reply thread will be cleaned up by the TwitchChannel.
     // The root of the thread does not have replyThread set.
