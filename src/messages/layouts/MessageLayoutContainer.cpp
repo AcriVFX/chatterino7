@@ -66,6 +66,7 @@ void MessageLayoutContainer::beginLayout(qreal width, float scale,
     this->isCollapsed_ = false;
     this->lineContainsRTL_ = false;
     this->anyReorderingDone_ = false;
+    this->breakEachWord_ = false;
 }
 
 void MessageLayoutContainer::endLayout()
@@ -234,12 +235,14 @@ void MessageLayoutContainer::breakLine()
 }
 
 void MessageLayoutContainer::paintStrikeout(QPainter &painter,
-                                            const QColor &color) const
+                                            const QColor &color,
+                                            size_t maxLines) const
 {
     painter.save();
     painter.setPen(QPen(color, std::max(1.0F, this->scale_)));
-    for (const auto &line : this->lines_)
+    for (size_t n = 0; n < this->lines_.size() && n < maxLines; n++)
     {
+        const auto &line = this->lines_[n];
         std::optional<QRectF> span;
         for (auto i = line.startIndex; i < line.endIndex; i++)
         {
@@ -259,6 +262,15 @@ void MessageLayoutContainer::paintStrikeout(QPainter &painter,
         }
     }
     painter.restore();
+}
+
+qreal MessageLayoutContainer::firstLineBottom() const
+{
+    if (this->lines_.empty())
+    {
+        return this->height_;
+    }
+    return this->lines_.front().rect.bottom();
 }
 
 void MessageLayoutContainer::paintWordMarks(QPainter &painter,

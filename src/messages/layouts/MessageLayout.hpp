@@ -143,6 +143,9 @@ private:
     // repeat counter at the end, e.g. "8 in 49s ▸"
     std::unique_ptr<MessageElement> laneRepeat_;
     QString laidOutChip_;
+    // braille art outside filtered lanes: one row per word, stays readable
+    // when punished (fade and strike only on the header line)
+    bool artRows_ = false;
 
 #ifdef FOURTF
     // Debug counters

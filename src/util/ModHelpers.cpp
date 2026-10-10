@@ -364,4 +364,24 @@ QString formatAgo(const QDateTime &from, const QDateTime &now)
     return QString::number(d) + (d == 1 ? u" day ago"_s : u" days ago"_s);
 }
 
+bool isTextArt(const QString &text)
+{
+    qsizetype art = 0;
+    qsizetype visible = 0;
+    for (const QChar c : text)
+    {
+        const auto u = c.unicode();
+        if (c.isSpace() || u == 0x2800)
+        {
+            continue;
+        }
+        visible++;
+        if ((u > 0x2800 && u <= 0x28FF) || (u >= 0x2500 && u <= 0x259F))
+        {
+            art++;
+        }
+    }
+    return art >= 40 && art * 2 >= visible;
+}
+
 }  // namespace chatterino::modhelpers

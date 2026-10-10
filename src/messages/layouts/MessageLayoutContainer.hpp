@@ -11,6 +11,7 @@
 #include <QPoint>
 #include <QRect>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -83,7 +84,26 @@ struct MessageLayoutContainer {
      * Cross out the message text, line by line (lane-style splits show
      * timed-out messages this way)
      */
-    void paintStrikeout(QPainter &painter, const QColor &color) const;
+    void paintStrikeout(QPainter &painter, const QColor &color,
+                        size_t maxLines = SIZE_MAX) const;
+
+    /**
+     * Bottom of the first line (the header line of braille art messages)
+     */
+    qreal firstLineBottom() const;
+
+    /**
+     * Start a new line for every long word from now on (braille art: each
+     * word is one row of the drawing)
+     */
+    void setBreakEachWord(bool on)
+    {
+        this->breakEachWord_ = on;
+    }
+    bool breakEachWord() const
+    {
+        return this->breakEachWord_;
+    }
 
     /**
      * Put a soft marker behind the text words that are part of `match`
@@ -203,6 +223,8 @@ struct MessageLayoutContainer {
     int nextWordId();
 
 private:
+    bool breakEachWord_ = false;
+
     struct Line {
         /**
          * The index of the first message element on this line
