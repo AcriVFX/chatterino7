@@ -2038,12 +2038,12 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
 
-    // short spam ("L", "67", a few emotes) only keeps the SPAM color when the
-    // user sent another spammy message shortly before
+    // spam ("L", "67", emote walls) only keeps the SPAM color when the user
+    // sent another spammy message shortly before, walls of text keep it
     if (builder->highlightTag == u"SPAM")
     {
         builder->spammy = true;
-        if (content.size() < modhelpers::SPAM_SHORT_LENGTH &&
+        if (content.size() < modhelpers::SPAM_WALL_LENGTH &&
             twitchChannel != nullptr && !highlight.playSound &&
             !highlight.windowAlert &&
             !builder->flags.has(MessageFlag::ShowInMentions) &&

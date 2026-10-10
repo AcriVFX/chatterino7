@@ -92,7 +92,7 @@ struct Message {
     /// Seconds between the first counted repeat and this message
     qint64 repeatSeconds = 0;
     /// Matched a SPAM highlight rule, even if it was left uncolored as a
-    /// single short one (see SPAM_SHORT_LENGTH)
+    /// single one (see SPAM_WALL_LENGTH)
     bool spammy = false;
     /// Set on a user's last message when they get timed out or banned,
     /// e.g. "TO 10m" or "BAN" (shown in lane-style splits)
