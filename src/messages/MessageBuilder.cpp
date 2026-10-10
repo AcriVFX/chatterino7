@@ -308,6 +308,61 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     return count;
 }
 
+/// Did the same user send another spammy message (see Message::spammy)
+/// within SPAM_SECOND_WINDOW_SECONDS before this one?
+/// `pending` as in countRepeats.
+bool hasRecentSpam(Channel *channel, const std::vector<MessagePtr> *pending,
+                   const Message &message)
+{
+    if (!message.serverReceivedTime.isValid())
+    {
+        return false;
+    }
+
+    bool found = false;
+    // returns false once there is nothing more to look for
+    auto visit = [&](const MessagePtr &prev) -> bool {
+        auto age =
+            prev->serverReceivedTime.isValid()
+                ? prev->serverReceivedTime.secsTo(message.serverReceivedTime)
+                : 0;
+        if (age > modhelpers::SPAM_SECOND_WINDOW_SECONDS)
+        {
+            return false;
+        }
+        if (age >= 0 && prev->spammy && prev->loginName == message.loginName)
+        {
+            found = true;
+            return false;
+        }
+        return true;
+    };
+    bool more = true;
+    if (pending != nullptr)
+    {
+        for (const auto &prev : *pending | std::views::reverse)
+        {
+            more = visit(prev);
+            if (!more)
+            {
+                break;
+            }
+        }
+    }
+    if (more)
+    {
+        auto snapshot = channel->getMessageSnapshot();
+        for (const auto &prev : snapshot | std::views::reverse)
+        {
+            if (!visit(prev))
+            {
+                break;
+            }
+        }
+    }
+    return found;
+}
+
 const QString regexHelpString("(\\w+)[.,!?;:]*?$");
 
 // matches a mention with punctuation at the end, like "@username," or "@username!!!" where capture group would return "username"
@@ -1963,6 +2018,25 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
 
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
+
+    // short spam ("L", "67", a few emotes) only keeps the SPAM color when the
+    // user sent another spammy message shortly before
+    if (builder->highlightTag == u"SPAM")
+    {
+        builder->spammy = true;
+        if (content.size() < modhelpers::SPAM_SHORT_LENGTH &&
+            twitchChannel != nullptr && !highlight.playSound &&
+            !highlight.windowAlert &&
+            !builder->flags.has(MessageFlag::ShowInMentions) &&
+            !hasRecentSpam(channel, args.pendingMessages, builder.message()))
+        {
+            builder->flags.unset(MessageFlag::Highlighted);
+            builder->highlightColor = nullptr;
+            builder->highlightLabel.clear();
+            builder->highlightTag.clear();
+            builder->highlightMatch.clear();
+        }
+    }
 
     // repeated messages and variant spam from one user (see countRepeats).
     // Faint highlights (spam, streamer names) are replaced by the repeat color.

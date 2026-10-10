@@ -52,6 +52,13 @@ bool isSameRepeatKey(const QString &a, const QString &b);
 inline constexpr int VARIANT_PREVIOUS_NEEDED = 6;
 inline constexpr qint64 VARIANT_WINDOW_SECONDS = 120;
 
+/// A message colored by a SPAM highlight rule that is shorter than
+/// SPAM_SHORT_LENGTH ("L", "67", a few emotes) only keeps the color when the
+/// same user sent another spammy message within SPAM_SECOND_WINDOW_SECONDS.
+/// A single one is mostly harmless (2% get a timeout in papaplatte's chat).
+inline constexpr int SPAM_SHORT_LENGTH = 60;
+inline constexpr qint64 SPAM_SECOND_WINDOW_SECONDS = 120;
+
 /// Words of a message for variant detection: letters/digits only, lowercase,
 /// repeated characters collapsed ("TEMPELLLL" -> "tempel"), without mentions,
 /// words shorter than 3 characters and duplicates.
