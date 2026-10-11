@@ -307,14 +307,16 @@ int mergeActionsLocked(Store &st, const QString &channel,
     loadLocked(st, channel, data);
 
     // times of the actions saved before this sync, by kind, mod and target
-    QHash<QString, std::vector<qint64>> saved;
+    QMultiHash<QString, qint64> saved;
+    saved.reserve(static_cast<qsizetype>(data.actions.size()));
     for (const auto &action : data.actions)
     {
-        saved[sameActionKey(action)].push_back(action.msecs);
+        saved.insert(sameActionKey(action), action.msecs);
     }
 
     int added = 0;
-    for (const auto &raw : body.split('\n'))
+    const auto lines = body.split('\n');
+    for (const auto &raw : lines)
     {
         Action action;
         if (!parseAction(QString::fromUtf8(raw), action))
@@ -322,9 +324,9 @@ int mergeActionsLocked(Store &st, const QString &channel,
             continue;
         }
         newest = std::max(newest, action.msecs);
-        const auto it = saved.constFind(sameActionKey(action));
-        if (it != saved.constEnd() &&
-            std::ranges::any_of(*it, [&](qint64 msecs) {
+        const auto [first, last] =
+            std::as_const(saved).equal_range(sameActionKey(action));
+        if (std::any_of(first, last, [&](qint64 msecs) {
                 return std::abs(msecs - action.msecs) <= SAME_ACTION_MSECS;
             }))
         {
@@ -357,7 +359,8 @@ bool mergeStreamsLocked(Store &st, const QString &channel,
     loadLocked(st, channel, data);
 
     bool changed = false;
-    for (const auto &raw : body.split('\n'))
+    const auto lines = body.split('\n');
+    for (const auto &raw : lines)
     {
         const auto parts = QString::fromUtf8(raw).split(u'\t');
         bool okStart = false;
