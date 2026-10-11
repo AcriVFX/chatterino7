@@ -283,15 +283,22 @@ public:
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override
     {
-        constexpr int barMax = 60;
-        constexpr int barSlot = barMax + 8;
+        constexpr int barMaxWidth = 60;
+        constexpr int minBarWidth = 16;
 
         if (option.state.testFlag(QStyle::State_Selected))
         {
             painter->fillRect(option.rect, option.palette.highlight());
         }
+        // the name always wins: in a narrow window the bar shrinks first and
+        // disappears before the name gets cut off
+        const auto textWidth =
+            option.fontMetrics.horizontalAdvance(index.data().toString()) + 12;
+        const int barMax =
+            std::clamp(option.rect.width() - textWidth - 14, 0, barMaxWidth);
+        const int barSlot = barMax >= minBarWidth ? barMax + 8 : 0;
         auto share = index.data(SHARE_ROLE).toDouble();
-        if (share > 0)
+        if (share > 0 && barSlot > 0)
         {
             int w = std::max(1, static_cast<int>(std::lround(share * barMax)));
             QRect bar(option.rect.left() + 6, option.rect.center().y() - 3, w,
