@@ -3,19 +3,27 @@
 #include "util/ModActivity.hpp"
 
 #include "Application.hpp"
+#include "common/network/NetworkRequest.hpp"
+#include "common/network/NetworkResult.hpp"
 #include "singletons/Paths.hpp"
 #include "util/PostToThread.hpp"
 
 #include <QDir>
 #include <QFile>
 #include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSet>
 #include <QStringView>
 #include <QTextStream>
+#include <QUrl>
+#include <QUrlQuery>
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -25,6 +33,16 @@ namespace {
 
 /// A live stream gets its "last seen" time written at most this often
 constexpr qint64 STREAM_WRITE_MSECS = 5LL * 60 * 1000;
+
+/// A server action this close to a saved one with the same kind, mod and
+/// target is the same action, seen by both the app and the server
+constexpr qint64 SAME_ACTION_MSECS = 5000;
+
+/// Each sync asks for the last few minutes again, in case the server saved
+/// an action a little late
+constexpr qint64 SYNC_OVERLAP_MSECS = 10LL * 60 * 1000;
+
+constexpr int SYNC_TIMEOUT_MSECS = 20000;
 
 constexpr std::array<std::pair<Kind, QStringView>, 8> KIND_KEYS{{
     {Kind::Timeout, u"timeout"},
@@ -60,6 +78,42 @@ bool kindFromKey(const QString &key, Kind &out)
         }
     }
     return false;
+}
+
+QString formatAction(const Action &action)
+{
+    return QString::number(action.msecs) + '\t' + kindKey(action.kind) + '\t' +
+           action.moderator + '\t' + action.target + '\t' +
+           QString::number(action.seconds);
+}
+
+/// Parses one actions-*.tsv line, names are not interned yet
+bool parseAction(const QString &line, Action &action)
+{
+    const auto parts = line.split(u'\t');
+    if (parts.size() != 5)
+    {
+        return false;
+    }
+    bool okTime = false;
+    bool okSeconds = false;
+    action.msecs = parts[0].toLongLong(&okTime);
+    action.seconds = parts[4].toInt(&okSeconds);
+    if (!okTime || !okSeconds || parts[2].isEmpty() ||
+        !kindFromKey(parts[1], action.kind))
+    {
+        return false;
+    }
+    action.moderator = parts[2];
+    action.target = parts[3];
+    return true;
+}
+
+QString actionFile(qint64 msecs)
+{
+    return QStringLiteral("actions-%1.tsv")
+        .arg(QDateTime::fromMSecsSinceEpoch(msecs).toLocalTime().toString(
+            QStringLiteral("yyyy-MM")));
 }
 
 struct LiveStream {
@@ -187,23 +241,13 @@ void loadLocked(Store &st, const QString &channel, ChannelData &data)
         QTextStream in(&file);
         while (!in.atEnd())
         {
-            const auto parts = in.readLine().split(u'\t');
-            if (parts.size() != 5)
-            {
-                continue;
-            }
-            bool okTime = false;
-            bool okSeconds = false;
             Action action;
-            action.msecs = parts[0].toLongLong(&okTime);
-            action.seconds = parts[4].toInt(&okSeconds);
-            if (!okTime || !okSeconds || parts[2].isEmpty() ||
-                !kindFromKey(parts[1], action.kind))
+            if (!parseAction(in.readLine(), action))
             {
                 continue;
             }
-            action.moderator = intern(st, parts[2]);
-            action.target = intern(st, parts[3]);
+            action.moderator = intern(st, action.moderator);
+            action.target = intern(st, action.target);
             data.actions.push_back(std::move(action));
         }
     }
@@ -243,6 +287,308 @@ void writeStreamLocked(Store &st, const QString &channel,
     }
 }
 
+QString sameActionKey(const Action &action)
+{
+    return kindKey(action.kind) + '\t' + action.moderator + '\t' +
+           action.target;
+}
+
+/// Saves the server's actions that are not saved yet. Returns how many were
+/// added, `newest` gets the time of the newest server action.
+int mergeActionsLocked(Store &st, const QString &channel,
+                       const QByteArray &body, qint64 &newest)
+{
+    const auto dir = channelDir(channel);
+    if (!ensureDir(dir))
+    {
+        return 0;
+    }
+    auto &data = st.channels[channel];
+    loadLocked(st, channel, data);
+
+    // times of the actions saved before this sync, by kind, mod and target
+    QMultiHash<QString, qint64> saved;
+    saved.reserve(static_cast<qsizetype>(data.actions.size()));
+    for (const auto &action : data.actions)
+    {
+        saved.insert(sameActionKey(action), action.msecs);
+    }
+
+    int added = 0;
+    const auto lines = body.split('\n');
+    for (const auto &raw : lines)
+    {
+        Action action;
+        if (!parseAction(QString::fromUtf8(raw), action))
+        {
+            continue;
+        }
+        newest = std::max(newest, action.msecs);
+        const auto [first, last] =
+            std::as_const(saved).equal_range(sameActionKey(action));
+        if (std::any_of(first, last, [&](qint64 msecs) {
+                return std::abs(msecs - action.msecs) <= SAME_ACTION_MSECS;
+            }))
+        {
+            continue;
+        }
+
+        appendLine(QDir(dir).filePath(actionFile(action.msecs)),
+                   formatAction(action));
+        action.moderator = intern(st, action.moderator);
+        action.target = intern(st, action.target);
+        auto pos = std::ranges::upper_bound(data.actions, action.msecs, {},
+                                            &Action::msecs);
+        data.actions.insert(pos, std::move(action));
+        ++added;
+    }
+    return added;
+}
+
+/// Saves the server's streams and stream ends the app doesn't know yet.
+/// Returns whether anything changed.
+bool mergeStreamsLocked(Store &st, const QString &channel,
+                        const QByteArray &body)
+{
+    const auto dir = channelDir(channel);
+    if (!ensureDir(dir))
+    {
+        return false;
+    }
+    auto &data = st.channels[channel];
+    loadLocked(st, channel, data);
+
+    bool changed = false;
+    const auto lines = body.split('\n');
+    for (const auto &raw : lines)
+    {
+        const auto parts = QString::fromUtf8(raw).split(u'\t');
+        bool okStart = false;
+        bool okEnd = false;
+        const auto start = parts.value(1).toLongLong(&okStart);
+        const auto end = parts.value(2).toLongLong(&okEnd);
+        if (parts.size() != 3 || parts[0].isEmpty() || !okStart || !okEnd)
+        {
+            continue;
+        }
+        auto s = std::ranges::find(data.streams, parts[0], &Stream::id);
+        if (s != data.streams.end() && s->end >= end)
+        {
+            continue;
+        }
+        appendLine(QDir(dir).filePath(QStringLiteral("streams.tsv")),
+                   parts[0] + '\t' + QString::number(start) + '\t' +
+                       QString::number(end));
+        if (s == data.streams.end())
+        {
+            data.streams.push_back({parts[0], start, std::max(start, end)});
+            std::ranges::sort(data.streams, {}, &Stream::start);
+        }
+        else
+        {
+            s->end = end;
+        }
+        changed = true;
+    }
+    return changed;
+}
+
+// ------------------------------------------------------------------ sync
+
+/// Misc/ModActivity/remote.json, written by the mod tracker's setup script
+struct RemoteConfig {
+    QUrl url;
+    QByteArray apiKey;
+    QByteArray accessClientId;
+    QByteArray accessClientSecret;
+};
+
+std::optional<RemoteConfig> remoteConfig()
+{
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    if (misc.isEmpty())
+    {
+        return std::nullopt;
+    }
+    QFile file(QDir(misc).filePath(QStringLiteral("ModActivity/remote.json")));
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return std::nullopt;
+    }
+    const auto obj = QJsonDocument::fromJson(file.readAll()).object();
+    RemoteConfig config{
+        .url = QUrl(obj.value(u"url").toString()),
+        .apiKey = obj.value(u"apiKey").toString().toUtf8(),
+        .accessClientId = obj.value(u"accessClientId").toString().toUtf8(),
+        .accessClientSecret =
+            obj.value(u"accessClientSecret").toString().toUtf8(),
+    };
+    // the keys only ever go over https
+    if (!config.url.isValid() || config.url.scheme() != u"https" ||
+        config.url.host().isEmpty() || config.apiKey.isEmpty())
+    {
+        return std::nullopt;
+    }
+    return config;
+}
+
+/// Only used from the GUI thread
+struct SyncState {
+    bool loaded = false;
+    bool running = false;
+    bool ok = false;
+    bool needsSignIn = false;
+    /// Time of the newest server action merged so far
+    qint64 cursor = 0;
+    qint64 lastSync = 0;
+};
+
+QString syncFile(const QString &channel)
+{
+    const auto dir = channelDir(channel);
+    return dir.isEmpty()
+               ? QString()
+               : QDir(dir).filePath(QStringLiteral("server-sync.json"));
+}
+
+SyncState &syncState(const QString &channel)
+{
+    static std::unordered_map<QString, SyncState> states;
+    auto &state = states[channel];
+    if (!state.loaded)
+    {
+        state.loaded = true;
+        QFile file(syncFile(channel));
+        if (file.open(QIODevice::ReadOnly))
+        {
+            const auto obj = QJsonDocument::fromJson(file.readAll()).object();
+            state.cursor = obj.value(u"cursor").toInteger();
+            state.lastSync = obj.value(u"lastSync").toInteger();
+            state.ok = state.lastSync > 0;
+        }
+    }
+    return state;
+}
+
+void saveSyncState(const QString &channel, const SyncState &state)
+{
+    if (!ensureDir(channelDir(channel)))
+    {
+        return;
+    }
+    QFile file(syncFile(channel));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        file.write(QJsonDocument(QJsonObject{
+                                     {"cursor", state.cursor},
+                                     {"lastSync", state.lastSync},
+                                 })
+                       .toJson(QJsonDocument::Compact));
+    }
+}
+
+void finishSync(const QString &channel, bool ok)
+{
+    auto &state = syncState(channel);
+    state.running = false;
+    state.ok = ok;
+    if (ok)
+    {
+        state.lastSync = QDateTime::currentMSecsSinceEpoch();
+        saveSyncState(channel, state);
+    }
+    syncStatusChanged().invoke();
+}
+
+NetworkRequest serverRequest(const RemoteConfig &config, const QString &path,
+                             const QUrlQuery &query = {})
+{
+    auto url = config.url;
+    url.setPath(path);
+    url.setQuery(query);
+    // Cloudflare Access answers a missing key with a redirect to its login
+    // page, which must count as a failure
+    auto request = NetworkRequest(url)
+                       .followRedirects(false)
+                       .timeout(SYNC_TIMEOUT_MSECS)
+                       .header("X-Modtracker-Key", config.apiKey);
+    if (!config.accessClientId.isEmpty())
+    {
+        request =
+            std::move(request)
+                .header("CF-Access-Client-Id", config.accessClientId)
+                .header("CF-Access-Client-Secret", config.accessClientSecret);
+    }
+    return request;
+}
+
+bool isOk(const NetworkResult &result)
+{
+    return result.status() == 200;
+}
+
+void fetchStreams(const QString &channel, const RemoteConfig &config,
+                  bool anyAdded)
+{
+    serverRequest(config, QStringLiteral("/v1/%1/streams").arg(channel))
+        .onSuccess([channel, anyAdded](const NetworkResult &result) {
+            if (!isOk(result))
+            {
+                finishSync(channel, false);
+                return;
+            }
+            bool changed = anyAdded;
+            {
+                auto &st = store();
+                std::scoped_lock lock(st.mutex);
+                changed = mergeStreamsLocked(st, channel, result.getData()) ||
+                          changed;
+            }
+            finishSync(channel, true);
+            if (changed)
+            {
+                updated().invoke();
+            }
+        })
+        .onError([channel](const NetworkResult &) {
+            finishSync(channel, false);
+        })
+        .execute();
+}
+
+void fetchActions(const QString &channel, const RemoteConfig &config)
+{
+    const auto &state = syncState(channel);
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("since"),
+                       QString::number(std::max<qint64>(
+                           0, state.cursor - SYNC_OVERLAP_MSECS)));
+
+    serverRequest(config, QStringLiteral("/v1/%1/actions").arg(channel), query)
+        .onSuccess([channel, config](const NetworkResult &result) {
+            if (!isOk(result))
+            {
+                finishSync(channel, false);
+                return;
+            }
+            auto &state = syncState(channel);
+            qint64 newest = state.cursor;
+            int added = 0;
+            {
+                auto &st = store();
+                std::scoped_lock lock(st.mutex);
+                added =
+                    mergeActionsLocked(st, channel, result.getData(), newest);
+            }
+            state.cursor = newest;
+            fetchStreams(channel, config, added > 0);
+        })
+        .onError([channel](const NetworkResult &) {
+            finishSync(channel, false);
+        })
+        .execute();
+}
+
 }  // namespace
 
 void record(const QString &channel, const QDateTime &time, Kind kind,
@@ -268,13 +614,8 @@ void record(const QString &channel, const QDateTime &time, Kind kind,
         const auto dir = channelDir(key);
         if (ensureDir(dir))
         {
-            const auto file = QStringLiteral("actions-%1.tsv")
-                                  .arg(time.toLocalTime().toString(
-                                      QStringLiteral("yyyy-MM")));
-            appendLine(QDir(dir).filePath(file),
-                       QString::number(action.msecs) + '\t' + kindKey(kind) +
-                           '\t' + action.moderator + '\t' + action.target +
-                           '\t' + QString::number(action.seconds));
+            appendLine(QDir(dir).filePath(actionFile(action.msecs)),
+                       formatAction(action));
         }
 
         auto it = st.channels.find(key);
@@ -378,6 +719,61 @@ bool isBot(const QString &login)
 }
 
 pajlada::Signals::NoArgSignal &updated()
+{
+    static pajlada::Signals::NoArgSignal signal;
+    return signal;
+}
+
+void syncFromServer(const QString &channel)
+{
+    const auto key = channel.toLower();
+    const auto config = remoteConfig();
+    auto &state = syncState(key);
+    if (!config || state.running)
+    {
+        return;
+    }
+    state.running = true;
+
+    serverRequest(*config, QStringLiteral("/v1/status"))
+        .onSuccess([key, config = *config](const NetworkResult &result) {
+            const auto status = result.parseJson();
+            // a server counting another channel has nothing for this one
+            if (!isOk(result) || status.value(u"channel").toString() != key)
+            {
+                finishSync(key, false);
+                return;
+            }
+            syncState(key).needsSignIn = status.value(u"needsSignIn").toBool();
+            fetchActions(key, config);
+        })
+        .onError([key](const NetworkResult &) {
+            finishSync(key, false);
+        })
+        .execute();
+}
+
+SyncStatus syncStatus(const QString &channel)
+{
+    const auto key = channel.toLower();
+    const auto config = remoteConfig();
+    if (!config)
+    {
+        return {};
+    }
+    const auto &state = syncState(key);
+    return {
+        .configured = true,
+        .ok = state.ok,
+        .needsSignIn = state.needsSignIn,
+        .host = config->url.host(),
+        .lastSync = state.lastSync > 0
+                        ? QDateTime::fromMSecsSinceEpoch(state.lastSync)
+                        : QDateTime(),
+    };
+}
+
+pajlada::Signals::NoArgSignal &syncStatusChanged()
 {
     static pajlada::Signals::NoArgSignal signal;
     return signal;

@@ -1,8 +1,9 @@
 // Chatterino9: counts what each moderator does in a channel (timeouts, bans,
 // unbans, deleted messages, warnings, AutoMod) for the Mod activity window.
-// Everything comes from live EventSub moderation events, so only what the
-// app sees while it is open gets counted. Kept with no time limit in
-// Misc/ModActivity/<channel>/.
+// Everything comes from live EventSub moderation events: what the app sees
+// while it is open, plus what the mod tracker server counted around the
+// clock when Misc/ModActivity/remote.json names one. Kept with no time limit
+// in Misc/ModActivity/<channel>/.
 
 #pragma once
 
@@ -64,5 +65,28 @@ bool isBot(const QString &login);
 
 /// Fires in the GUI thread after a new action was saved
 pajlada::Signals::NoArgSignal &updated();
+
+struct SyncStatus {
+    /// Misc/ModActivity/remote.json names a server
+    bool configured = false;
+    /// The last sync attempt worked
+    bool ok = false;
+    /// The server has no valid Twitch login and is not counting
+    bool needsSignIn = false;
+    /// Host name of the server, e.g. mods.acri.fyi
+    QString host;
+    /// Last successful sync, invalid if there never was one
+    QDateTime lastSync;
+};
+
+/// Merges what the server counted for `channel` into the local files. Does
+/// nothing without remote.json or while a sync is already running. Must be
+/// called from the GUI thread.
+void syncFromServer(const QString &channel);
+
+SyncStatus syncStatus(const QString &channel);
+
+/// Fires in the GUI thread after each sync attempt
+pajlada::Signals::NoArgSignal &syncStatusChanged();
 
 }  // namespace chatterino::modactivity

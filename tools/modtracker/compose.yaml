@@ -1,0 +1,39 @@
+# Chatterino9 mod tracker: its own containers and network, nothing shared
+# with other apps on the server. No ports are published; the tunnel
+# container connects out to Cloudflare and forwards mods.acri.fyi here.
+name: modtracker
+
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  mem_limit: 128m
+  cpus: 0.5
+  networks: [modtracker]
+  logging:
+    driver: json-file
+    options: { max-size: 5m, max-file: "3" }
+
+services:
+  modtracker:
+    <<: *hardening
+    build: .
+    image: modtracker:local
+    container_name: modtracker
+    user: "${HOST_UID}:${HOST_GID}"
+    env_file: app.env
+    volumes:
+      - ./data:/data
+
+  tunnel:
+    <<: *hardening
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: modtracker-tunnel
+    command: tunnel --no-autoupdate run
+    env_file: tunnel.env
+    depends_on: [modtracker]
+
+networks:
+  modtracker:
+    name: modtracker

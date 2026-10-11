@@ -488,6 +488,19 @@ ModActivityDialog::ModActivityDialog(QString channel, QWidget *parent)
     });
     tick->start();
 
+    // numbers the mod tracker server counted while the app was closed
+    this->signalHolder_.managedConnect(modactivity::syncStatusChanged(),
+                                       [this] {
+                                           this->updateSyncFooter();
+                                       });
+    auto *syncTimer = new QTimer(this);
+    syncTimer->setInterval(std::chrono::minutes(3));
+    QObject::connect(syncTimer, &QTimer::timeout, this, [this] {
+        modactivity::syncFromServer(this->channel_);
+    });
+    syncTimer->start();
+    modactivity::syncFromServer(this->channel_);
+
     this->reload();
 }
 
@@ -830,12 +843,23 @@ void ModActivityDialog::initUi()
     // footer
     {
         auto *row = new QHBoxLayout;
-        auto *note = new QLabel(
-            "Counts what Chatterino9 sees while it is open, kept with no time "
-            "limit. Click a column to sort, click a mod for details.");
-        note->setObjectName("foot");
-        note->setWordWrap(true);
-        row->addWidget(note, 1);
+        this->ui_.syncDot = new QLabel;
+        this->ui_.syncDot->setFixedSize(7, 7);
+        this->ui_.syncDot->hide();
+        row->addWidget(this->ui_.syncDot);
+        this->ui_.footNote = new QLabel;
+        this->ui_.footNote->setObjectName("foot");
+        this->ui_.footNote->setWordWrap(true);
+        row->addWidget(this->ui_.footNote, 1);
+        this->ui_.retry = new QPushButton("Retry");
+        this->ui_.retry->setObjectName("link");
+        this->ui_.retry->setFlat(true);
+        this->ui_.retry->setCursor(Qt::PointingHandCursor);
+        this->ui_.retry->hide();
+        QObject::connect(this->ui_.retry, &QPushButton::clicked, this, [this] {
+            modactivity::syncFromServer(this->channel_);
+        });
+        row->addWidget(this->ui_.retry);
         auto *exportButton = new QPushButton("Export CSV");
         QObject::connect(exportButton, &QPushButton::clicked, this, [this] {
             this->exportCsv();
@@ -843,6 +867,53 @@ void ModActivityDialog::initUi()
         row->addWidget(exportButton);
         root->addLayout(row);
     }
+    this->updateSyncFooter();
+}
+
+void ModActivityDialog::updateSyncFooter()
+{
+    const auto status = modactivity::syncStatus(this->channel_);
+    const QString help("Click a column to sort, click a mod for details.");
+    const auto synced =
+        status.lastSync.isValid()
+            ? QLocale().toString(status.lastSync.time(), QLocale::ShortFormat)
+            : QString();
+
+    QString text;
+    QString dotColor;
+    if (!status.configured)
+    {
+        text = "Counts what Chatterino9 sees while it is open, kept with no "
+               "time limit. " +
+               help;
+    }
+    else if (status.ok && !status.needsSignIn)
+    {
+        text = QString("Counted around the clock on %1, last synced %2. %3")
+                   .arg(status.host, synced, help);
+        dotColor = "#4fbf72";
+    }
+    else
+    {
+        const auto shown =
+            synced.isEmpty()
+                ? QString("showing what this PC counted.")
+                : QString("showing what was synced until %1 plus this PC.")
+                      .arg(synced);
+        text = status.needsSignIn
+                   ? QString("%1 needs a new Twitch sign-in (setup.ps1 start), "
+                             "%2")
+                         .arg(status.host, shown)
+                   : QString("%1 not reachable, %2").arg(status.host, shown);
+        dotColor = "#e0a03c";
+    }
+
+    this->ui_.footNote->setText(text);
+    this->ui_.syncDot->setVisible(!dotColor.isEmpty());
+    this->ui_.syncDot->setStyleSheet(
+        QString("background: %1; border-radius: 3px;").arg(dotColor));
+    this->ui_.retry->setVisible(status.configured &&
+                                (!status.ok || status.needsSignIn));
 }
 
 QWidget *ModActivityDialog::createFilterPopup()
