@@ -5,6 +5,8 @@
 #   .\setup.ps1 start     starts it and shows the Twitch sign-in code.
 #   .\setup.ps1 update    copies new service files and rebuilds and restarts
 #                         the counter. Keeps its sign-in and its data.
+#   .\setup.ps1 stop      pauses counting and clears what the server counted.
+#                         Keeps the Twitch sign-in; start resumes.
 #   .\setup.ps1 status    shows whether it runs and its last log lines.
 #   .\setup.ps1 check     tests mods.acri.fyi from this PC like Chatterino9
 #                         does. Does not connect to the server over SSH.
@@ -16,7 +18,7 @@
 
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('install', 'start', 'update', 'status', 'check')]
+    [ValidateSet('install', 'start', 'update', 'stop', 'status', 'check')]
     [string]$Step
 )
 
@@ -119,6 +121,16 @@ function Show-StartResult([int]$code) {
     if ($code -eq 20) { Stop-Setup 'The counter kept crashing and was stopped. Send the lines above to Claude.' }
     if ($code -eq 21) { Stop-Setup 'No Twitch sign-in yet. The counter keeps waiting; .\setup.ps1 status shows the code.' }
     Stop-Setup "The server stopped this step (code $code)."
+}
+
+# While paused, Chatterino9 finds no remote.json and leaves the server out
+$appConfig = Join-Path $env:APPDATA 'Chatterino2\Misc\ModActivity\remote.json'
+$pausedConfig = "$appConfig.paused"
+
+function Resume-AppConfig {
+    if ((Test-Path $pausedConfig) -and -not (Test-Path $appConfig)) {
+        Rename-Item -Path $pausedConfig -NewName (Split-Path -Leaf $appConfig)
+    }
 }
 
 if ($Step -eq 'install') {
@@ -225,7 +237,9 @@ cd `$HOME/apps/modtracker
 docker compose up -d
 echo "Started. Waiting for the sign-in code..."
 "@ + "`n" + $waitForCounter
-    Show-StartResult (Invoke-Remote $target $script)
+    $code = Invoke-Remote $target $script
+    if ($code -eq 0) { Resume-AppConfig }
+    Show-StartResult $code
 }
 
 if ($Step -eq 'update') {
@@ -253,7 +267,34 @@ docker compose build --pull modtracker
 docker compose up -d
 echo "Updated. Waiting for the counter..."
 "@ + "`n" + $waitForCounter
-    Show-StartResult (Invoke-Remote $target $script)
+    $code = Invoke-Remote $target $script
+    if ($code -eq 0) { Resume-AppConfig }
+    Show-StartResult $code
+}
+
+if ($Step -eq 'stop') {
+    $target = Get-SshTarget
+    Confirm-Step @"
+This connects once to $target and, in ~/apps/modtracker only:
+  - stops the counter and the Cloudflare tunnel
+  - deletes the mod actions and streams the server counted so far
+Its Twitch sign-in stays, so .\setup.ps1 start resumes without a new code.
+Chatterino9 leaves the server out until then.
+"@
+    $script = @"
+set -eu
+cd `$HOME/apps/modtracker
+docker compose stop
+rm -f data/actions-*.tsv data/streams.tsv
+echo "PAUSED: nothing is counted until start"
+"@
+    $code = Invoke-Remote $target $script
+    if ($code -eq 255) { Stop-Setup 'SSH could not log in. Not retrying.' }
+    if ($code -ne 0) { Stop-Setup "The server stopped this step (code $code)." }
+    if (Test-Path $appConfig) { Move-Item -Force -Path $appConfig -Destination $pausedConfig }
+    Write-Host ''
+    Write-Host 'Paused. Run .\setup.ps1 start when counting should begin.' -ForegroundColor Green
+    exit 0
 }
 
 if ($Step -eq 'status') {
