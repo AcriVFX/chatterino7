@@ -77,12 +77,15 @@ if ($Step -eq 'install') {
     $target = Get-SshTarget
     $clientId = (Read-Host -Prompt 'Twitch app Client ID').Trim()
     if ($clientId -notmatch '^[a-z0-9]{20,40}$') { Stop-Setup 'That does not look like a Twitch Client ID.' }
-    $tunnelToken = Read-Secret 'Cloudflare tunnel token (starts with eyJ, input is hidden)'
-    if ($tunnelToken -notmatch '^eyJ[A-Za-z0-9_\-=+/.]+$') { Stop-Setup 'That does not look like a tunnel token.' }
-    $accessId = (Read-Host -Prompt 'Cloudflare Access service token Client ID (ends with .access)').Trim()
+    # Pasted values may still carry the labels Cloudflare shows around them
+    $tunnelToken = (Read-Secret 'Cloudflare tunnel token (starts with eyJ, input is hidden)') -replace '^.*\binstall\s+', ''
+    if ($tunnelToken -notmatch '^eyJ[A-Za-z0-9_\-=+/.]+$') { Stop-Setup 'That does not look like a tunnel token. Paste only the part starting with eyJ.' }
+    $accessId = ((Read-Host -Prompt 'Cloudflare Access service token Client ID (ends with .access)').Trim()) -replace '^CF-Access-Client-Id:\s*', ''
     if ($accessId -notmatch '^[A-Za-z0-9]+\.access$') { Stop-Setup 'That does not look like an Access Client ID.' }
-    $accessSecret = Read-Secret 'Cloudflare Access service token Client Secret (input is hidden)'
-    if ($accessSecret -notmatch '^[A-Za-z0-9]{32,128}$') { Stop-Setup 'That does not look like an Access Client Secret.' }
+    $accessSecret = (Read-Secret 'Cloudflare Access service token Client Secret (input is hidden)') -replace '^CF-Access-Client-Secret:\s*', ''
+    if ($accessSecret -notmatch '^[A-Za-z0-9_\-+/=.]{20,256}$') {
+        Stop-Setup "That does not look like an Access Client Secret ($($accessSecret.Length) characters, it should be one word with no spaces). Paste only the secret value."
+    }
 
     # The key only Chatterino9 and the service know
     $bytes = New-Object byte[] 32
