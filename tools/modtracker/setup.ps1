@@ -6,6 +6,8 @@
 #   .\setup.ps1 update    copies new service files and rebuilds and restarts
 #                         the counter. Keeps its sign-in and its data.
 #   .\setup.ps1 status    shows whether it runs and its last log lines.
+#   .\setup.ps1 check     tests mods.acri.fyi from this PC like Chatterino9
+#                         does. Does not connect to the server over SSH.
 #
 # Each step makes exactly one SSH connection with your key. It never asks
 # for a password and never retries a failed login, so it can't trip the
@@ -14,7 +16,7 @@
 
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('install', 'start', 'update', 'status')]
+    [ValidateSet('install', 'start', 'update', 'status', 'check')]
     [string]$Step
 )
 
@@ -261,5 +263,60 @@ cd `$HOME/apps/modtracker && docker compose ps && docker compose logs --tail 15 
 "@
     $code = Invoke-Remote $target $script
     if ($code -eq 255) { Stop-Setup 'SSH could not log in. Not retrying.' }
+    exit 0
+}
+
+if ($Step -eq 'check') {
+    $file = Join-Path $env:APPDATA 'Chatterino2\Misc\ModActivity\remote.json'
+    if (-not (Test-Path $file)) { Stop-Setup 'remote.json is missing, run install first.' }
+    $c = Get-Content $file -Raw | ConvertFrom-Json
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+    function Get-Status([hashtable]$headers) {
+        $req = [Net.HttpWebRequest]::Create("$($c.url)/v1/status")
+        $req.AllowAutoRedirect = $false
+        $req.Timeout = 20000
+        foreach ($k in $headers.Keys) { $req.Headers.Add($k, $headers[$k]) }
+        try {
+            $resp = $req.GetResponse()
+        } catch [Net.WebException] {
+            $resp = $_.Exception.Response
+            if (-not $resp) { return @{ code = 0; body = $_.Exception.Message } }
+        }
+        $code = [int]$resp.StatusCode
+        $body = (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd()
+        $resp.Close()
+        return @{ code = $code; body = $body }
+    }
+
+    $access = @{ 'CF-Access-Client-Id' = $c.accessClientId; 'CF-Access-Client-Secret' = $c.accessClientSecret }
+    $failed = $false
+
+    $r = Get-Status @{}
+    if ($r.code -eq 302 -or $r.code -eq 401 -or $r.code -eq 403) {
+        Write-Host "1. Without keys: blocked by Cloudflare ($($r.code))" -ForegroundColor Green
+    } else {
+        Write-Host "1. Without keys: expected Cloudflare to block it, got $($r.code)" -ForegroundColor Red; $failed = $true
+    }
+
+    $r = Get-Status $access
+    if ($r.code -eq 404) {
+        Write-Host '2. Cloudflare keys only: reached the counter, which refused it without its own key' -ForegroundColor Green
+    } else {
+        Write-Host "2. Cloudflare keys only: expected 404 from the counter, got $($r.code)" -ForegroundColor Red; $failed = $true
+    }
+
+    $r = Get-Status ($access + @{ 'X-Modtracker-Key' = $c.apiKey })
+    if ($r.code -eq 200) {
+        $s = $r.body | ConvertFrom-Json
+        Write-Host "3. All keys: channel $($s.channel), signed in $($s.signedIn), connected to Twitch $($s.connected)" -ForegroundColor Green
+        if (-not $s.signedIn -or -not $s.connected) { $failed = $true }
+    } else {
+        Write-Host "3. All keys: expected 200, got $($r.code)" -ForegroundColor Red; $failed = $true
+    }
+
+    if ($failed) { Stop-Setup 'Something is off. Send these lines to Claude.' }
+    Write-Host ''
+    Write-Host 'Everything works the way Chatterino9 will use it.' -ForegroundColor Green
     exit 0
 }
