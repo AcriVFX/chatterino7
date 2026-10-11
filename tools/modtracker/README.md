@@ -25,7 +25,8 @@ Endpoints, all `GET`, all behind Cloudflare Access and the API key:
 - `/v1/<channel>/actions?since=<msecs>`: action lines newer than `since`
 - `/v1/<channel>/streams`: `streams.tsv`
 
-To pause: `setup.ps1 stop` (clears the counted data, keeps the sign-in;
-`setup.ps1 start` resumes). To remove it for good: `docker compose down` in
+To pause: `setup.ps1 stop` (clears the counted data, keeps the sign-in).
+`setup.ps1 start` is a fresh start: it clears papaplatte's counts on the
+server and on the PC, then counts from that moment. To remove it for good: `docker compose down` in
 `~/apps/modtracker`, then revoke
 the app at twitch.tv/settings/connections.

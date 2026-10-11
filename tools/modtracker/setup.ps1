@@ -2,7 +2,9 @@
 #
 #   .\setup.ps1 install   copies the service to ~/apps/modtracker and builds
 #                         it. Nothing is started.
-#   .\setup.ps1 start     starts it and shows the Twitch sign-in code.
+#   .\setup.ps1 start     fresh start: clears papaplatte's counts on the
+#                         server and on this PC, then starts counting (and
+#                         shows the Twitch sign-in code if it needs one).
 #   .\setup.ps1 update    copies new service files and rebuilds and restarts
 #                         the counter. Keeps its sign-in and its data.
 #   .\setup.ps1 stop      pauses counting and clears what the server counted.
@@ -90,11 +92,12 @@ function New-Bundle {
     return $b64
 }
 
-# Shows the counter's log until it counts, gives up when it keeps crashing
+# Shows the counter's log since $since until it counts, gives up when it
+# keeps crashing
 $waitForCounter = @'
 seen=0
 for i in $(seq 1 360); do
-  out=$(docker compose logs --no-log-prefix modtracker 2>&1)
+  out=$(docker compose logs --since "$since" --no-log-prefix modtracker 2>&1)
   n=$(printf '%s\n' "$out" | wc -l)
   printf '%s\n' "$out" | tail -n +$((seen + 1))
   seen=$n
@@ -223,19 +226,37 @@ echo "BUILT: nothing is running yet"
 }
 
 if ($Step -eq 'start') {
+    # Chatterino9 keeps the counts in memory and would write them back
+    if (Get-Process -Name chatterino -ErrorAction SilentlyContinue) {
+        Stop-Setup 'Close Chatterino9 first (also from the tray), then run start again.'
+    }
+    $localDir = Join-Path $env:APPDATA 'Chatterino2\Misc\ModActivity\papaplatte'
     $target = Get-SshTarget
     Confirm-Step @"
-This connects once to $target and starts the two modtracker containers
-(the counter and the Cloudflare tunnel). Then it shows the Twitch sign-in
-code. Approve it at https://www.twitch.tv/activate with your mod account.
-It waits up to 30 minutes for the sign-in. If the counter crashes 3 times,
-it stops the counter again.
+Fresh start. This deletes every papaplatte mod action counted so far:
+  - on this PC: actions and streams in $localDir
+  - on the server: everything the counter saved
+Then it connects once to $target, starts the two modtracker containers
+(the counter and the Cloudflare tunnel) and counting begins from now.
+If the counter needs a Twitch sign-in, it shows the code; approve it at
+https://www.twitch.tv/activate with your mod account. If the counter
+crashes 3 times, it stops the counter again.
 "@
+    if (Test-Path $localDir) {
+        Get-ChildItem -Path $localDir -File |
+            Where-Object { $_.Name -like 'actions-*.tsv' -or $_.Name -eq 'streams.tsv' -or $_.Name -eq 'server-sync.json' } |
+            Remove-Item -Force
+        Write-Host 'Cleared the counts on this PC.'
+    }
     $script = @"
 set -eu
 cd `$HOME/apps/modtracker
+docker compose stop modtracker
+rm -f data/actions-*.tsv data/streams.tsv
+echo "Cleared the counts on the server."
+since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
 docker compose up -d
-echo "Started. Waiting for the sign-in code..."
+echo "Started. Counting from now on..."
 "@ + "`n" + $waitForCounter
     $code = Invoke-Remote $target $script
     if ($code -eq 0) { Resume-AppConfig }
@@ -264,6 +285,7 @@ tar -xzf bundle.tgz server.mjs Dockerfile compose.yaml
 rm bundle.tgz
 chmod 644 server.mjs Dockerfile compose.yaml
 docker compose build --pull modtracker
+since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
 docker compose up -d
 echo "Updated. Waiting for the counter..."
 "@ + "`n" + $waitForCounter
