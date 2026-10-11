@@ -3,6 +3,8 @@
 #   .\setup.ps1 install   copies the service to ~/apps/modtracker and builds
 #                         it. Nothing is started.
 #   .\setup.ps1 start     starts it and shows the Twitch sign-in code.
+#   .\setup.ps1 update    copies new service files and rebuilds and restarts
+#                         the counter. Keeps its sign-in and its data.
 #   .\setup.ps1 status    shows whether it runs and its last log lines.
 #
 # Each step makes exactly one SSH connection with your key. It never asks
@@ -12,7 +14,7 @@
 
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('install', 'start', 'status')]
+    [ValidateSet('install', 'start', 'update', 'status')]
     [string]$Step
 )
 
@@ -68,12 +70,56 @@ function Confirm-Step([string]$what) {
     if ($answer -ne 'yes') { Stop-Setup 'Nothing was changed.' }
 }
 
-if ($Step -eq 'install') {
-    $files = @('server.mjs', 'Dockerfile', 'compose.yaml')
-    foreach ($f in $files) {
+$serviceFiles = @('server.mjs', 'Dockerfile', 'compose.yaml')
+
+# The service files packed as base64 lines for a heredoc
+function New-Bundle {
+    foreach ($f in $serviceFiles) {
         if (-not (Test-Path (Join-Path $here $f))) { Stop-Setup "$f is missing next to this script." }
     }
+    $bundle = Join-Path $env:TEMP 'modtracker-bundle.tgz'
+    if (Test-Path $bundle) { Remove-Item $bundle }
+    & tar -czf $bundle -C $here @serviceFiles
+    if ($LASTEXITCODE -ne 0) { Stop-Setup 'Could not pack the service files.' }
+    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($bundle)) -replace '(.{76})', "`$1`n"
+    Remove-Item $bundle
+    return $b64
+}
 
+# Shows the counter's log until it counts, gives up when it keeps crashing
+$waitForCounter = @'
+seen=0
+for i in $(seq 1 360); do
+  out=$(docker compose logs --no-log-prefix modtracker 2>&1)
+  n=$(printf '%s\n' "$out" | wc -l)
+  printf '%s\n' "$out" | tail -n +$((seen + 1))
+  seen=$n
+  case "$out" in *"Counting mod actions"*) echo "DONE"; exit 0 ;; esac
+  restarts=$(docker inspect -f '{{.RestartCount}}' modtracker 2>/dev/null || echo 0)
+  if [ "$restarts" -ge 3 ]; then
+    docker compose stop modtracker
+    echo "STOP: the counter crashed 3 times, so it was stopped. The tunnel still runs."
+    exit 20
+  fi
+  sleep 5
+done
+echo "Still not signed in after 30 minutes. Run .\setup.ps1 status to see the code again."
+exit 21
+'@
+
+function Show-StartResult([int]$code) {
+    if ($code -eq 255) { Stop-Setup 'SSH could not log in. Not retrying.' }
+    if ($code -eq 0) {
+        Write-Host ''
+        Write-Host 'It runs and counts mod actions in papaplatte.' -ForegroundColor Green
+        exit 0
+    }
+    if ($code -eq 20) { Stop-Setup 'The counter kept crashing and was stopped. Send the lines above to Claude.' }
+    if ($code -eq 21) { Stop-Setup 'No Twitch sign-in yet. The counter keeps waiting; .\setup.ps1 status shows the code.' }
+    Stop-Setup "The server stopped this step (code $code)."
+}
+
+if ($Step -eq 'install') {
     $target = Get-SshTarget
     $clientId = (Read-Host -Prompt 'Twitch app Client ID').Trim()
     if ($clientId -notmatch '^[a-z0-9]{20,40}$') { Stop-Setup 'That does not look like a Twitch Client ID.' }
@@ -92,13 +138,7 @@ if ($Step -eq 'install') {
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $apiKey = -join ($bytes | ForEach-Object { $_.ToString('x2') })
 
-    # Pack the three service files
-    $bundle = Join-Path $env:TEMP 'modtracker-bundle.tgz'
-    if (Test-Path $bundle) { Remove-Item $bundle }
-    & tar -czf $bundle -C $here @files
-    if ($LASTEXITCODE -ne 0) { Stop-Setup 'Could not pack the service files.' }
-    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($bundle)) -replace '(.{76})', "`$1`n"
-    Remove-Item $bundle
+    $b64 = New-Bundle
 
     Confirm-Step @"
 This connects once to $target and:
@@ -173,29 +213,43 @@ if ($Step -eq 'start') {
 This connects once to $target and starts the two modtracker containers
 (the counter and the Cloudflare tunnel). Then it shows the Twitch sign-in
 code. Approve it at https://www.twitch.tv/activate with your mod account.
-It waits up to 30 minutes for the sign-in.
+It waits up to 30 minutes for the sign-in. If the counter crashes 3 times,
+it stops the counter again.
 "@
     $script = @"
 set -eu
 cd `$HOME/apps/modtracker
 docker compose up -d
 echo "Started. Waiting for the sign-in code..."
-seen=0
-for i in `$(seq 1 360); do
-  out=`$(docker compose logs --no-log-prefix modtracker 2>&1)
-  n=`$(printf '%s\n' "`$out" | wc -l)
-  printf '%s\n' "`$out" | tail -n +`$((seen + 1))
-  seen=`$n
-  case "`$out" in *"Counting mod actions"*) echo "DONE"; exit 0 ;; esac
-  sleep 5
-done
-echo "Still not signed in after 30 minutes. Run .\setup.ps1 status to see the code again."
+"@ + "`n" + $waitForCounter
+    Show-StartResult (Invoke-Remote $target $script)
+}
+
+if ($Step -eq 'update') {
+    $target = Get-SshTarget
+    $b64 = New-Bundle
+    Confirm-Step @"
+This connects once to $target and, in ~/apps/modtracker only:
+  - replaces server.mjs, Dockerfile and compose.yaml with the ones here
+  - rebuilds the counter and restarts it (the tunnel keeps running)
+Its secrets, its Twitch sign-in and its data stay as they are. If it has
+no sign-in yet, it shows the Twitch code like start does.
 "@
-    $code = Invoke-Remote $target $script
-    if ($code -eq 255) { Stop-Setup 'SSH could not log in. Not retrying.' }
-    Write-Host ''
-    Write-Host 'If the last lines say "Counting mod actions in papaplatte", it runs.' -ForegroundColor Green
-    exit 0
+    $script = @"
+set -eu
+APP=`$HOME/apps/modtracker
+[ -f "`$APP/app.env" ] || { echo "STOP: `$APP is not set up, run install first"; exit 10; }
+cd "`$APP"
+base64 -d > bundle.tgz <<'B64'
+$b64
+B64
+tar -xzf bundle.tgz server.mjs Dockerfile compose.yaml
+rm bundle.tgz
+docker compose build --pull modtracker
+docker compose up -d
+echo "Updated. Waiting for the counter..."
+"@ + "`n" + $waitForCounter
+    Show-StartResult (Invoke-Remote $target $script)
 }
 
 if ($Step -eq 'status') {
