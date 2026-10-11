@@ -107,6 +107,8 @@ private:
                    int streamCount);
     void updateDetail();
     void exportCsv();
+    /// Footer line saying where the numbers come from
+    void updateSyncFooter();
 
     Range currentRange() const;
     bool isShown(const QString &name) const;
@@ -164,6 +166,9 @@ private:
         QLabel *legend = nullptr;
         QGridLayout *facts = nullptr;
         QWidget *detail = nullptr;
+        QLabel *syncDot = nullptr;
+        QLabel *footNote = nullptr;
+        QPushButton *retry = nullptr;
     } ui_;
 
     QTimer *refreshTimer_ = nullptr;
