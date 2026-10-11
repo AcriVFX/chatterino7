@@ -167,6 +167,7 @@ $b64
 B64
 tar -xzf "`$APP/bundle.tgz" -C "`$APP"
 rm "`$APP/bundle.tgz"
+chmod 644 "`$APP/server.mjs" "`$APP/Dockerfile" "`$APP/compose.yaml"
 cat > "`$APP/app.env" <<'ENVEOF'
 TWITCH_CLIENT_ID=$clientId
 API_KEY=$apiKey
@@ -245,6 +246,7 @@ $b64
 B64
 tar -xzf bundle.tgz server.mjs Dockerfile compose.yaml
 rm bundle.tgz
+chmod 644 server.mjs Dockerfile compose.yaml
 docker compose build --pull modtracker
 docker compose up -d
 echo "Updated. Waiting for the counter..."
