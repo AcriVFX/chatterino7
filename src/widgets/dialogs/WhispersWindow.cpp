@@ -44,6 +44,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cstdint>
 
 namespace {
 
@@ -52,7 +53,8 @@ using namespace chatterino;
 // Twitch cuts whispers to new people at 500 characters
 constexpr int MAX_WHISPER_LENGTH = 500;
 
-enum Role {
+// NOLINTNEXTLINE(cppcoreguidelines-use-enum-class): used as item data role
+enum Role : std::uint16_t {
     PartnerRole = Qt::UserRole,
     LastTextRole,
     TimeRole,
@@ -102,7 +104,7 @@ QString shortTime(qint64 msecs)
 }
 
 /// "Today", "Yesterday", else "Saturday, 10 October 2026"
-QString dayName(const QDate &date)
+QString dayName(QDate date)
 {
     const auto today = QDate::currentDate();
     if (date == today)
@@ -124,7 +126,7 @@ public:
     QSize sizeHint(const QStyleOptionViewItem &option,
                    const QModelIndex & /*index*/) const override
     {
-        return {option.rect.width(), option.fontMetrics.height() * 2 + 18};
+        return {option.rect.width(), (option.fontMetrics.height() * 2) + 18};
     }
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
@@ -132,13 +134,13 @@ public:
     {
         painter->save();
         const auto rect = option.rect;
-        if (option.state & QStyle::State_Selected)
+        if (option.state.testFlag(QStyle::State_Selected))
         {
             painter->fillRect(rect, SELECTED);
             painter->fillRect(QRect(rect.left(), rect.top(), 2, rect.height()),
                               ACCENT);
         }
-        else if (option.state & QStyle::State_MouseOver)
+        else if (option.state.testFlag(QStyle::State_MouseOver))
         {
             painter->fillRect(rect, HOVER);
         }
@@ -181,7 +183,7 @@ public:
             badgeWidth = std::max(badgeHeight,
                                   smallMetrics.horizontalAdvance(count) + 10);
             const QRect badge(inner.right() - badgeWidth,
-                              lineTop + (lineHeight - badgeHeight) / 2,
+                              lineTop + ((lineHeight - badgeHeight) / 2),
                               badgeWidth, badgeHeight);
             painter->setRenderHint(QPainter::Antialiasing);
             painter->setPen(Qt::NoPen);
@@ -196,7 +198,7 @@ public:
         painter->setFont(option.font);
         painter->setPen(MUTED);
         const QRect lastRect(inner.left(), lineTop,
-                             inner.width() - badgeWidth - (unread ? 8 : 0),
+                             inner.width() - badgeWidth - (unread > 0 ? 8 : 0),
                              lineHeight);
         painter->drawText(
             lastRect, Qt::AlignLeft | Qt::AlignVCenter,
@@ -217,7 +219,8 @@ void addWords(MessageBuilder &b, const QString &text)
     const auto *ffzemotes = app->getFfzEmotes();
     const auto *seventvemotes = app->getSeventvEmotes();
 
-    for (const auto &word : text.split(u' ', Qt::SkipEmptyParts))
+    const auto words = text.split(u' ', Qt::SkipEmptyParts);
+    for (const auto &word : words)
     {
         {
             auto it = accemotes->find({word});
@@ -280,7 +283,7 @@ MessagePtr buildMessage(const whisperhistory::Entry &entry)
     return b.release();
 }
 
-MessagePtr buildDaySeparator(const QDate &date)
+MessagePtr buildDaySeparator(QDate date)
 {
     MessageBuilder b;
     b.emplace<TextElement>(dayName(date), MessageElementFlag::Text,
@@ -305,7 +308,7 @@ Split *anySplit()
     for (int i = 0; i < notebook.getPageCount(); i++)
     {
         auto *page = dynamic_cast<SplitContainer *>(notebook.getPageAt(i));
-        if (page && !page->getSplits().empty())
+        if (page != nullptr && !page->getSplits().empty())
         {
             return page->getSplits().front();
         }
@@ -384,8 +387,7 @@ WhispersWindow::WhispersWindow()
     // whispers as they arrive, shown as chat shows them
     this->signalHolder_.managedConnect(
         getApp()->getTwitch()->getWhispersChannel()->messageAppended,
-        [this](MessagePtr &message,
-               const std::optional<MessageFlags> & /*flags*/) {
+        [this](MessagePtr &message, std::optional<MessageFlags> /*flags*/) {
             if (this->partner_.isEmpty() || !this->viewChannel_)
             {
                 return;
@@ -557,7 +559,7 @@ void WhispersWindow::reloadList()
     for (const auto &c : conversations)
     {
         if (!filter.isEmpty() && !c.partner.contains(filter) &&
-            !c.displayName.toLower().contains(filter))
+            !c.displayName.contains(filter, Qt::CaseInsensitive))
         {
             continue;
         }

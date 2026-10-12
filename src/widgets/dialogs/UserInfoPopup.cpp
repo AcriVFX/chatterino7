@@ -520,12 +520,13 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
 
         user->addStretch(1);
 
-        QObject::connect(this->ui_.whisperLabel, &Button::leftClicked, [this] {
-            if (!this->userName_.isEmpty())
-            {
-                WhispersWindow::showConversation(this->userName_);
-            }
-        });
+        QObject::connect(
+            this->ui_.whisperLabel, &Button::leftClicked, this, [this] {
+                if (!this->userName_.isEmpty())
+                {
+                    WhispersWindow::showConversation(this->userName_);
+                }
+            });
 
         QObject::connect(usercard.getElement(), &Button::leftClicked, [this] {
             QDesktopServices::openUrl("https://www.twitch.tv/popout/" +

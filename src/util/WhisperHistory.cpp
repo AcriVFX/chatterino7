@@ -271,10 +271,9 @@ void importLogsOnce(const QString &account, const QString &dir)
 
     for (auto &[partner, entries] : found)
     {
-        std::stable_sort(entries.begin(), entries.end(),
-                         [](const Entry &a, const Entry &b) {
-                             return a.msecs < b.msecs;
-                         });
+        std::ranges::stable_sort(entries, [](const Entry &a, const Entry &b) {
+            return a.msecs < b.msecs;
+        });
         writeEntries(dir, partner, entries, false);
         // old whispers count as read
         store().lastRead[partner] = entries.back().msecs;
@@ -304,7 +303,7 @@ QString ensureLoaded()
 
     st = Store{};
     st.account = account;
-    const auto dir = accountDir(account);
+    auto dir = accountDir(account);
     if (dir.isEmpty())
     {
         return {};
@@ -323,8 +322,9 @@ QString ensureLoaded()
     importLogsOnce(account, dir);
 
     const QDir qdir(dir);
-    for (const auto &fileName :
-         qdir.entryList({QStringLiteral("*.tsv")}, QDir::Files))
+    const auto fileNames =
+        qdir.entryList({QStringLiteral("*.tsv")}, QDir::Files);
+    for (const auto &fileName : fileNames)
     {
         const auto partner = fileName.chopped(4);
         if (!isLogin(partner))
@@ -336,7 +336,7 @@ QString ensureLoaded()
         {
             continue;
         }
-        auto &list = st.byPartner[partner];
+        std::vector<Entry> list;
         QTextStream in(&file);
         while (!in.atEnd())
         {
@@ -350,9 +350,9 @@ QString ensureLoaded()
                 list.push_back(std::move(entry));
             }
         }
-        if (list.empty())
+        if (!list.empty())
         {
-            st.byPartner.remove(partner);
+            st.byPartner.insert(partner, std::move(list));
         }
     }
     return dir;
