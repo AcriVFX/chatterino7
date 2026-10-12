@@ -352,7 +352,7 @@ QString ensureLoaded()
         }
         if (!list.empty())
         {
-            st.byPartner.insert(partner, std::move(list));
+            st.byPartner.emplace(partner, std::move(list));
         }
     }
     return dir;
