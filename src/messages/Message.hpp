@@ -63,6 +63,8 @@ struct Message {
     QString userID;
     QString timeoutUser;
     QString channelName;
+    /// Chatterino9: login of the other person in a whisper, empty otherwise
+    QString whisperPartner;
     QColor usernameColor;
     QDateTime serverReceivedTime;
 

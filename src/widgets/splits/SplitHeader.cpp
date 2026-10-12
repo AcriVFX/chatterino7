@@ -31,6 +31,7 @@
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/dialogs/ModActivityDialog.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
+#include "widgets/dialogs/WhispersWindow.hpp"
 #include "widgets/helper/CommonTexts.hpp"
 #include "widgets/Label.hpp"
 #include "widgets/splits/PinnedMessageWidget.hpp"
@@ -561,6 +562,14 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                                 dialog->raise();
                                 dialog->activateWindow();
                             });
+        }
+
+        // Chatterino9: all whisper conversations in one big window
+        if (this->split_->getChannel()->isTwitchChannel())
+        {
+            menu->addAction("Whispers window", this->split_, [] {
+                WhispersWindow::showConversation();
+            });
         }
 
         if (twitchChannel)

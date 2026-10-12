@@ -31,6 +31,7 @@
 #include "util/Helpers.hpp"
 #include "util/IrcHelpers.hpp"
 #include "util/ModNameCache.hpp"
+#include "util/WhisperHistory.hpp"
 
 #include <IrcMessage>
 #include <QLocale>
@@ -685,7 +686,12 @@ void IrcMessageHandler::handleWhisperMessage(Communi::IrcMessage *ircMessage)
     }
 
     message->flags.set(MessageFlag::Whisper);
+    message->whisperPartner = message->loginName.toLower();
     MessageBuilder::triggerHighlights(c, alert);
+
+    // Chatterino9: keep it for the Whispers window (before the chat log
+    // writes it, so a first-time import of the logs doesn't count it twice)
+    whisperhistory::recordIncoming(message);
 
     getApp()->getTwitch()->setLastUserThatWhisperedMe(message->loginName);
 

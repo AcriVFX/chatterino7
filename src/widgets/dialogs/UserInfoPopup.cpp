@@ -40,6 +40,7 @@
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/dialogs/EditUserNotesDialog.hpp"
+#include "widgets/dialogs/WhispersWindow.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/InvisibleSizeGrip.hpp"
 #include "widgets/helper/Line.hpp"
@@ -501,6 +502,9 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
             .assign(&this->ui_.notesAdd);
         auto usercard = user.emplace<LabelButton>("Usercard", this)
                             .assign(&this->ui_.usercardLabel);
+        // Chatterino9: opens the conversation in the Whispers window
+        user.emplace<LabelButton>("Whisper", this)
+            .assign(&this->ui_.whisperLabel);
         auto mod = user.emplace<PixmapButton>(this);
         mod->setPixmap(getResources().buttons.mod);
         mod->setScaleIndependentSize(30, 30);
@@ -515,6 +519,13 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
         unvip->setScaleIndependentSize(30, 30);
 
         user->addStretch(1);
+
+        QObject::connect(this->ui_.whisperLabel, &Button::leftClicked, [this] {
+            if (!this->userName_.isEmpty())
+            {
+                WhispersWindow::showConversation(this->userName_);
+            }
+        });
 
         QObject::connect(usercard.getElement(), &Button::leftClicked, [this] {
             QDesktopServices::openUrl("https://www.twitch.tv/popout/" +
@@ -965,6 +976,13 @@ void UserInfoPopup::setData(const QString &name,
         // not a normal twitch channel, the url opened by the button will be invalid, so hide the button
         this->ui_.usercardLabel->hide();
     }
+
+    // Chatterino9: nobody to whisper on Kick or on your own card
+    const bool isMyself =
+        getApp()->getAccounts()->twitch.getCurrent()->getUserName().compare(
+            this->userName_, Qt::CaseInsensitive) == 0;
+    this->ui_.whisperLabel->setVisible(type != Channel::Type::Kick &&
+                                       !isMyself);
 }
 
 void UserInfoPopup::updateAccountAgeWarning()
