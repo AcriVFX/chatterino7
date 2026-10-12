@@ -252,8 +252,9 @@ crashes 3 times, it stops the counter again.
 set -eu
 cd `$HOME/apps/modtracker
 docker compose stop modtracker
-rm -f data/actions-*.tsv data/streams.tsv
-echo "Cleared the counts on the server."
+n=`$(ls data/*/actions-*.tsv data/*/streams.tsv 2>/dev/null | wc -l)
+rm -f data/*/actions-*.tsv data/*/streams.tsv
+echo "Cleared the counts on the server (`$n files)."
 since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
 docker compose up -d
 echo "Started. Counting from now on..."
@@ -307,7 +308,7 @@ Chatterino9 leaves the server out until then.
 set -eu
 cd `$HOME/apps/modtracker
 docker compose stop
-rm -f data/actions-*.tsv data/streams.tsv
+rm -f data/*/actions-*.tsv data/*/streams.tsv
 echo "PAUSED: nothing is counted until start"
 "@
     $code = Invoke-Remote $target $script
