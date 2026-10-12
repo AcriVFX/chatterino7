@@ -439,8 +439,9 @@ jobs:
                   "chatterino.app/Contents/Frameworks/$ssl_name"; \
               done
           # Fix the search path for lib{crypto,ssl,hunspell} in chatterino
+          # (grep finds nothing when macdeployqt already fixed them)
           otool -L chatterino.app/Contents/MacOS/chatterino \
-            | grep /opt \
+            | { grep /opt || true; } \
             | cut -d" " -f1 \
             | cut -f2 \
             | while read og_entry; do \
