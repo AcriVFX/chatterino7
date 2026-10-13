@@ -72,6 +72,8 @@ public:
     /// Lane style: highlight stripe + tag, timeout chips on the punished message
     void setLaneStyle(bool value);
     bool getLaneStyle() const;
+    /// false for filtered lane splits, which hide the pin banner
+    bool showsPinnedMessage() const;
 
     /// Compact rows for narrow lanes: no timestamps, links shortened to the domain
     void setCompactRows(bool value);

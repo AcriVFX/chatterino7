@@ -2694,7 +2694,12 @@ void TwitchChannel::trackPredictionBadge(const Message &message)
     auto infoIt = message.twitchBadgeInfos.find(u"predictions"_s);
     if (infoIt != message.twitchBadgeInfos.end())
     {
+        // same unescaping as the prediction badge tooltip
         title = infoIt->second;
+        title.replace(R"(\s)", " ")
+            .replace(R"(\:)", ";")
+            .replace(R"(\\)", R"(\)")
+            .replace(u"\u2E1D"_s, ",");  // twitch's comma escape
     }
 
     // A badge we know with a different title, or a long gap, means a new

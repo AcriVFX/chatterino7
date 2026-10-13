@@ -982,9 +982,8 @@ void SplitHeader::updatePinButton()
 {
     auto channel = this->split_->getChannel();
     auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get());
-    // Chatterino9: lane splits never show the pinned message
     const bool hasPinnedMessage = twitchChannel != nullptr &&
-                                  !this->split_->getLaneStyle() &&
+                                  this->split_->showsPinnedMessage() &&
                                   twitchChannel->getPinnedMessage() != nullptr;
 
     this->pinButton_->setVisible(hasPinnedMessage);
