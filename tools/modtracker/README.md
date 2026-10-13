@@ -11,7 +11,7 @@ so the Mod activity window has numbers for the time Chatterino9 was closed.
 - `compose.yaml`: the service plus a Cloudflare tunnel container on their own
   Docker network. No ports are published.
 - `setup.ps1`: installs it from a Windows PC over one SSH connection per step
-  (`install`, `start`, `update`, `stop`, `status`, `check`) and saves the app's keys to
+  (`install`, `start`, `update`, `signin`, `stop`, `status`, `check`) and saves the app's keys to
   `%APPDATA%\Chatterino2\Misc\ModActivity\remote.json`.
 
 The app (`src/util/ModActivity.cpp`) reads `remote.json`, pulls new actions
@@ -27,6 +27,8 @@ Endpoints, all `GET`, all behind Cloudflare Access and the API key:
 
 To pause: `setup.ps1 stop` (clears the counted data, keeps the sign-in).
 `setup.ps1 start` is a fresh start: it clears papaplatte's counts on the
-server and on the PC, then counts from that moment. To remove it for good: `docker compose down` in
+server and on the PC, then counts from that moment. When the app says the
+server needs a new Twitch sign-in, `setup.ps1 signin` shows the code and
+keeps the counts. To remove it for good: `docker compose down` in
 `~/apps/modtracker`, then revoke
 the app at twitch.tv/settings/connections.

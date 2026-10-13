@@ -900,11 +900,12 @@ void ModActivityDialog::updateSyncFooter()
                 ? QString("showing what this PC counted.")
                 : QString("showing what was synced until %1 plus this PC.")
                       .arg(synced);
-        text = status.needsSignIn
-                   ? QString("%1 needs a new Twitch sign-in (setup.ps1 start), "
-                             "%2")
-                         .arg(status.host, shown)
-                   : QString("%1 not reachable, %2").arg(status.host, shown);
+        text =
+            status.needsSignIn
+                ? QString("%1 needs a new Twitch sign-in (setup.ps1 signin), "
+                          "%2")
+                      .arg(status.host, shown)
+                : QString("%1 not reachable, %2").arg(status.host, shown);
         dotColor = "#e0a03c";
     }
 

@@ -7,6 +7,8 @@
 #                         shows the Twitch sign-in code if it needs one).
 #   .\setup.ps1 update    copies new service files and rebuilds and restarts
 #                         the counter. Keeps its sign-in and its data.
+#   .\setup.ps1 signin    restarts the counter so it shows a new Twitch
+#                         sign-in code. Keeps its data.
 #   .\setup.ps1 stop      pauses counting and clears what the server counted.
 #                         Keeps the Twitch sign-in; start resumes.
 #   .\setup.ps1 status    shows whether it runs and its last log lines.
@@ -20,7 +22,7 @@
 
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('install', 'start', 'update', 'stop', 'status', 'check')]
+    [ValidateSet('install', 'start', 'update', 'signin', 'stop', 'status', 'check')]
     [string]$Step
 )
 
@@ -252,8 +254,9 @@ crashes 3 times, it stops the counter again.
 set -eu
 cd `$HOME/apps/modtracker
 docker compose stop modtracker
-rm -f data/actions-*.tsv data/streams.tsv
-echo "Cleared the counts on the server."
+n=`$(ls data/*/actions-*.tsv data/*/streams.tsv 2>/dev/null | wc -l)
+rm -f data/*/actions-*.tsv data/*/streams.tsv
+echo "Cleared the counts on the server (`$n files)."
 since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
 docker compose up -d
 echo "Started. Counting from now on..."
@@ -294,6 +297,25 @@ echo "Updated. Waiting for the counter..."
     Show-StartResult $code
 }
 
+if ($Step -eq 'signin') {
+    $target = Get-SshTarget
+    Confirm-Step @"
+This connects once to $target and restarts the counter in
+~/apps/modtracker. If it needs a Twitch sign-in, it shows the code; approve
+it at https://www.twitch.tv/activate with your mod account. Its counts stay.
+"@
+    $script = @"
+set -eu
+cd `$HOME/apps/modtracker
+since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
+docker compose restart modtracker
+echo "Restarted. Waiting for the counter..."
+"@ + "`n" + $waitForCounter
+    $code = Invoke-Remote $target $script
+    if ($code -eq 0) { Resume-AppConfig }
+    Show-StartResult $code
+}
+
 if ($Step -eq 'stop') {
     $target = Get-SshTarget
     Confirm-Step @"
@@ -307,7 +329,7 @@ Chatterino9 leaves the server out until then.
 set -eu
 cd `$HOME/apps/modtracker
 docker compose stop
-rm -f data/actions-*.tsv data/streams.tsv
+rm -f data/*/actions-*.tsv data/*/streams.tsv
 echo "PAUSED: nothing is counted until start"
 "@
     $code = Invoke-Remote $target $script
