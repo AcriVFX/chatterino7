@@ -29,6 +29,7 @@
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
+#include "widgets/dialogs/EmoteStatsDialog.hpp"
 #include "widgets/dialogs/ModActivityDialog.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/CommonTexts.hpp"
@@ -561,6 +562,18 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                                 dialog->raise();
                                 dialog->activateWindow();
                             });
+        }
+
+        // Chatterino9: how often each emote is used in this channel
+        if (twitchChannel)
+        {
+            menu->addAction("Emote stats", this->split_, [this] {
+                auto *dialog = new EmoteStatsDialog(this->split_->getChannel(),
+                                                    this->split_);
+                dialog->show();
+                dialog->raise();
+                dialog->activateWindow();
+            });
         }
 
         if (twitchChannel)

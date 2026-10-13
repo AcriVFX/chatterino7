@@ -24,8 +24,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-latest]
-        qt-version: [6.7.1, 6.10.1]
+        include:
+          # Qt 6.7 links the AGL framework, which the Xcode 26 SDK on
+          # macos-latest no longer has, so it builds with Xcode 16
+          - os: macos-15
+            qt-version: 6.7.1
+          - os: macos-latest
+            qt-version: 6.10.1
       fail-fast: false
     env:
       QT_MODULES: qtimageformats
@@ -35,6 +40,13 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0 # allows for tags access
+
+      - name: Use Xcode 16
+        if: startsWith(matrix.qt-version, '6.7.')
+        run: |
+          xcode="$(ls -d /Applications/Xcode_16*.app | sort -V | tail -n1)"
+          echo "Using $xcode"
+          sudo xcode-select -s "$xcode"
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4.3.0

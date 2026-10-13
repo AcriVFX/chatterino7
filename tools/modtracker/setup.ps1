@@ -2,15 +2,17 @@
 #
 #   .\setup.ps1 install   copies the service to ~/apps/modtracker and builds
 #                         it. Nothing is started.
-#   .\setup.ps1 start     fresh start: clears papaplatte's counts on the
-#                         server and on this PC, then starts counting (and
-#                         shows the Twitch sign-in code if it needs one).
+#   .\setup.ps1 start     fresh start: clears papaplatte's mod action counts
+#                         on the server and on this PC, then starts counting
+#                         (and shows the Twitch sign-in code if it needs one).
+#                         Emote stats are kept.
 #   .\setup.ps1 update    copies new service files and rebuilds and restarts
 #                         the counter. Keeps its sign-in and its data.
 #   .\setup.ps1 signin    restarts the counter so it shows a new Twitch
 #                         sign-in code. Keeps its data.
-#   .\setup.ps1 stop      pauses counting and clears what the server counted.
-#                         Keeps the Twitch sign-in; start resumes.
+#   .\setup.ps1 stop      pauses counting and clears the mod actions the
+#                         server counted (emote stats are kept). Keeps the
+#                         Twitch sign-in; start resumes.
 #   .\setup.ps1 status    shows whether it runs and its last log lines.
 #   .\setup.ps1 check     tests mods.acri.fyi from this PC like Chatterino9
 #                         does. Does not connect to the server over SSH.
@@ -120,7 +122,7 @@ function Show-StartResult([int]$code) {
     if ($code -eq 255) { Stop-Setup 'SSH could not log in. Not retrying.' }
     if ($code -eq 0) {
         Write-Host ''
-        Write-Host 'It runs and counts mod actions in papaplatte.' -ForegroundColor Green
+        Write-Host 'It runs and counts mod actions and emotes in papaplatte.' -ForegroundColor Green
         exit 0
     }
     if ($code -eq 20) { Stop-Setup 'The counter kept crashing and was stopped. Send the lines above to Claude.' }
@@ -274,7 +276,8 @@ This connects once to $target and, in ~/apps/modtracker only:
   - replaces server.mjs, Dockerfile and compose.yaml with the ones here
   - rebuilds the counter and restarts it (the tunnel keeps running)
 Its secrets, its Twitch sign-in and its data stay as they are. If it has
-no sign-in yet, it shows the Twitch code like start does.
+no sign-in yet, it shows the Twitch code like start does. The counter also
+counts emotes in chat; it reads chat as an anonymous viewer, no login.
 "@
     $script = @"
 set -eu
@@ -394,8 +397,8 @@ if ($Step -eq 'check') {
     $r = Get-Status ($access + @{ 'X-Modtracker-Key' = $c.apiKey })
     if ($r.code -eq 200) {
         $s = $r.body | ConvertFrom-Json
-        Write-Host "3. All keys: channel $($s.channel), signed in $($s.signedIn), connected to Twitch $($s.connected)" -ForegroundColor Green
-        if (-not $s.signedIn -or -not $s.connected) { $failed = $true }
+        Write-Host "3. All keys: channel $($s.channel), signed in $($s.signedIn), connected to Twitch $($s.connected), counting emotes $([bool]$s.emotes.connected)" -ForegroundColor Green
+        if (-not $s.signedIn -or -not $s.connected -or -not $s.emotes.connected) { $failed = $true }
     } else {
         Write-Host "3. All keys: expected 200, got $($r.code)" -ForegroundColor Red; $failed = $true
     }

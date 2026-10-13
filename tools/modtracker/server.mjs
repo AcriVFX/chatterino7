@@ -8,6 +8,9 @@
 // - Writes the same files the app keeps in Misc/ModActivity/<channel>/:
 //   actions-YYYY-MM.tsv (msecs, kind, moderator, target, seconds) and
 //   streams.tsv (id, start, lastSeen).
+// - Counts how often each emote is used in the channel's chat for the Emote
+//   stats window. It reads chat as an anonymous viewer (no login at all) and
+//   writes emotes/YYYY-MM-DD.tsv in the same format as the app.
 // - Serves them read-only over HTTP to requests carrying the API key. The
 //   Twitch token is never sent anywhere except to Twitch.
 //
@@ -21,10 +24,12 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const CLIENT_ID = requireEnv("TWITCH_CLIENT_ID");
 const API_KEY = requireEnv("API_KEY");
@@ -53,6 +58,15 @@ const API_URL = process.env.TWITCH_API_URL || "https://api.twitch.tv";
 const EVENTSUB_URL =
   process.env.TWITCH_EVENTSUB_URL ||
   "wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=30";
+const EMOTE_DIR = join(CHANNEL_DIR, "emotes");
+// Overridable only for testing against fake services
+const IRC_URL = process.env.TWITCH_IRC_URL || "wss://irc-ws.chat.twitch.tv:443";
+const SEVENTV_URL = process.env.SEVENTV_URL || "https://7tv.io";
+const BTTV_URL = process.env.BTTV_URL || "https://api.betterttv.net";
+const FFZ_URL = process.env.FFZ_URL || "https://api.frankerfacez.com";
+// Emote lists are loaded again this often, counts written this often
+const EMOTE_LIST_MSECS = 10 * 60 * 1000;
+const EMOTE_FLUSH_MSECS = 30 * 1000;
 // A live stream gets its "last seen" time written at most this often
 const STREAM_WRITE_MSECS = 5 * 60 * 1000;
 const STREAM_POLL_MSECS = 60 * 1000;
@@ -532,6 +546,414 @@ async function pollStream() {
   }
 }
 
+// --------------------------------------------------------------- emotes ---
+//
+// Every chat message counts once per emote in it, with who sent it, in one
+// bucket per UTC hour. Files: emotes/YYYY-MM-DD.tsv with lines
+// "HH, source, name, messages, chatters" (tab separated, chatters comma
+// separated); source "*" with name "*" counts every chat message. Same
+// format and same emote lookup as the app (src/util/EmoteStats.cpp).
+
+const chat = {
+  connected: false,
+  lastMessageAt: 0,
+  roomId: null,
+  listsLoadedAt: 0,
+};
+
+/// Emote names by set, looked up in this order like chat does
+let emoteLists = {
+  ffzChannel: new Set(),
+  bttvChannel: new Set(),
+  seventvChannel: new Set(),
+  ffzGlobal: new Set(),
+  bttvGlobal: new Set(),
+  seventvGlobal: new Set(),
+};
+
+const LIST_SOURCES = [
+  ["ffzChannel", "ffz"],
+  ["bttvChannel", "bttv"],
+  ["seventvChannel", "7tv"],
+  ["ffzGlobal", "ffz"],
+  ["bttvGlobal", "bttv"],
+  ["seventvGlobal", "7tv"],
+];
+
+export function classifyWord(word, lists = emoteLists) {
+  for (const [list, source] of LIST_SOURCES) {
+    if (lists[list].has(word)) {
+      return source;
+    }
+  }
+  return null;
+}
+
+/// null when the service has nothing for this channel (404)
+async function getJson(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`${url} answered ${res.status}`);
+  }
+  return res.json();
+}
+
+function ffzNames(body, setIds = null) {
+  const names = new Set();
+  for (const [id, set] of Object.entries(body?.sets ?? {})) {
+    if (setIds && !setIds.map(String).includes(String(id))) {
+      continue;
+    }
+    for (const emote of set.emoticons ?? []) {
+      names.add(emote.name);
+    }
+  }
+  return names;
+}
+
+const LOADERS = {
+  seventvChannel: async (id) =>
+    new Set(
+      (
+        (await getJson(`${SEVENTV_URL}/v3/users/twitch/${id}`))?.emote_set
+          ?.emotes ?? []
+      ).map((e) => e.name)
+    ),
+  seventvGlobal: async () =>
+    new Set(
+      (
+        (await getJson(`${SEVENTV_URL}/v3/emote-sets/global`))?.emotes ?? []
+      ).map((e) => e.name)
+    ),
+  bttvChannel: async (id) => {
+    const body = await getJson(`${BTTV_URL}/3/cached/users/twitch/${id}`);
+    return new Set(
+      [...(body?.channelEmotes ?? []), ...(body?.sharedEmotes ?? [])].map(
+        (e) => e.code
+      )
+    );
+  },
+  bttvGlobal: async () =>
+    new Set(
+      ((await getJson(`${BTTV_URL}/3/cached/emotes/global`)) ?? []).map(
+        (e) => e.code
+      )
+    ),
+  ffzChannel: async (id) =>
+    ffzNames(await getJson(`${FFZ_URL}/v1/room/id/${id}`)),
+  ffzGlobal: async () => {
+    const body = await getJson(`${FFZ_URL}/v1/set/global`);
+    return ffzNames(body, body?.default_sets ?? []);
+  },
+};
+
+/// Loads every emote list; a list that fails keeps its last version
+async function loadEmoteLists(roomId) {
+  const next = { ...emoteLists };
+  const failed = [];
+  await Promise.all(
+    Object.entries(LOADERS).map(async ([name, load]) => {
+      try {
+        next[name] = await load(roomId);
+      } catch (err) {
+        failed.push(`${name} (${err.message ?? err})`);
+      }
+    })
+  );
+  emoteLists = next;
+  chat.listsLoadedAt = Date.now();
+  if (failed.length) {
+    log(`Some emote lists did not load: ${failed.join(", ")}`);
+  }
+}
+
+/// Parses one IRC line into tags, prefix, command, params and trailing text
+export function parseIrc(line) {
+  let rest = line;
+  const tags = {};
+  if (rest.startsWith("@")) {
+    const space = rest.indexOf(" ");
+    for (const pair of rest.slice(1, space).split(";")) {
+      const eq = pair.indexOf("=");
+      tags[eq < 0 ? pair : pair.slice(0, eq)] =
+        eq < 0 ? "" : pair.slice(eq + 1);
+    }
+    rest = rest.slice(space + 1);
+  }
+  let prefix = "";
+  if (rest.startsWith(":")) {
+    const space = rest.indexOf(" ");
+    prefix = rest.slice(1, space);
+    rest = rest.slice(space + 1);
+  }
+  let trailing = null;
+  const colon = rest.indexOf(" :");
+  if (colon >= 0) {
+    trailing = rest.slice(colon + 2);
+    rest = rest.slice(0, colon);
+  }
+  const [command, ...params] = rest.split(" ");
+  return { tags, prefix, command, params, trailing };
+}
+
+/// [source, name] of every emote in `text`, Twitch emotes from the emotes
+/// tag ("id:start-end,start-end/id:..." in code points), the others by name
+export function emoteUses(text, emotesTag, lists = emoteLists) {
+  const uses = [];
+  const twitchNames = new Set();
+  if (emotesTag) {
+    const points = Array.from(text);
+    for (const part of emotesTag.split("/")) {
+      const ranges = part.split(":")[1];
+      if (!ranges) {
+        continue;
+      }
+      for (const range of ranges.split(",")) {
+        const [start, end] = range.split("-").map(Number);
+        const name = points.slice(start, end + 1).join("");
+        if (name && !twitchNames.has(name)) {
+          twitchNames.add(name);
+          uses.push(["twitch", name]);
+        }
+      }
+    }
+  }
+  for (const word of text.split(" ")) {
+    if (!word || twitchNames.has(word)) {
+      continue;
+    }
+    const source = classifyWord(word, lists);
+    if (source) {
+      uses.push([source, word]);
+    }
+  }
+  return uses;
+}
+
+/// day name -> { buckets: Map(key -> {count, users}), dirty }
+const emoteDays = new Map();
+const seenChatIds = new Set();
+
+function dayName(msecs) {
+  return new Date(msecs).toISOString().slice(0, 10);
+}
+
+function readEmoteDay(day) {
+  const buckets = new Map();
+  let text = "";
+  try {
+    text = readFileSync(join(EMOTE_DIR, `${day}.tsv`), "utf8");
+  } catch {
+    return buckets;
+  }
+  for (const line of text.split("\n")) {
+    const parts = line.split("\t");
+    if (parts.length !== 5) {
+      continue;
+    }
+    const count = Number(parts[3]);
+    if (!Number.isFinite(count)) {
+      continue;
+    }
+    buckets.set(parts.slice(0, 3).join("\t"), {
+      count,
+      users: new Set(parts[4] ? parts[4].split(",") : []),
+    });
+  }
+  return buckets;
+}
+
+export function countMessage(msecs, login, uses) {
+  const day = dayName(msecs);
+  let data = emoteDays.get(day);
+  if (!data) {
+    // continue the day saved before a restart
+    data = { buckets: readEmoteDay(day), dirty: false };
+    emoteDays.set(day, data);
+  }
+  const hour = String(new Date(msecs).getUTCHours()).padStart(2, "0");
+  const add = (key, user) => {
+    let bucket = data.buckets.get(key);
+    if (!bucket) {
+      bucket = { count: 0, users: new Set() };
+      data.buckets.set(key, bucket);
+    }
+    bucket.count++;
+    if (user) {
+      bucket.users.add(user);
+    }
+  };
+  add(`${hour}\t*\t*`, null);
+  const seen = new Set();
+  for (const [source, name] of uses) {
+    const key = `${hour}\t${source}\t${name}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      add(key, login);
+    }
+  }
+  data.dirty = true;
+}
+
+export function flushEmotes() {
+  mkdirSync(EMOTE_DIR, { recursive: true });
+  for (const [day, data] of emoteDays) {
+    if (!data.dirty) {
+      continue;
+    }
+    let out = "";
+    for (const [key, bucket] of data.buckets) {
+      out += `${key}\t${bucket.count}\t${[...bucket.users].join(",")}\n`;
+    }
+    const file = join(EMOTE_DIR, `${day}.tsv`);
+    writeFileSync(`${file}.tmp`, out);
+    renameSync(`${file}.tmp`, file);
+    data.dirty = false;
+  }
+  // keep today and yesterday in memory
+  const days = [...emoteDays.keys()].sort();
+  for (const day of days.slice(0, -2)) {
+    if (!emoteDays.get(day).dirty) {
+      emoteDays.delete(day);
+    }
+  }
+}
+
+function onChatMessage(message) {
+  const { tags, prefix, command } = message;
+  let text = message.trailing;
+  if (text === null) {
+    return;
+  }
+  const id = tags.id;
+  if (id) {
+    if (seenChatIds.has(id)) {
+      return;
+    }
+    seenChatIds.add(id);
+    if (seenChatIds.size > 5000) {
+      seenChatIds.delete(seenChatIds.values().next().value);
+    }
+  }
+  // shared chat: messages from the other channels
+  if (tags["source-room-id"] && tags["source-room-id"] !== tags["room-id"]) {
+    return;
+  }
+  if (text.startsWith("\u0001ACTION ") && text.endsWith("\u0001")) {
+    text = text.slice(8, -1);
+  }
+  const login = (
+    command === "PRIVMSG" ? prefix.split("!")[0] : tags.login || ""
+  ).toLowerCase();
+  const sent = Number(tags["tmi-sent-ts"]);
+  const msecs = Number.isFinite(sent) && sent > 0 ? sent : Date.now();
+  countMessage(msecs, login, emoteUses(text, tags.emotes));
+  chat.lastMessageAt = Date.now();
+}
+
+let chatSocket = null;
+let chatBackoff = 1000;
+let chatWatchdog = null;
+
+function armChatWatchdog(ws) {
+  clearTimeout(chatWatchdog);
+  // Twitch pings about every 5 minutes
+  chatWatchdog = setTimeout(
+    () => {
+      log("Chat went quiet, reconnecting.");
+      ws.close();
+    },
+    7 * 60 * 1000
+  );
+}
+
+function connectChat() {
+  const ws = new WebSocket(IRC_URL);
+  chatSocket = ws;
+
+  ws.onopen = () => {
+    ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+    // anonymous: read-only, no account
+    ws.send("PASS SCHMOOPIIE");
+    ws.send(`NICK justinfan${10000 + Math.floor(Math.random() * 80000)}`);
+    ws.send(`JOIN #${CHANNEL}`);
+    armChatWatchdog(ws);
+  };
+
+  ws.onmessage = (msg) => {
+    armChatWatchdog(ws);
+    for (const line of String(msg.data).split("\r\n")) {
+      if (!line) {
+        continue;
+      }
+      const message = parseIrc(line);
+      switch (message.command) {
+        case "PING":
+          ws.send(`PONG :${message.trailing ?? "tmi.twitch.tv"}`);
+          break;
+        case "RECONNECT":
+          ws.close();
+          break;
+        case "ROOMSTATE": {
+          const roomId = message.tags["room-id"];
+          if (!chat.connected) {
+            log(`Counting emotes in ${CHANNEL}.`);
+          }
+          chat.connected = true;
+          chatBackoff = 1000;
+          if (roomId && roomId !== chat.roomId) {
+            chat.roomId = roomId;
+            loadEmoteLists(roomId).catch((err) =>
+              log(`Emote lists failed: ${err.message ?? err}`)
+            );
+          }
+          break;
+        }
+        case "PRIVMSG":
+        case "USERNOTICE":
+          if (message.params[0] === `#${CHANNEL}`) {
+            onChatMessage(message);
+          }
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  ws.onclose = () => {
+    if (chatSocket !== ws) {
+      return;
+    }
+    chatSocket = null;
+    chat.connected = false;
+    clearTimeout(chatWatchdog);
+    const wait = chatBackoff;
+    chatBackoff = Math.min(chatBackoff * 2, 60 * 1000);
+    log(`Disconnected from chat, reconnecting in ${wait / 1000}s.`);
+    setTimeout(connectChat, wait);
+  };
+
+  ws.onerror = () => {
+    // onclose follows and handles the reconnect
+  };
+}
+
+function emoteDayList() {
+  flushEmotes();
+  let out = "";
+  for (const name of readdirSync(EMOTE_DIR).sort()) {
+    if (/^\d{4}-\d{2}-\d{2}\.tsv$/.test(name)) {
+      const mtime = Math.floor(statSync(join(EMOTE_DIR, name)).mtimeMs);
+      out += `${name.slice(0, 10)}\t${mtime}\n`;
+    }
+  }
+  return out;
+}
+
 // ----------------------------------------------------------------- http ---
 
 const KEY_HASH = createHash("sha256").update(API_KEY).digest();
@@ -562,6 +984,11 @@ const server = createServer((req, res) => {
         connected: state.connected,
         lastEventAt: state.lastEventAt,
         serverTime: Date.now(),
+        emotes: {
+          connected: chat.connected,
+          lastMessageAt: chat.lastMessageAt,
+          listsLoadedAt: chat.listsLoadedAt,
+        },
       }),
       "application/json"
     );
@@ -573,6 +1000,21 @@ const server = createServer((req, res) => {
   if (url.pathname === `/v1/${CHANNEL}/streams`) {
     return send(res, 200, readStreams());
   }
+  if (url.pathname === `/v1/${CHANNEL}/emotes/days`) {
+    return send(res, 200, emoteDayList());
+  }
+  if (url.pathname === `/v1/${CHANNEL}/emotes/day`) {
+    const day = url.searchParams.get("d") ?? "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return send(res, 404, "Not found\n");
+    }
+    flushEmotes();
+    try {
+      return send(res, 200, readFileSync(join(EMOTE_DIR, `${day}.tsv`)));
+    } catch {
+      return send(res, 404, "Not found\n");
+    }
+  }
   return send(res, 404, "Not found\n");
 });
 
@@ -580,7 +1022,26 @@ const server = createServer((req, res) => {
 
 async function main() {
   mkdirSync(CHANNEL_DIR, { recursive: true });
+  mkdirSync(EMOTE_DIR, { recursive: true });
   server.listen(PORT, () => log(`Serving on port ${PORT}.`));
+
+  // emote counting needs no Twitch login, so it runs even while the mod
+  // actions wait for a sign-in
+  connectChat();
+  setInterval(() => {
+    try {
+      flushEmotes();
+    } catch (err) {
+      log(`Saving emote counts failed: ${err.message ?? err}`);
+    }
+  }, EMOTE_FLUSH_MSECS);
+  setInterval(() => {
+    if (chat.roomId) {
+      loadEmoteLists(chat.roomId).catch((err) =>
+        log(`Emote lists failed: ${err.message ?? err}`)
+      );
+    }
+  }, EMOTE_LIST_MSECS);
 
   await ensureFreshToken();
   log(`Logged in as ${state.token.login}.`);
@@ -612,9 +1073,24 @@ async function main() {
   );
 }
 
-process.on("unhandledRejection", (err) => log(`Error: ${err?.message ?? err}`));
-process.on("SIGTERM", () => process.exit(0));
-main().catch((err) => {
-  log(`Fatal: ${err.message ?? err}`);
-  process.exit(1);
-});
+// Imported by the tests without starting anything
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  process.on("unhandledRejection", (err) =>
+    log(`Error: ${err?.message ?? err}`)
+  );
+  process.on("SIGTERM", () => {
+    try {
+      flushEmotes();
+    } catch {
+      // nothing more to save
+    }
+    process.exit(0);
+  });
+  main().catch((err) => {
+    log(`Fatal: ${err.message ?? err}`);
+    process.exit(1);
+  });
+}

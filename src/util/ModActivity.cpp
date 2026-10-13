@@ -779,4 +779,21 @@ pajlada::Signals::NoArgSignal &syncStatusChanged()
     return signal;
 }
 
+std::optional<NetworkRequest> remoteRequest(const QString &path,
+                                            const QUrlQuery &query)
+{
+    const auto config = remoteConfig();
+    if (!config)
+    {
+        return std::nullopt;
+    }
+    return serverRequest(*config, path, query);
+}
+
+QString remoteHost()
+{
+    const auto config = remoteConfig();
+    return config ? config->url.host() : QString();
+}
+
 }  // namespace chatterino::modactivity

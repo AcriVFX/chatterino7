@@ -7,11 +7,15 @@
 
 #pragma once
 
+#include "common/network/NetworkRequest.hpp"
+
 #include <pajlada/signals/signal.hpp>
 #include <QDateTime>
 #include <QString>
+#include <QUrlQuery>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace chatterino::modactivity {
@@ -88,5 +92,13 @@ SyncStatus syncStatus(const QString &channel);
 
 /// Fires in the GUI thread after each sync attempt
 pajlada::Signals::NoArgSignal &syncStatusChanged();
+
+/// A GET request to the mod tracker server named in remote.json, carrying
+/// its keys, or nothing without remote.json. Used by the Emote stats sync.
+std::optional<NetworkRequest> remoteRequest(const QString &path,
+                                            const QUrlQuery &query = {});
+
+/// Host name of the mod tracker server, empty without remote.json
+QString remoteHost();
 
 }  // namespace chatterino::modactivity
