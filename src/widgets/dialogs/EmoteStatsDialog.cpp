@@ -34,6 +34,7 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QScrollBar>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QThreadPool>
@@ -875,8 +876,12 @@ void EmoteStatsDialog::fillTable()
     auto *table = this->ui_.table;
     const auto sortColumn = table->horizontalHeader()->sortIndicatorSection();
     const auto sortOrder = table->horizontalHeader()->sortIndicatorOrder();
+    const auto scroll = table->verticalScrollBar()->value();
     table->setSortingEnabled(false);
-    table->clearContents();
+    // Removing the rows first matters: filling a table that still has its
+    // sorted rows (clearContents) took seconds for ~800 emotes and froze the
+    // app on every reload
+    table->setRowCount(0);
     table->setRowCount(static_cast<int>(rows.size()));
     const auto maxMessages = rows.empty() ? 0 : rows.front().messages;
     for (int r = 0; std::cmp_less(r, rows.size()); ++r)
@@ -911,6 +916,7 @@ void EmoteStatsDialog::fillTable()
     table->setSortingEnabled(true);
     table->sortByColumn(sortColumn, sortOrder);
     this->applySearch();
+    table->verticalScrollBar()->setValue(scroll);
 
     // not used
     if (unused.isEmpty())
