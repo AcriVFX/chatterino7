@@ -48,7 +48,7 @@ constexpr size_t RECENT_IDS = 5000;
 /// Days kept in memory after they were written (today and yesterday)
 constexpr size_t DAYS_IN_MEMORY = 2;
 
-const QString TOTAL_KEY = QStringLiteral("*");
+constexpr QStringView TOTAL_KEY = u"*";
 
 QString dataDir(const QString &channel, const QString &part)
 {
@@ -139,7 +139,8 @@ void readDay(const QString &path, Day &day)
         bucket.count = std::max(bucket.count, count);
         if (!parts[4].isEmpty())
         {
-            for (auto user : parts[4].split(u','))
+            const auto users = parts[4].split(u',');
+            for (auto user : users)
             {
                 bucket.users.insert(user.toString());
             }
@@ -277,7 +278,8 @@ std::optional<Source> classifyName(const ImportNames &names,
 void countInto(Day &day, int hour, const QString &login,
                const std::vector<Use> &uses)
 {
-    auto &total = day[bucketKey(hour, TOTAL_KEY, TOTAL_KEY)];
+    auto &total =
+        day[bucketKey(hour, TOTAL_KEY.toString(), TOTAL_KEY.toString())];
     total.count++;
 
     QSet<QString> seen;
@@ -325,7 +327,7 @@ void runImport(const QString &channel, const QString &logDirectory,
         }
     };
 
-    for (const auto &fileName : files)
+    for (const auto &fileName : std::as_const(files))
     {
         auto fileMatch = fileRegex.match(fileName);
         if (!fileMatch.hasMatch())
@@ -365,7 +367,8 @@ void runImport(const QString &channel, const QString &logDirectory,
             }
             const auto msecs = time.toMSecsSinceEpoch();
             uses.clear();
-            for (auto word : QStringView(m.capturedView(5)).split(u' '))
+            const auto words = m.capturedView(5).split(u' ');
+            for (auto word : words)
             {
                 if (word.isEmpty())
                 {
@@ -483,7 +486,7 @@ void finishSync(const QString &channel, bool ok)
 
 /// Downloads `todo` one after the other, then finishes the sync
 void fetchDays(const QString &channel, QStringList todo,
-               QHash<QString, qint64> mtimes)
+               const QHash<QString, qint64> &mtimes)
 {
     if (todo.isEmpty())
     {
@@ -557,7 +560,8 @@ void fetchDayList(const QString &channel)
             state.notCounting = false;
             QStringList todo;
             QHash<QString, qint64> mtimes;
-            for (auto line : QString::fromUtf8(result.getData()).split(u'\n'))
+            const auto lines = QString::fromUtf8(result.getData()).split(u'\n');
+            for (const auto &line : lines)
             {
                 const auto parts = QStringView(line).split(u'\t');
                 if (parts.size() != 2 || !dayFromName(parts[0]))
@@ -751,8 +755,9 @@ Stats load(const QString &channel, qint64 from, qint64 to)
         {
             continue;
         }
-        for (const auto &name :
-             QDir(dir).entryList({QStringLiteral("*.tsv")}, QDir::Files))
+        const auto names =
+            QDir(dir).entryList({QStringLiteral("*.tsv")}, QDir::Files);
+        for (const auto &name : names)
         {
             if (auto day = dayFromName(QStringView(name).left(10)))
             {
@@ -776,7 +781,7 @@ Stats load(const QString &channel, qint64 from, qint64 to)
     for (const auto &[day, files] : days)
     {
         const auto dayStart = day * 24 * HOUR_MS;
-        if (dayStart + 24 * HOUR_MS <= fromHour * HOUR_MS || dayStart >= to)
+        if (dayStart + (24 * HOUR_MS) <= fromHour * HOUR_MS || dayStart >= to)
         {
             continue;
         }
@@ -792,7 +797,7 @@ Stats load(const QString &channel, qint64 from, qint64 to)
             {
                 continue;
             }
-            const auto hourStart = dayStart + parts[0].toInt() * HOUR_MS;
+            const auto hourStart = dayStart + (parts[0].toInt() * HOUR_MS);
             if (hourStart < fromHour * HOUR_MS || hourStart >= to)
             {
                 continue;
@@ -807,8 +812,8 @@ Stats load(const QString &channel, qint64 from, qint64 to)
             total.messages += it.value().count;
             for (const auto &user : it.value().users)
             {
-                auto id = userIds.constFind(user);
-                if (id == userIds.constEnd())
+                auto id = userIds.find(user);
+                if (id == userIds.end())
                 {
                     id = userIds.insert(user, static_cast<int>(userIds.size()));
                 }

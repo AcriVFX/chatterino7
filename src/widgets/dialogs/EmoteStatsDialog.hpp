@@ -66,7 +66,7 @@ private:
     void reload();
     /// Refills the table from the numbers already read
     void fillTable();
-    void applySearch();
+    void applySearch() const;
     void updateFooter();
     /// Reads the chat logs once, the first time the window opens
     void startLogImport();

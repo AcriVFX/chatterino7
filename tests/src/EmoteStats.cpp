@@ -156,7 +156,7 @@ TEST(EmoteStats, ImportsChatLogs)
 
     // the log's times are local, so read every hour
     auto stats =
-        emotestats::load("statslog", 0, at(23, 0) + 7 * 24 * 3600000LL);
+        emotestats::load("statslog", 0, at(23, 0) + (7LL * 24 * 3600000));
     EXPECT_EQ(stats.totalMessages, 3);
     const auto *ome = findRow(stats, Source::SevenTv, "omE");
     ASSERT_NE(ome, nullptr);

@@ -67,16 +67,16 @@ constexpr int KEY_ROLE = Qt::UserRole + 1;
 constexpr int SHARE_ROLE = Qt::UserRole + 2;
 
 // colors of the approved mockup
-const QColor WINDOW_COLOR(0x161616);
-const QColor ROW_COLOR(0x1b1b1b);
-const QColor ROW_ALT_COLOR(0x1f1f1f);
-const QColor HOVER_COLOR(0x262a30);
-const QColor TEXT_COLOR(0xe4e4e4);
-const QColor DIM_COLOR(0x8f8f8f);
-const QColor TRACK_COLOR(0x262626);
-const QColor BAR_COLOR(0x3b6fa8);
-const QColor TILE_COLOR(0x2b2b2b);
-const QColor TILE_TEXT_COLOR(0xcfcfcf);
+constexpr QColor WINDOW_COLOR(0x16, 0x16, 0x16);
+constexpr QColor ROW_COLOR(0x1b, 0x1b, 0x1b);
+constexpr QColor ROW_ALT_COLOR(0x1f, 0x1f, 0x1f);
+constexpr QColor HOVER_COLOR(0x26, 0x2a, 0x30);
+constexpr QColor TEXT_COLOR(0xe4, 0xe4, 0xe4);
+constexpr QColor DIM_COLOR(0x8f, 0x8f, 0x8f);
+constexpr QColor TRACK_COLOR(0x26, 0x26, 0x26);
+constexpr QColor BAR_COLOR(0x3b, 0x6f, 0xa8);
+constexpr QColor TILE_COLOR(0x2b, 0x2b, 0x2b);
+constexpr QColor TILE_TEXT_COLOR(0xcf, 0xcf, 0xcf);
 
 constexpr std::array<const char *, 4> RANGE_NAMES{
     "This stream",
@@ -256,7 +256,7 @@ public:
         }
         const auto name = index.data().toString();
         const int left = option.rect.left() + 8;
-        const int top = option.rect.center().y() - size / 2;
+        const int top = option.rect.center().y() - (size / 2);
 
         std::optional<QPixmap> pixmap;
         auto it = this->emotes_.constFind(index.data(KEY_ROLE).toString());
@@ -646,7 +646,7 @@ EmoteStatsDialog::Range EmoteStatsDialog::currentRange() const
             if (streams.empty())
             {
                 return {
-                    .from = now - 12 * HOUR_MS,
+                    .from = now - (12 * HOUR_MS),
                     .to = end,
                     .label = "No stream seen yet, last 12 hours",
                     .unusedTitle = "Not used in the last 12 hours",
@@ -675,7 +675,7 @@ EmoteStatsDialog::Range EmoteStatsDialog::currentRange() const
         case 1:
         case 2: {
             const qint64 days = this->rangeIndex_ == 1 ? 7 : 30;
-            const auto from = now - days * DAY_MS;
+            const auto from = now - (days * DAY_MS);
             return {
                 .from = from,
                 .to = end,
@@ -738,7 +738,7 @@ void EmoteStatsDialog::fillTable()
         return;
     }
     const bool all =
-        this->sourceIndex_ >= static_cast<int>(SOURCE_ORDER.size());
+        std::cmp_greater_equal(this->sourceIndex_, SOURCE_ORDER.size());
     const auto shownSource =
         all ? Source::SevenTv
             : SOURCE_ORDER.at(static_cast<size_t>(this->sourceIndex_));
@@ -879,7 +879,7 @@ void EmoteStatsDialog::fillTable()
     table->clearContents();
     table->setRowCount(static_cast<int>(rows.size()));
     const auto maxMessages = rows.empty() ? 0 : rows.front().messages;
-    for (int r = 0; r < static_cast<int>(rows.size()); ++r)
+    for (int r = 0; std::cmp_less(r, rows.size()); ++r)
     {
         const auto &row = rows.at(static_cast<size_t>(r));
         auto set = [&](int column, const QString &text, double sortValue,
@@ -933,7 +933,7 @@ void EmoteStatsDialog::fillTable()
     this->updateFooter();
 }
 
-void EmoteStatsDialog::applySearch()
+void EmoteStatsDialog::applySearch() const
 {
     const auto text = this->ui_.search->text().trimmed();
     auto *table = this->ui_.table;
