@@ -16,10 +16,8 @@ class HiddenUserModel : public SignalVectorModel<HiddenUser>
 public:
     explicit HiddenUserModel(QObject *parent);
 
-    enum Column {
-        Name = 0,
-        Since = 1,
-    };
+    static constexpr size_t NAME_COLUMN = 0;
+    static constexpr size_t SINCE_COLUMN = 1;
 
 protected:
     // turn a vector item into a model row

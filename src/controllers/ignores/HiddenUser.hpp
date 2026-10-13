@@ -10,6 +10,8 @@
 #include <pajlada/serialize.hpp>
 #include <QString>
 
+#include <utility>
+
 namespace chatterino {
 
 /// A user whose chat messages are hidden in every split (see
@@ -17,9 +19,9 @@ namespace chatterino {
 class HiddenUser
 {
 public:
-    HiddenUser(const QString &name, const QString &since)
+    HiddenUser(const QString &name, QString since)
         : name_(name.trimmed())
-        , since_(since)
+        , since_(std::move(since))
     {
     }
 
@@ -79,13 +81,13 @@ struct Deserialize<chatterino::HiddenUser> {
         if (!value.IsObject())
         {
             PAJLADA_REPORT_ERROR(error)
-            return chatterino::HiddenUser(name, since);
+            return {name, since};
         }
 
         chatterino::rj::getSafe(value, "name", name);
         chatterino::rj::getSafe(value, "since", since);
 
-        return chatterino::HiddenUser(name, since);
+        return {name, since};
     }
 };
 

@@ -871,7 +871,7 @@ void UserInfoPopup::installEvents()
         });
 
     // hidden users
-    QObject::connect(this->ui_.hideMessages, &QCheckBox::clicked,
+    QObject::connect(this->ui_.hideMessages, &QCheckBox::clicked, this,
                      [this](bool checked) {
                          if (checked)
                          {

@@ -19,7 +19,7 @@ HiddenUser HiddenUserModel::getItemFromRow(std::vector<QStandardItem *> &row,
                                            const HiddenUser &original)
 {
     return HiddenUser{
-        row[Column::Name]->data(Qt::DisplayRole).toString(),
+        row[NAME_COLUMN]->data(Qt::DisplayRole).toString(),
         original.getSince(),
     };
 }
@@ -27,11 +27,11 @@ HiddenUser HiddenUserModel::getItemFromRow(std::vector<QStandardItem *> &row,
 void HiddenUserModel::getRowFromItem(const HiddenUser &item,
                                      std::vector<QStandardItem *> &row)
 {
-    setStringItem(row[Column::Name], item.getName());
+    setStringItem(row[NAME_COLUMN], item.getName());
 
     // shown like 13.10.2026, stored as 2026-10-13
     auto since = QDate::fromString(item.getSince(), Qt::ISODate);
-    setStringItem(row[Column::Since],
+    setStringItem(row[SINCE_COLUMN],
                   since.isValid() ? since.toString("dd.MM.yyyy") : QString(),
                   false);
 }
