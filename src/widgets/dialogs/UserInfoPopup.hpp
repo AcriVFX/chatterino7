@@ -144,6 +144,7 @@ private:
         ChannelView *latestMessages = nullptr;
 
         LabelButton *usercardLabel = nullptr;
+        LabelButton *whisperLabel = nullptr;
         LabelButton *switchAvatars = nullptr;
 
         TimeoutWidget *timeoutWidget = nullptr;

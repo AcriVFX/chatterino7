@@ -658,6 +658,8 @@ set(SOURCE_FILES
         util/Variant.hpp
         util/VectorMessageSink.cpp
         util/VectorMessageSink.hpp
+        util/WhisperHistory.cpp
+        util/WhisperHistory.hpp
         util/WidgetHelpers.cpp
         util/WidgetHelpers.hpp
         util/WindowsHelper.cpp
@@ -785,6 +787,8 @@ set(SOURCE_FILES
         widgets/dialogs/UserInfoPopup.hpp
         widgets/dialogs/WelcomeDialog.cpp
         widgets/dialogs/WelcomeDialog.hpp
+        widgets/dialogs/WhispersWindow.cpp
+        widgets/dialogs/WhispersWindow.hpp
         widgets/dialogs/switcher/NewPopupItem.cpp
         widgets/dialogs/switcher/NewPopupItem.hpp
         widgets/dialogs/switcher/NewTabItem.cpp

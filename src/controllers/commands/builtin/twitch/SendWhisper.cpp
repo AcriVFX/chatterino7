@@ -22,6 +22,7 @@
 #include "singletons/StreamerMode.hpp"
 #include "singletons/Theme.hpp"
 #include "util/Twitch.hpp"
+#include "util/WhisperHistory.hpp"
 
 namespace {
 
@@ -93,7 +94,8 @@ QString formatWhisperError(HelixWhisperError error, const QString &message)
     return errorMessage;
 }
 
-bool appendWhisperMessageWordsLocally(const QStringList &words)
+bool appendWhisperMessageWordsLocally(const QStringList &words,
+                                      const QString &targetLogin)
 {
     auto *app = getApp();
 
@@ -172,7 +174,11 @@ bool appendWhisperMessageWordsLocally(const QStringList &words)
 
     b->flags.set(MessageFlag::DoNotTriggerNotification);
     b->flags.set(MessageFlag::Whisper);
+    b->whisperPartner = targetLogin.toLower();
     auto messagexD = b.release();
+
+    // Chatterino9: keep it for the Whispers window
+    whisperhistory::recordOutgoing(targetLogin, words.mid(2).join(' '));
 
     getApp()->getTwitch()->getWhispersChannel()->addMessage(
         messagexD, MessageContext::Original);
@@ -224,8 +230,8 @@ QString sendWhisper(const CommandContext &ctx)
              words{ctx.words}](const auto &targetUser) {
                 getHelix()->sendWhisper(
                     currentUser->getUserId(), targetUser.id, message,
-                    [words] {
-                        appendWhisperMessageWordsLocally(words);
+                    [words, login = targetUser.login] {
+                        appendWhisperMessageWordsLocally(words, login);
                     },
                     [channel, target, targetUser](auto error, auto message) {
                         auto errorMessage = formatWhisperError(error, message);

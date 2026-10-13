@@ -41,10 +41,12 @@
 #include "util/IncognitoBrowser.hpp"
 #include "util/QMagicEnum.hpp"
 #include "util/Twitch.hpp"
+#include "util/WhisperHistory.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/dialogs/ReplyThreadPopup.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/dialogs/UserInfoPopup.hpp"
+#include "widgets/dialogs/WhispersWindow.hpp"
 #include "widgets/helper/ScrollbarHighlight.hpp"
 #include "widgets/helper/SearchPopup.hpp"
 #include "widgets/Notebook.hpp"
@@ -2604,6 +2606,27 @@ void ChannelView::handleMouseClick(QMouseEvent *event,
             if (!getSettings()->linksDoubleClickOnly)
             {
                 this->handleLinkClick(event, link, layout.get());
+            }
+
+            // Chatterino9: clicking a whisper's text opens the conversation
+            // in the Whispers window. Waits out a double click, which selects
+            // a word instead.
+            if (this->split_ != nullptr && link.type == Link::None &&
+                !this->clickTimer_.isActive())
+            {
+                auto partner = whisperhistory::partnerOf(*layout->getMessage());
+                if (!partner.isEmpty())
+                {
+                    QTimer::singleShot(
+                        QApplication::doubleClickInterval(), this,
+                        [this, partner] {
+                            if (!this->clickTimer_.isActive() &&
+                                !this->hasSelection())
+                            {
+                                WhispersWindow::showConversation(partner);
+                            }
+                        });
+                }
             }
 
             // Invoke to signal from EmotePopup.
