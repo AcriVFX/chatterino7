@@ -47,6 +47,7 @@
 #include "singletons/StreamerMode.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/EmoteStats.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/IrcHelpers.hpp"
@@ -103,6 +104,38 @@ bool hasEmotes(const Message &message)
         return dynamic_cast<EmoteElement *>(element.get()) != nullptr ||
                dynamic_cast<LayeredEmoteElement *>(element.get()) != nullptr;
     });
+}
+
+/// Counts the emotes of a live chat message for the Emote stats window.
+/// Twitch emotes come from the message's tags, the others are looked up by
+/// name the way chat shows them.
+void recordEmoteUses(const TwitchChannel &channel, const Message &message,
+                     const QStringList &words,
+                     const std::vector<TwitchEmoteOccurrence> &twitchEmotes)
+{
+    std::vector<emotestats::Use> uses;
+    QSet<QString> twitchNames;
+    for (const auto &occurrence : twitchEmotes)
+    {
+        twitchNames.insert(occurrence.name.string);
+        uses.push_back({emotestats::Source::Twitch, occurrence.name.string});
+    }
+    for (const auto &word : words)
+    {
+        if (word.isEmpty() || twitchNames.contains(word))
+        {
+            continue;
+        }
+        if (auto source = emotestats::classify(channel, word))
+        {
+            uses.push_back({*source, word});
+        }
+    }
+    emotestats::recordMessage(channel.getName(), message.id, message.loginName,
+                              message.serverReceivedTime.isValid()
+                                  ? message.serverReceivedTime
+                                  : QDateTime::currentDateTime(),
+                              uses);
 }
 
 /// Does the message ping `login` with "@login"?
@@ -2069,6 +2102,16 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     QStringList splits = content.split(' ');
 
     builder.addWords(splits, twitchEmotes, textState);
+
+    // Chatterino9: emote usage for the Emote stats window, live messages of
+    // this channel only (not the history loaded on join or shared chat)
+    if (twitchChannel != nullptr && !args.isReceivedWhisper &&
+        !args.isSentWhisper && !tags.contains("historical") &&
+        !builder->flags.has(MessageFlag::SharedMessage))
+    {
+        recordEmoteUses(*twitchChannel, builder.message(), splits,
+                        twitchEmotes);
+    }
 
     QString stylizedUsername =
         stylizeUsername(builder->loginName, builder.message());

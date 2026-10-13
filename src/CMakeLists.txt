@@ -601,6 +601,8 @@ set(SOURCE_FILES
         util/DebugCount.hpp
         util/DisplayBadge.cpp
         util/DisplayBadge.hpp
+        util/EmoteStats.cpp
+        util/EmoteStats.hpp
         util/Expected.hpp
         util/FilesystemHelpers.hpp
         util/FormatTime.cpp
@@ -739,6 +741,8 @@ set(SOURCE_FILES
         widgets/dialogs/EditUserNotesDialog.hpp
         widgets/dialogs/EmotePopup.cpp
         widgets/dialogs/EmotePopup.hpp
+        widgets/dialogs/EmoteStatsDialog.cpp
+        widgets/dialogs/EmoteStatsDialog.hpp
 
         widgets/dialogs/font/FontDialog.cpp
         widgets/dialogs/font/FontDialog.hpp
