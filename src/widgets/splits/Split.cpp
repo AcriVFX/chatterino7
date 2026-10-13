@@ -765,11 +765,19 @@ PinnedMessageWidget *Split::getPinnedBanner() const
 
 void Split::updatePinnedBannerChannel()
 {
-    // Chatterino9: lane splits never show the pinned message or prediction
     auto *tc = dynamic_cast<TwitchChannel *>(this->getChannel().get());
-    this->pinnedBanner_->setChannel(this->laneStyle_ ? nullptr : tc);
-    this->predictionStrip_->setChannel(this->laneStyle_ ? nullptr : tc);
+    const bool show = this->showsPinnedMessage();
+    this->pinnedBanner_->setChannel(show ? tc : nullptr);
+    this->predictionStrip_->setChannel(show ? tc : nullptr);
     this->header_->updatePinButton();
+}
+
+bool Split::showsPinnedMessage() const
+{
+    // Chatterino9: filtered lane splits (Urgent, Check, FYI) never show the
+    // pinned message or prediction, the unfiltered chat split does even
+    // with lane style on
+    return !this->laneStyle_ || this->getFilters().empty();
 }
 
 void Split::updateInputPlaceholder()
@@ -1349,6 +1357,7 @@ void Split::setFilters(const QList<QUuid> ids)
 {
     this->view_->setFilters(ids);
     this->header_->updateChannelText();
+    this->updatePinnedBannerChannel();
 }
 
 QList<QUuid> Split::getFilters() const
