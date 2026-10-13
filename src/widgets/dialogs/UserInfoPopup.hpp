@@ -137,6 +137,7 @@ private:
 
         QCheckBox *block = nullptr;
         QCheckBox *ignoreHighlights = nullptr;
+        QCheckBox *hideMessages = nullptr;
         MarkdownLabel *notesPreview = nullptr;
         LabelButton *notesAdd = nullptr;
 

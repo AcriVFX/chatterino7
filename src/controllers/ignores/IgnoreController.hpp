@@ -11,6 +11,7 @@
 namespace chatterino {
 
 class IgnorePhrase;
+struct Message;
 struct TwitchEmoteOccurrence;
 
 enum class ShowIgnoredUsersMessages { Never, IfModerator, IfBroadcaster };
@@ -25,6 +26,17 @@ struct IgnoredMessageParameters {
 };
 
 bool isIgnoredMessage(IgnoredMessageParameters &&params);
+
+/// Whether `text` contains `login` as a whole word (case-insensitive), with
+/// or without a leading @. "acrivfx" is mentioned in "@AcriVFX hi" but not in
+/// "acrivfx_fan hi".
+bool mentionsLogin(const QString &text, const QString &login);
+
+/// Whether a split should leave this message out because its sender is on
+/// the hidden users list. Messages that mention the current user or reply to
+/// them stay (if showHiddenUsersMentions is on), and so do system, moderation
+/// and AutoMod messages and whispers.
+bool isHiddenMessage(const Message &message);
 
 /// @brief Processes replacement ignore-phrases for a message
 ///

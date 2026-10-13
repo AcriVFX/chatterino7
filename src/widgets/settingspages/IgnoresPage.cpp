@@ -7,6 +7,7 @@
 #include "Application.hpp"
 #include "common/Literals.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/ignores/HiddenUserModel.hpp"
 #include "controllers/ignores/IgnoreModel.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
@@ -16,6 +17,7 @@
 #include "widgets/helper/EditableModelView.hpp"
 
 #include <QCheckBox>
+#include <QDate>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QLabel>
@@ -32,6 +34,48 @@ static void addPhrasesTab(LayoutCreator<QVBoxLayout> box);
 static void addUsersTab(IgnoresPage &page, LayoutCreator<QVBoxLayout> box,
                         QStringListModel &model);
 
+namespace {
+
+void addHiddenUsersTab(IgnoresPage &page, LayoutCreator<QVBoxLayout> layout)
+{
+    auto label = layout.emplace<QLabel>(
+        "Messages from these users are hidden in every split. They stay in "
+        "your logs and still count for timeouts, spam and mod activity. You "
+        "can also hide a user from their usercard.");
+    label->setWordWrap(true);
+
+    layout.append(page.createCheckBox(
+        "Still show messages that mention you or reply to you",
+        getSettings()->showHiddenUsersMentions));
+
+    EditableModelView *view =
+        layout
+            .emplace<EditableModelView>(
+                (new HiddenUserModel(nullptr))
+                    ->initialized(&getSettings()->hiddenUsers))
+            .getElement();
+    view->setTitles({"Username", "Hidden since"});
+    view->getTableView()->horizontalHeader()->setSectionResizeMode(
+        QHeaderView::Fixed);
+    view->getTableView()->horizontalHeader()->setSectionResizeMode(
+        0, QHeaderView::Stretch);
+
+    QTimer::singleShot(1, view, [view] {
+        view->getTableView()->resizeColumnsToContents();
+        view->getTableView()->setColumnWidth(0, 200);
+    });
+
+    // We can safely ignore this signal connection since we own the view
+    std::ignore = view->addButtonPressed.connect([] {
+        getSettings()->hiddenUsers.append(HiddenUser{
+            "username",
+            QDate::currentDate().toString(Qt::ISODate),
+        });
+    });
+}
+
+}  // namespace
+
 IgnoresPage::IgnoresPage()
 {
     LayoutCreator<IgnoresPage> layoutCreator(this);
@@ -41,6 +85,7 @@ IgnoresPage::IgnoresPage()
     addPhrasesTab(tabs.appendTab(new QVBoxLayout, "Messages"));
     addUsersTab(*this, tabs.appendTab(new QVBoxLayout, "Users"),
                 this->userListModel_);
+    addHiddenUsersTab(*this, tabs.appendTab(new QVBoxLayout, "Hidden users"));
     this->onShow();
 }
 

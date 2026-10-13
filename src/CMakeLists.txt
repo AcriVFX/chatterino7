@@ -230,6 +230,9 @@ set(SOURCE_FILES
         controllers/hotkeys/HotkeyModel.cpp
         controllers/hotkeys/HotkeyModel.hpp
 
+        controllers/ignores/HiddenUser.hpp
+        controllers/ignores/HiddenUserModel.cpp
+        controllers/ignores/HiddenUserModel.hpp
         controllers/ignores/IgnoreController.cpp
         controllers/ignores/IgnoreController.hpp
         controllers/ignores/IgnoreModel.cpp

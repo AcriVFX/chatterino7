@@ -2493,6 +2493,11 @@ void MessageBuilder::parseThread(const QString &messageContent,
                                  const std::shared_ptr<MessageThread> &thread,
                                  const MessagePtr &parent)
 {
+    if (auto it = tags.find("reply-parent-user-login"); it != tags.end())
+    {
+        this->message().replyParentLogin = it.value().toString();
+    }
+
     if (thread)
     {
         // set references

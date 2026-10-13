@@ -10,6 +10,7 @@
 #include "controllers/highlights/HighlightBadge.hpp"
 #include "controllers/highlights/HighlightBlacklistUser.hpp"
 #include "controllers/highlights/HighlightPhrase.hpp"
+#include "controllers/ignores/HiddenUser.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
 #include "controllers/moderationactions/ModerationAction.hpp"
 #include "controllers/nicknames/Nickname.hpp"
@@ -19,6 +20,9 @@
 #include "util/WindowsHelper.hpp"
 
 #include <pajlada/signals/scoped-connection.hpp>
+#include <QDate>
+
+#include <algorithm>
 
 namespace {
 
@@ -82,6 +86,41 @@ bool Settings::isBlacklistedUser(const QString &username)
     }
 
     return false;
+}
+
+bool Settings::isHiddenUser(const QString &username)
+{
+    auto items = this->hiddenUsers.readOnly();
+
+    return std::ranges::any_of(*items, [&](const auto &hiddenUser) {
+        return hiddenUser.isMatch(username);
+    });
+}
+
+void Settings::hideUser(const QString &username)
+{
+    if (username.isEmpty() || this->isHiddenUser(username))
+    {
+        return;
+    }
+
+    this->hiddenUsers.append(HiddenUser{
+        username,
+        QDate::currentDate().toString(Qt::ISODate),
+    });
+}
+
+void Settings::unhideUser(const QString &username)
+{
+    const auto &vector = this->hiddenUsers.raw();
+
+    for (int i = static_cast<int>(vector.size()) - 1; i >= 0; i--)
+    {
+        if (vector[static_cast<size_t>(i)].isMatch(username))
+        {
+            this->hiddenUsers.removeAt(i);
+        }
+    }
 }
 
 bool Settings::isMutedChannel(const QString &channelName)
@@ -217,6 +256,8 @@ Settings::Settings(const Args &args, const QString &settingsDirectory,
                            this->blacklistedUsers);
     initializeSignalVector(this->signalHolder, this->ignoredMessagesSetting,
                            this->ignoredMessages);
+    initializeSignalVector(this->signalHolder, this->hiddenUsersSetting,
+                           this->hiddenUsers);
     initializeSignalVector(this->signalHolder, this->mutedChannelsSetting,
                            this->mutedChannels);
     initializeSignalVector(this->signalHolder, this->filterRecordsSetting,

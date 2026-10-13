@@ -9,6 +9,8 @@
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
+#include "messages/Message.hpp"
+#include "messages/MessageFlag.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchIrc.hpp"
 #include "singletons/Settings.hpp"
@@ -200,6 +202,72 @@ bool isIgnoredMessage(IgnoredMessageParameters &&params)
     }
 
     return false;
+}
+
+bool mentionsLogin(const QString &text, const QString &login)
+{
+    if (login.isEmpty())
+    {
+        return false;
+    }
+
+    auto isNameChar = [](QChar c) {
+        return c.isLetterOrNumber() || c == u'_';
+    };
+
+    qsizetype from = 0;
+    while (true)
+    {
+        auto at = text.indexOf(login, from, Qt::CaseInsensitive);
+        if (at < 0)
+        {
+            return false;
+        }
+
+        auto end = at + login.length();
+        if ((at == 0 || !isNameChar(text.at(at - 1))) &&
+            (end == text.length() || !isNameChar(text.at(end))))
+        {
+            return true;
+        }
+        from = at + 1;
+    }
+}
+
+bool isHiddenMessage(const Message &message)
+{
+    if (message.loginName.isEmpty() ||
+        message.flags.hasAny(
+            MessageFlag::System, MessageFlag::Timeout, MessageFlag::Untimeout,
+            MessageFlag::ClearChat, MessageFlag::ModerationAction,
+            MessageFlag::AutoMod, MessageFlag::AutoModOffendingMessageHeader,
+            MessageFlag::AutoModOffendingMessage, MessageFlag::Whisper,
+            MessageFlag::Subscription))
+    {
+        return false;
+    }
+
+    if (!getSettings()->isHiddenUser(message.loginName))
+    {
+        return false;
+    }
+
+    if (getSettings()->showHiddenUsersMentions)
+    {
+        auto current = getApp()->getAccounts()->twitch.getCurrent();
+        if (!current->isAnon())
+        {
+            const auto &me = current->getUserName();
+            if (message.replyParentLogin.compare(me, Qt::CaseInsensitive) ==
+                    0 ||
+                mentionsLogin(message.messageText, me))
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 void processIgnorePhrases(const std::vector<IgnorePhrase> &phrases,
