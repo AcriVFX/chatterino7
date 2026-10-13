@@ -495,6 +495,11 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
         user.emplace<QCheckBox>("Block").assign(&this->ui_.block);
         user.emplace<QCheckBox>("Ignore highlights")
             .assign(&this->ui_.ignoreHighlights);
+        user.emplace<QCheckBox>("Hide messages")
+            .assign(&this->ui_.hideMessages);
+        this->ui_.hideMessages->setToolTip(
+            "Hide their messages in every split, except ones that mention you "
+            "or reply to you (Settings, Ignores, Hidden users)");
         // visibility of this is updated in setData
 
         user.emplace<LabelButton>("Add notes", this)
@@ -864,6 +869,19 @@ void UserInfoPopup::installEvents()
             }
             this->updateSpamNow();
         });
+
+    // hidden users
+    QObject::connect(this->ui_.hideMessages, &QCheckBox::clicked,
+                     [this](bool checked) {
+                         if (checked)
+                         {
+                             getSettings()->hideUser(this->userName_);
+                         }
+                         else
+                         {
+                             getSettings()->unhideUser(this->userName_);
+                         }
+                     });
 
     // user notes
     QObject::connect(
@@ -1503,6 +1521,9 @@ void UserInfoPopup::updateUserData()
             this->userName_, Qt::CaseInsensitive) == 0;
     this->ui_.block->setVisible(!isMyself);
     this->ui_.ignoreHighlights->setVisible(!isMyself);
+    this->ui_.hideMessages->setChecked(
+        getSettings()->isHiddenUser(this->userName_));
+    this->ui_.hideMessages->setVisible(!isMyself);
 }
 
 void UserInfoPopup::loadAvatar(const QString &userID, const QString &pictureURL,
@@ -1845,6 +1866,9 @@ void UserInfoPopup::updateKickUserData()
     bool isMyself = false;  // FIXME: kick account
     this->ui_.block->setVisible(!isMyself);
     this->ui_.ignoreHighlights->setVisible(!isMyself);
+    this->ui_.hideMessages->setChecked(
+        getSettings()->isHiddenUser(this->userName_));
+    this->ui_.hideMessages->setVisible(!isMyself);
 }
 
 void UserInfoPopup::onKickProfilePictureClick(Qt::MouseButton button)

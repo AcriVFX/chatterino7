@@ -189,3 +189,34 @@ TEST_F(TestIgnoreController, processIgnorePhrases)
             << "' and output '" << message << "'";
     }
 }
+
+TEST(IgnoreController, mentionsLogin)
+{
+    struct TestCase {
+        QString text;
+        bool expected;
+    };
+
+    std::vector<TestCase> tests{
+        {"@acrivfx warum wurde ich getimeouted", true},
+        {"@AcriVFX hi", true},
+        {"acrivfx", true},
+        {"was sagt acrivfx dazu?", true},
+        {"acrivfx, komm mal", true},
+        {"(acrivfx)", true},
+        {"acrivfx_fan hi", false},
+        {"hi notacrivfx", false},
+        {"acrivfx2 hi", false},
+        {"acri ist der beste mod", false},
+        {"", false},
+        {"acrivfx_fan und acrivfx", true},
+    };
+
+    for (const auto &test : tests)
+    {
+        EXPECT_EQ(mentionsLogin(test.text, "acrivfx"), test.expected)
+            << test.text;
+    }
+
+    EXPECT_FALSE(mentionsLogin("acrivfx", ""));
+}

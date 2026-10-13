@@ -105,6 +105,9 @@ struct Message {
     // The root of the thread does not have replyThread set.
     std::shared_ptr<MessageThread> replyThread;
     MessagePtr replyParent;
+    /// Login of the user this message replies to (from the
+    /// reply-parent-user-login tag), even if their message is not loaded
+    QString replyParentLogin;
     enum class ReplyStatus : std::uint8_t {
         /// message has no reply thread, and message is not replyable
         ///

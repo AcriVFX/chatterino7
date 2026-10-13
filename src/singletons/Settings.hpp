@@ -17,6 +17,7 @@
 #include "controllers/highlights/HighlightBadge.hpp"
 #include "controllers/highlights/HighlightBlacklistUser.hpp"
 #include "controllers/highlights/HighlightPhrase.hpp"
+#include "controllers/ignores/HiddenUser.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
 #include "controllers/logging/ChannelLog.hpp"
 #include "controllers/moderationactions/ModerationAction.hpp"
@@ -497,6 +498,10 @@ public:
     BoolSetting enableTwitchBlockedUsers = {"/ignore/enableTwitchBlockedUsers",
                                             true};
     IntSetting showBlockedUsersMessages = {"/ignore/showBlockedUsers", 0};
+    /// Hidden users: still show their messages that mention you or reply to
+    /// you
+    BoolSetting showHiddenUsersMentions = {"/ignore/hiddenUsersShowMentions",
+                                           true};
 
     /// Moderation
     QStringSetting timeoutAction = {"/moderation/timeoutAction", "Disable"};
@@ -840,6 +845,8 @@ private:
         blacklistedUsersSetting = {"/highlighting/blacklist"};
     ChatterinoSetting<std::vector<IgnorePhrase>> ignoredMessagesSetting = {
         "/ignore/phrases"};
+    ChatterinoSetting<std::vector<HiddenUser>> hiddenUsersSetting = {
+        "/ignore/hiddenUsers"};
     ChatterinoSetting<std::vector<QString>> mutedChannelsSetting = {
         "/pings/muted"};
     ChatterinoSetting<std::vector<FilterRecordPtr>> filterRecordsSetting = {
@@ -857,6 +864,7 @@ public:
     SignalVector<HighlightBadge> highlightedBadges;
     SignalVector<HighlightBlacklistUser> blacklistedUsers;
     SignalVector<IgnorePhrase> ignoredMessages;
+    SignalVector<HiddenUser> hiddenUsers;
     SignalVector<FilterRecordPtr> filterRecords;
     SignalVector<Nickname> nicknames;
     SignalVector<ModerationAction> moderationActions;
@@ -864,6 +872,11 @@ public:
 
     bool isHighlightedUser(const QString &username);
     bool isBlacklistedUser(const QString &username);
+    bool isHiddenUser(const QString &username);
+    /// Adds the user to the hidden users (no-op if they already are)
+    void hideUser(const QString &username);
+    /// Removes every entry for the user from the hidden users
+    void unhideUser(const QString &username);
     bool isMutedChannel(const QString &channelName);
     bool toggleMutedChannel(const QString &channelName);
     std::optional<QString> matchNickname(const QString &username);

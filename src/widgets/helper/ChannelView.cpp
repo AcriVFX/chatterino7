@@ -11,6 +11,7 @@
 #include "controllers/commands/Command.hpp"
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/filters/FilterSet.hpp"
+#include "controllers/ignores/IgnoreController.hpp"
 #include "debug/Benchmark.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
@@ -525,6 +526,19 @@ void ChannelView::initializeSignals()
                                        [this] {
                                            this->queueLayout();
                                        });
+
+    // hidden users changed: refill the split from its channel so their
+    // messages disappear or come back right away
+    auto refill = [this] {
+        if (this->context_ == Context::None && this->underlyingChannel_)
+        {
+            this->setChannel(this->underlyingChannel_);
+        }
+    };
+    this->signalHolder_.managedConnect(
+        getSettings()->hiddenUsers.delayedItemsChanged, refill);
+    getSettings()->showHiddenUsersMentions.connect(refill, this->signalHolder_,
+                                                   false);
 }
 
 Scrollbar *ChannelView::scrollbar()
@@ -1275,6 +1289,13 @@ bool ChannelView::foldsRepeats() const
 
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
+    // hidden users: only splits, the usercard, reply threads and search
+    // still show everything
+    if (this->context_ == Context::None && isHiddenMessage(*m))
+    {
+        return false;
+    }
+
     // filtered lanes show timeouts only as the chip on the message; the
     // unfiltered chat keeps the timeout line too
     if (m->flags.has(MessageFlag::Timeout) && this->isLaneStyle() &&
