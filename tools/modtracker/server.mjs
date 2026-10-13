@@ -617,14 +617,16 @@ function ffzNames(body, setIds = null) {
 const LOADERS = {
   seventvChannel: async (id) =>
     new Set(
-      ((await getJson(`${SEVENTV_URL}/v3/users/twitch/${id}`))?.emote_set
-        ?.emotes ?? []).map((e) => e.name)
+      (
+        (await getJson(`${SEVENTV_URL}/v3/users/twitch/${id}`))?.emote_set
+          ?.emotes ?? []
+      ).map((e) => e.name)
     ),
   seventvGlobal: async () =>
     new Set(
-      ((await getJson(`${SEVENTV_URL}/v3/emote-sets/global`))?.emotes ?? []).map(
-        (e) => e.name
-      )
+      (
+        (await getJson(`${SEVENTV_URL}/v3/emote-sets/global`))?.emotes ?? []
+      ).map((e) => e.name)
     ),
   bttvChannel: async (id) => {
     const body = await getJson(`${BTTV_URL}/3/cached/users/twitch/${id}`);
@@ -676,7 +678,8 @@ export function parseIrc(line) {
     const space = rest.indexOf(" ");
     for (const pair of rest.slice(1, space).split(";")) {
       const eq = pair.indexOf("=");
-      tags[eq < 0 ? pair : pair.slice(0, eq)] = eq < 0 ? "" : pair.slice(eq + 1);
+      tags[eq < 0 ? pair : pair.slice(0, eq)] =
+        eq < 0 ? "" : pair.slice(eq + 1);
     }
     rest = rest.slice(space + 1);
   }
@@ -858,10 +861,13 @@ let chatWatchdog = null;
 function armChatWatchdog(ws) {
   clearTimeout(chatWatchdog);
   // Twitch pings about every 5 minutes
-  chatWatchdog = setTimeout(() => {
-    log("Chat went quiet, reconnecting.");
-    ws.close();
-  }, 7 * 60 * 1000);
+  chatWatchdog = setTimeout(
+    () => {
+      log("Chat went quiet, reconnecting.");
+      ws.close();
+    },
+    7 * 60 * 1000
+  );
 }
 
 function connectChat() {
@@ -1068,7 +1074,10 @@ async function main() {
 }
 
 // Imported by the tests without starting anything
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   process.on("unhandledRejection", (err) =>
     log(`Error: ${err?.message ?? err}`)
   );
