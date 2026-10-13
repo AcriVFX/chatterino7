@@ -187,11 +187,24 @@ async function deviceSignIn() {
   }
 }
 
-async function refreshToken() {
+// Twitch refresh tokens of a Public app work only once: two renewals racing
+// with the same one make the second fail and throw the login away. So every
+// caller shares the renewal that is already running.
+let renewal = null;
+
+function refreshToken() {
+  renewal ??= renewToken().finally(() => {
+    renewal = null;
+  });
+  return renewal;
+}
+
+async function renewToken() {
+  const used = state.token.refreshToken;
   const refresh = await postForm(`${ID_URL}/oauth2/token`, {
     client_id: CLIENT_ID,
     grant_type: "refresh_token",
-    refresh_token: state.token.refreshToken,
+    refresh_token: used,
   });
   if (refresh.ok) {
     await storeGrant(refresh.body);
@@ -199,6 +212,10 @@ async function refreshToken() {
     return;
   }
   if (refresh.status === 400 || refresh.status === 401) {
+    if (state.token?.refreshToken !== used) {
+      // renewed elsewhere in the meantime
+      return;
+    }
     // Revoked or expired (more than 30 days unused): start over
     log("Twitch login is no longer valid. A new sign-in is needed.");
     try {
@@ -207,15 +224,31 @@ async function refreshToken() {
       // nothing to move
     }
     state.token = null;
-    await deviceSignIn();
+    await signInOnce();
     return;
   }
   throw new Error(`token refresh failed (${refresh.status})`);
 }
 
+let signIn = null;
+
+/// Only one device sign-in at a time, however many callers need it
+function signInOnce() {
+  signIn ??= deviceSignIn().finally(() => {
+    signIn = null;
+  });
+  return signIn;
+}
+
 async function ensureFreshToken() {
+  if (renewal) {
+    await renewal;
+  }
   if (!state.token) {
-    state.token = loadToken() ?? (await deviceSignIn());
+    state.token = loadToken();
+  }
+  if (!state.token) {
+    await signInOnce();
   }
   if (state.token.expiresAt - Date.now() < 10 * 60 * 1000) {
     await refreshToken();
