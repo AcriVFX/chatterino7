@@ -305,6 +305,7 @@ public:
     };
 
     /// Behaviour
+    /// Chatterino9: unused, pinned messages always stay up now
     BoolSetting alwaysShowPinnedMessage = {"/behaviour/alwaysShowPinnedMessage",
                                            false};
     BoolSetting allowDuplicateMessages = {"/behaviour/allowDuplicateMessages",

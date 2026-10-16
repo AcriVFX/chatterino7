@@ -23,6 +23,7 @@
 #include <pajlada/signals/signalholder.hpp>
 #include <QColor>
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QRegularExpression>
 
 #include <atomic>
@@ -409,6 +410,13 @@ public:
      * Only has effect when the local user has moderator privileges.
      */
     void refreshPinnedMessage();
+
+    /**
+     * Handles a pin or pin update from PubSub. Moderators re-fetch the pin
+     * from Helix. Everyone else can't (Get Pinned Chat Message is mod-only),
+     * so the pin is taken from the PubSub event itself (Chatterino9).
+     */
+    void applyPinnedChatUpdate(bool isUpdate, const QJsonObject &data);
 
     /**
      * Clears the pinned message for this channel immediately (e.g. on unpin

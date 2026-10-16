@@ -49,10 +49,17 @@ public:
         Signal<const QJsonObject &> redeemed;
     } pointReward;
 
+    struct PinnedChatUpdate {
+        QString channelID;
+        /// True for "update-message" (only the pin's timer changed)
+        bool isUpdate = false;
+        /// The event's "data" object as Twitch sent it
+        QJsonObject data;
+    };
+
     struct {
         /// Emitted when a message is pinned or its pin is updated.
-        /// The argument is the channel name.
-        Signal<const QString &> pinned;
+        Signal<const PinnedChatUpdate &> pinned;
         /// Emitted when the pinned message is removed.
         /// The argument is the channel name.
         Signal<const QString &> unpinned;

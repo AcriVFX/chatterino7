@@ -79,13 +79,10 @@ private:
     QLabel *footerLabel_ = nullptr;
 
     QTimer *progressTimer_ = nullptr;
-    QTimer *autoHideTimer_ = nullptr;
     /// Scaled cap for the message body.
     int messageMaxHeight_ = 110;
-    /// - `std::nullopt`: The user didn't toggle the widget yet.
-    /// - `false`: The user hid the popup.
-    /// - `true`: The user manually opened the popup.
-    std::optional<bool> userToggled_ = std::nullopt;
+    /// Message ID of the pin the user hid, empty while nothing is hidden.
+    QString hiddenPinID_;
     /// Invalid when no end time.
     QDateTime pinEndsAt_;
 

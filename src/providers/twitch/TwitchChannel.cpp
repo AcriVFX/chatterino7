@@ -64,6 +64,7 @@
 #include <QStringBuilder>
 #include <QThread>
 #include <QTimer>
+#include <QTimeZone>
 #include <rapidjson/document.h>
 
 #include <algorithm>
@@ -2608,6 +2609,159 @@ void TwitchChannel::refreshPinnedMessage()
 const HelixPinnedChatMessage *TwitchChannel::getPinnedMessage() const
 {
     return this->pinnedMessage_.get();
+}
+
+namespace {
+
+/// PubSub sends times as unix seconds or milliseconds (number or string);
+/// ISO strings are accepted too. Returns an invalid QDateTime for none.
+QDateTime pinnedChatTime(const QJsonValue &value)
+{
+    qint64 n = 0;
+    if (value.isDouble())
+    {
+        n = static_cast<qint64>(value.toDouble());
+    }
+    else if (value.isString())
+    {
+        const auto str = value.toString();
+        bool ok = false;
+        n = str.toLongLong(&ok);
+        if (!ok)
+        {
+            return QDateTime::fromString(str, Qt::ISODate);
+        }
+    }
+    if (n <= 0)
+    {
+        return {};
+    }
+    // anything past the year 5138 in seconds is really milliseconds
+    if (n > 100'000'000'000)
+    {
+        return QDateTime::fromMSecsSinceEpoch(n, QTimeZone::utc());
+    }
+    return QDateTime::fromSecsSinceEpoch(n, QTimeZone::utc());
+}
+
+/// First non-empty value of @a key in @a objects
+QJsonValue firstOf(std::initializer_list<QJsonObject> objects,
+                   QLatin1StringView key)
+{
+    for (const auto &obj : objects)
+    {
+        auto value = obj.value(key);
+        if (!value.isUndefined() && !value.isNull() &&
+            !(value.isString() && value.toString().isEmpty()))
+        {
+            return value;
+        }
+    }
+    return {};
+}
+
+/// Turns the "data" of a pinned-chat-updates-v1 pin-message event into the
+/// Helix shape HelixPinnedChatMessage reads. Empty when there is no text.
+QJsonObject helixPinFromPubSub(const QJsonObject &data)
+{
+    const auto message = data["message"_L1].toObject();
+    const auto sender = message["sender"_L1].toObject();
+    const auto pinnedBy = data["pinned_by"_L1].toObject();
+    const auto content = message["content"_L1].toObject();
+
+    const auto text = firstOf({content, message}, "text"_L1).toString();
+    if (text.isEmpty())
+    {
+        return {};
+    }
+
+    const auto user = [](const QJsonObject &obj, const QString &prefix,
+                         QJsonObject &out) {
+        const auto displayName = firstOf({obj}, "display_name"_L1).toString();
+        auto login = firstOf({obj}, "login"_L1).toString();
+        if (login.isEmpty())
+        {
+            login = displayName.toLower();
+        }
+        out[prefix + u"_user_id"_s] = obj["id"_L1].toString();
+        out[prefix + u"_user_login"_s] = login;
+        out[prefix + u"_user_name"_s] =
+            displayName.isEmpty() ? login : displayName;
+    };
+
+    QJsonObject out;
+    user(sender, u"sender"_s, out);
+    user(pinnedBy, u"pinned_by"_s, out);
+    out["message_id"_L1] = firstOf({message, data}, "id"_L1).toString();
+    out["message"_L1] = QJsonObject{{"text"_L1, text}};
+
+    auto startsAt = pinnedChatTime(firstOf({message, data}, "starts_at"_L1));
+    if (!startsAt.isValid())
+    {
+        startsAt = pinnedChatTime(firstOf({message, data}, "sent_at"_L1));
+    }
+    if (!startsAt.isValid())
+    {
+        startsAt = QDateTime::currentDateTimeUtc();
+    }
+    out["starts_at"_L1] = startsAt.toUTC().toString(Qt::ISODate);
+
+    const auto endsAt = pinnedChatTime(firstOf({message, data}, "ends_at"_L1));
+    if (endsAt.isValid())
+    {
+        out["ends_at"_L1] = endsAt.toUTC().toString(Qt::ISODate);
+    }
+    return out;
+}
+
+}  // namespace
+
+void TwitchChannel::applyPinnedChatUpdate(bool isUpdate,
+                                          const QJsonObject &data)
+{
+    if (this->hasModRights())
+    {
+        this->refreshPinnedMessage();
+        return;
+    }
+
+    if (isUpdate)
+    {
+        // update-message only carries the new timer
+        if (!this->pinnedMessage_)
+        {
+            return;
+        }
+        const auto endsAt = pinnedChatTime(
+            firstOf({data, data["message"_L1].toObject()}, "ends_at"_L1));
+        auto updated =
+            std::make_unique<HelixPinnedChatMessage>(*this->pinnedMessage_);
+        if (endsAt.isValid())
+        {
+            updated->endsAt = endsAt;
+        }
+        else
+        {
+            updated->endsAt = std::nullopt;
+        }
+        this->pinnedMessage_ = std::move(updated);
+        this->pinnedMessageChanged.invoke();
+        return;
+    }
+
+    const auto helixShape = helixPinFromPubSub(data);
+    if (helixShape.isEmpty())
+    {
+        qCWarning(chatterinoTwitch)
+            << "Pinned message from PubSub had no text:" << data;
+        return;
+    }
+
+    // drop answers of an older Helix request
+    ++this->pinnedMessageRequestId_;
+    this->pinnedMessage_ =
+        std::make_unique<const HelixPinnedChatMessage>(helixShape);
+    this->pinnedMessageChanged.invoke();
 }
 
 void TwitchChannel::clearPinnedMessage()

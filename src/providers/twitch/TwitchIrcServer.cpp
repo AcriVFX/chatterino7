@@ -257,16 +257,17 @@ void TwitchIrcServer::initialize()
 
     this->signalHolder.managedConnect(
         getApp()->getTwitchPubSub()->pinnedChatUpdates.pinned,
-        [this](const QString &channelId) {
-            auto chan = this->getChannelOrEmptyByID(channelId);
-            postToThread([chan] {
+        [this](const PubSub::PinnedChatUpdate &update) {
+            auto chan = this->getChannelOrEmptyByID(update.channelID);
+            postToThread([chan, update] {
                 if (isAppAboutToQuit())
                 {
                     return;
                 }
                 if (auto *channel = dynamic_cast<TwitchChannel *>(chan.get()))
                 {
-                    channel->refreshPinnedMessage();
+                    channel->applyPinnedChatUpdate(update.isUpdate,
+                                                   update.data);
                 }
             });
         });
