@@ -182,7 +182,16 @@ void PubSubClient::handleMessageResponse(const PubSubMessageMessage &message)
         {
             case PubSubPinnedChatUpdatesV1Message::Type::PinMessage:
             case PubSubPinnedChatUpdatesV1Message::Type::UpdateMessage: {
-                this->manager_.pinnedChatUpdates.pinned.invoke(channelId);
+                qCDebug(chatterinoPubSub)
+                    << "pinned-chat-updates-v1" << innerMessage.typeString
+                    << innerMessage.data;
+                this->manager_.pinnedChatUpdates.pinned.invoke({
+                    .channelID = channelId,
+                    .isUpdate =
+                        innerMessage.type ==
+                        PubSubPinnedChatUpdatesV1Message::Type::UpdateMessage,
+                    .data = innerMessage.data,
+                });
             }
             break;
 

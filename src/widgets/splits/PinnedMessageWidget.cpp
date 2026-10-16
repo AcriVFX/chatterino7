@@ -47,7 +47,6 @@ PinnedMessageWidget::PinnedMessageWidget(QWidget *parent)
     , messageLabel_(new QLabel(this))
     , footerLabel_(new QLabel(this))
     , progressTimer_(new QTimer(this))
-    , autoHideTimer_(new QTimer(this))
 {
     this->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
 
@@ -131,15 +130,6 @@ PinnedMessageWidget::PinnedMessageWidget(QWidget *parent)
         this->tickProgress();
     });
 
-    // auto-hide timer
-    this->autoHideTimer_->setSingleShot(true);
-    QObject::connect(this->autoHideTimer_, &QTimer::timeout, this, [this] {
-        if (!this->userToggled_.value_or(false))
-        {
-            this->hide();
-        }
-    });
-
     this->scaleChangedEvent(this->scale());
     this->hide();
 }
@@ -200,7 +190,7 @@ void PinnedMessageWidget::setChannel(TwitchChannel *channel)
 {
     this->signalHolder_.clear();
     this->channel_ = channel;
-    this->autoHideTimer_->stop();
+    this->hiddenPinID_.clear();
 
     if (channel)
     {
@@ -262,7 +252,10 @@ std::unique_ptr<QMenu> PinnedMessageWidget::buildModMenu()
     menu->addSeparator();
 
     menu->addAction(u"Hide for Yourself"_s, this, [this] {
-        this->hide();
+        if (!this->isHidden())
+        {
+            this->toggleUserPinned();
+        }
     });
 
     return menu;
@@ -273,7 +266,6 @@ void PinnedMessageWidget::refresh()
     if (!this->channel_)
     {
         this->progressTimer_->stop();
-        this->autoHideTimer_->stop();
         this->hide();
         return;
     }
@@ -282,8 +274,7 @@ void PinnedMessageWidget::refresh()
     if (!pin)
     {
         this->progressTimer_->stop();
-        this->autoHideTimer_->stop();
-        this->userToggled_ = std::nullopt;
+        this->hiddenPinID_.clear();
         this->hide();
         return;
     }
@@ -315,32 +306,28 @@ void PinnedMessageWidget::refresh()
     const bool isMod = this->channel_->hasModRights();
     this->menuButton_->setVisible(isMod);
 
-    if (this->userToggled_.value_or(true))
+    // Chatterino9: the pin stays up until the user hides it. Hiding sticks
+    // for that pin only, a different pinned message shows again.
+    if (this->hiddenPinID_ != pin->messageID)
     {
+        this->hiddenPinID_.clear();
         this->show();
         this->updateMessageHeightIfNeeded();
-    }
-
-    this->autoHideTimer_->stop();
-    if (!getSettings()->alwaysShowPinnedMessage &&
-        !this->userToggled_.value_or(false))
-    {
-        this->autoHideTimer_->start(30s);
     }
 }
 
 void PinnedMessageWidget::toggleUserPinned()
 {
-    if (this->isVisible())
+    const auto *pin =
+        this->channel_ ? this->channel_->getPinnedMessage() : nullptr;
+    if (!this->isHidden() || !pin)
     {
-        this->userToggled_ = false;
-        this->autoHideTimer_->stop();
+        this->hiddenPinID_ = pin ? pin->messageID : QString{};
         this->hide();
     }
     else
     {
-        this->userToggled_ = true;
-        this->autoHideTimer_->stop();
+        this->hiddenPinID_.clear();
         this->show();
         this->updateMessageHeightIfNeeded();
     }
