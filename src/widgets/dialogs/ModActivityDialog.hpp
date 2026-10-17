@@ -22,6 +22,7 @@ class QDateEdit;
 class QGridLayout;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QPushButton;
 class QRadioButton;
 class QTabBar;
@@ -107,8 +108,13 @@ private:
                    int streamCount);
     void updateDetail();
     void exportCsv();
-    /// Footer line saying where the numbers come from
+    /// Footer line saying where the numbers come from and whether counting
+    /// is paused or stopped
     void updateSyncFooter();
+    /// The "..." menu: pause, stop or start counting, delete all counts
+    void fillCountingMenu(QMenu *menu);
+    /// Asks twice, then deletes every counted action of the channel
+    void confirmDelete();
 
     Range currentRange() const;
     bool isShown(const QString &name) const;
@@ -169,9 +175,13 @@ private:
         QLabel *syncDot = nullptr;
         QLabel *footNote = nullptr;
         QPushButton *retry = nullptr;
+        QPushButton *countingLink = nullptr;
     } ui_;
 
     QTimer *refreshTimer_ = nullptr;
+    /// Updates the footer when a pause runs out
+    QTimer *pauseTimer_ = nullptr;
+    QDateTime deletedAt_;
     bool updatingUi_ = false;
 };
 

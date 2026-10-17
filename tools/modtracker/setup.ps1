@@ -248,7 +248,7 @@ crashes 3 times, it stops the counter again.
 "@
     if (Test-Path $localDir) {
         Get-ChildItem -Path $localDir -File |
-            Where-Object { $_.Name -like 'actions-*.tsv' -or $_.Name -eq 'streams.tsv' -or $_.Name -eq 'server-sync.json' } |
+            Where-Object { $_.Name -like 'actions-*.tsv' -or $_.Name -eq 'streams.tsv' -or $_.Name -eq 'server-sync.json' -or $_.Name -eq 'tracking.json' } |
             Remove-Item -Force
         Write-Host 'Cleared the counts on this PC.'
     }
@@ -257,7 +257,7 @@ set -eu
 cd `$HOME/apps/modtracker
 docker compose stop modtracker
 n=`$(ls data/*/actions-*.tsv data/*/streams.tsv 2>/dev/null | wc -l)
-rm -f data/*/actions-*.tsv data/*/streams.tsv
+rm -f data/*/actions-*.tsv data/*/streams.tsv data/*/tracking.json
 echo "Cleared the counts on the server (`$n files)."
 since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
 docker compose up -d

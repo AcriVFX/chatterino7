@@ -11,7 +11,9 @@
 // - Counts how often each emote is used in the channel's chat for the Emote
 //   stats window. It reads chat as an anonymous viewer (no login at all) and
 //   writes emotes/YYYY-MM-DD.tsv in the same format as the app.
-// - Serves them read-only over HTTP to requests carrying the API key. The
+// - Serves them over HTTP to requests carrying the API key. The only writes
+//   it takes are pausing, stopping or starting the mod action counting and
+//   deleting the counted mod actions, from the Mod activity window. The
 //   Twitch token is never sent anywhere except to Twitch.
 //
 // No dependencies besides Node itself.
@@ -24,6 +26,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -70,6 +73,8 @@ const EMOTE_FLUSH_MSECS = 30 * 1000;
 // A live stream gets its "last seen" time written at most this often
 const STREAM_WRITE_MSECS = 5 * 60 * 1000;
 const STREAM_POLL_MSECS = 60 * 1000;
+// Longest pause the app can ask for
+const MAX_PAUSE_MSECS = 24 * 3600 * 1000;
 
 const state = {
   token: null,
@@ -349,6 +354,100 @@ function readStreams() {
   }
 }
 
+// ------------------------------------------------------------- tracking ---
+//
+// Whether mod actions are counted, set from the Mod activity window:
+// "on", "paused" until `until` (msecs, then on again by itself) or
+// "stopped" until it is started again. `since` is when that state began.
+// Emotes and streams are always counted.
+
+const TRACKING_FILE = join(CHANNEL_DIR, "tracking.json");
+const TRACKING_STATES = new Set(["on", "paused", "stopped"]);
+
+function loadTracking() {
+  try {
+    const saved = JSON.parse(readFileSync(TRACKING_FILE, "utf8"));
+    if (TRACKING_STATES.has(saved.state)) {
+      return {
+        state: saved.state,
+        until: Number(saved.until) || 0,
+        since: Number(saved.since) || 0,
+      };
+    }
+  } catch {
+    // never set: counting
+  }
+  return { state: "on", until: 0, since: 0 };
+}
+
+let tracking = null;
+
+function saveTracking() {
+  mkdirSync(CHANNEL_DIR, { recursive: true });
+  const tmp = `${TRACKING_FILE}.tmp`;
+  writeFileSync(tmp, JSON.stringify(tracking));
+  renameSync(tmp, TRACKING_FILE);
+}
+
+/// The current tracking state; a pause that ran out turns into "on"
+export function currentTracking(now = Date.now()) {
+  tracking ??= loadTracking();
+  if (tracking.state === "paused" && tracking.until <= now) {
+    tracking = { state: "on", until: 0, since: tracking.until };
+    saveTracking();
+  }
+  return tracking;
+}
+
+/// Sets the tracking state from a request body. Returns an error text or
+/// null.
+export function setTracking(body, now = Date.now()) {
+  const state = body?.state;
+  if (!TRACKING_STATES.has(state)) {
+    return "state must be on, paused or stopped";
+  }
+  let until = 0;
+  if (state === "paused") {
+    until = Number(body.until);
+    if (!Number.isFinite(until) || until <= now) {
+      return "until must be in the future";
+    }
+    until = Math.min(Math.round(until), now + MAX_PAUSE_MSECS);
+  }
+  tracking = { state, until, since: now };
+  saveTracking();
+  log(
+    state === "paused"
+      ? `Mod action counting paused until ${new Date(until).toISOString()}.`
+      : `Mod action counting ${state === "on" ? "started" : "stopped"}.`
+  );
+  return null;
+}
+
+/// Deletes every counted mod action and stream of the channel. Returns how
+/// many actions were deleted.
+export function deleteCounts() {
+  let actions = 0;
+  if (existsSync(CHANNEL_DIR)) {
+    for (const name of readdirSync(CHANNEL_DIR)) {
+      if (/^actions-\d{4}-\d{2}\.tsv$/.test(name)) {
+        const path = join(CHANNEL_DIR, name);
+        actions += readFileSync(path, "utf8")
+          .split("\n")
+          .filter(Boolean).length;
+        rmSync(path, { force: true });
+      }
+    }
+    rmSync(join(CHANNEL_DIR, "streams.tsv"), { force: true });
+  }
+  // the running stream gets its row again on the next check
+  if (live) {
+    live.written = 0;
+  }
+  log(`Deleted ${actions} counted mod actions and the stream list.`);
+  return actions;
+}
+
 // ------------------------------------------------------------- eventsub ---
 
 /// Twitch sends nanosecond timestamps; Date.parse wants at most milliseconds
@@ -367,7 +466,7 @@ const KINDS = {
 
 function onModerate(event, msecs) {
   // Shared chat actions come from other channels' mods (same as the app)
-  if (event.source_broadcaster_user_id) {
+  if (event.source_broadcaster_user_id || currentTracking().state !== "on") {
     return;
   }
   const kind = KINDS[event.action];
@@ -968,11 +1067,66 @@ function send(res, status, body, type = "text/plain; charset=utf-8") {
   res.end(body);
 }
 
+function readBody(req) {
+  return new Promise((resolve) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 4096) {
+        req.destroy();
+        resolve(null);
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(body || "{}"));
+      } catch {
+        resolve(null);
+      }
+    });
+    req.on("error", () => resolve(null));
+  });
+}
+
+function trackingJson() {
+  return { ...currentTracking() };
+}
+
+async function handlePost(req, res, url) {
+  const body = await readBody(req);
+  if (body === null) {
+    return send(res, 400, "Bad request\n");
+  }
+  if (url.pathname === `/v1/${CHANNEL}/tracking`) {
+    const error = setTracking(body);
+    if (error) {
+      return send(res, 400, `${error}\n`);
+    }
+    return send(res, 200, JSON.stringify(trackingJson()), "application/json");
+  }
+  if (url.pathname === `/v1/${CHANNEL}/delete`) {
+    // the app sends the channel name the user typed to confirm
+    if (body.confirm !== CHANNEL) {
+      return send(res, 400, "confirm must be the channel name\n");
+    }
+    const actions = deleteCounts();
+    return send(res, 200, JSON.stringify({ actions }), "application/json");
+  }
+  return send(res, 404, "Not found\n");
+}
+
 const server = createServer((req, res) => {
-  if (req.method !== "GET" || !authorized(req)) {
+  if (!authorized(req) || (req.method !== "GET" && req.method !== "POST")) {
     return send(res, 404, "Not found\n");
   }
   const url = new URL(req.url, "http://localhost");
+  if (req.method === "POST") {
+    return handlePost(req, res, url).catch((err) => {
+      log(`Request failed: ${err.message ?? err}`);
+      send(res, 500, "Failed\n");
+    });
+  }
   if (url.pathname === "/v1/status") {
     return send(
       res,
@@ -984,6 +1138,7 @@ const server = createServer((req, res) => {
         connected: state.connected,
         lastEventAt: state.lastEventAt,
         serverTime: Date.now(),
+        tracking: trackingJson(),
         emotes: {
           connected: chat.connected,
           lastMessageAt: chat.lastMessageAt,
