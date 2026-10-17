@@ -3,7 +3,8 @@
 // Everything comes from live EventSub moderation events: what the app sees
 // while it is open, plus what the mod tracker server counted around the
 // clock when Misc/ModActivity/remote.json names one. Kept with no time limit
-// in Misc/ModActivity/<channel>/.
+// in Misc/ModActivity/<channel>/. Counting can be paused, stopped and
+// started again, and the counts deleted, from the Mod activity window.
 
 #pragma once
 
@@ -15,6 +16,7 @@
 #include <QUrlQuery>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -100,5 +102,39 @@ std::optional<NetworkRequest> remoteRequest(const QString &path,
 
 /// Host name of the mod tracker server, empty without remote.json
 QString remoteHost();
+
+enum class Counting : std::uint8_t { On, Paused, Stopped };
+
+struct Tracking {
+    Counting counting = Counting::On;
+    /// Paused: when counting starts again by itself
+    QDateTime until;
+    /// When the pause or stop began
+    QDateTime since;
+    /// The server has not taken this state yet. It is sent again on every
+    /// sync until it has.
+    bool serverPending = false;
+    /// The server answered that it can't do this yet (needs setup.ps1
+    /// update)
+    bool serverOutdated = false;
+};
+
+/// Whether mod actions in `channel` are counted right now, on this PC and on
+/// the mod tracker server. A pause that ran out reads as On.
+Tracking tracking(const QString &channel);
+
+/// Pauses counting in `channel` until `until`, stops it or starts it again:
+/// on this PC right away and on the server named in remote.json as soon as it
+/// can be reached. Fires syncStatusChanged(). Must be called from the GUI
+/// thread.
+void setCounting(const QString &channel, Counting counting,
+                 const QDateTime &until = {});
+
+/// Deletes every counted mod action and stream of `channel`: on the server
+/// first when remote.json names one, then on this PC. `done` gets an empty
+/// text when it worked, or what went wrong, and then nothing was deleted.
+/// Must be called from the GUI thread.
+void deleteAll(const QString &channel,
+               std::function<void(const QString &error)> done);
 
 }  // namespace chatterino::modactivity

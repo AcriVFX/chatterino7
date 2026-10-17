@@ -8,6 +8,7 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QDateEdit>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -26,6 +27,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollBar>
@@ -459,6 +461,7 @@ ModActivityDialog::ModActivityDialog(QString channel, QWidget *parent)
           parent)
     , channel_(std::move(channel).toLower())
     , refreshTimer_(new QTimer(this))
+    , pauseTimer_(new QTimer(this))
 {
     this->setAttribute(Qt::WA_DeleteOnClose);
     this->setWindowTitle("Mod activity - " + this->channel_);
@@ -487,6 +490,11 @@ ModActivityDialog::ModActivityDialog(QString channel, QWidget *parent)
         this->reload();
     });
     tick->start();
+
+    this->pauseTimer_->setSingleShot(true);
+    QObject::connect(this->pauseTimer_, &QTimer::timeout, this, [this] {
+        this->updateSyncFooter();
+    });
 
     // numbers the mod tracker server counted while the app was closed
     this->signalHolder_.managedConnect(modactivity::syncStatusChanged(),
@@ -553,11 +561,29 @@ void ModActivityDialog::initUi()
             border-color: #4f8ff7; }
         QPushButton#link { background: transparent; border: none;
             color: #4f8ff7; padding: 2px 4px; }
-        QToolButton#mods { background: #232324; color: #f2f2f2;
-            border: 1px solid #353537; padding: 4px 10px; }
-        QToolButton#mods:hover, QToolButton#mods:pressed {
+        QPushButton#primary { background: #4f8ff7; color: #ffffff;
             border-color: #4f8ff7; }
-        QToolButton#mods::menu-indicator { image: none; }
+        QPushButton#danger { background: #e0503c; color: #ffffff;
+            border-color: #e0503c; }
+        QPushButton#danger:disabled { background: #3a2420; color: #9a7a74;
+            border-color: #5a3029; }
+        QToolButton#mods, QToolButton#more { background: #232324;
+            color: #f2f2f2; border: 1px solid #353537; padding: 4px 10px; }
+        QToolButton#more { padding: 1px 9px 5px 9px; }
+        QToolButton#mods:hover, QToolButton#mods:pressed,
+        QToolButton#more:hover, QToolButton#more:pressed {
+            border-color: #4f8ff7; }
+        QToolButton#mods::menu-indicator, QToolButton#more::menu-indicator {
+            image: none; }
+        QMenu::item { color: #f2f2f2; padding: 5px 16px 5px 22px; }
+        QMenu::item:selected { background: #2f4e7d; }
+        QMenu::separator { height: 1px; background: #353537;
+            margin: 4px 0; }
+        QLabel#menuHeader { color: #9a9a9e; font-size: 12px;
+            padding: 5px 16px 6px 14px; }
+        QLabel#heading { font-size: 14px; font-weight: 600; }
+        QLabel#error { color: #ff8a7a; }
+        QDialog { background: #1b1b1c; }
         QLineEdit, QDateEdit { background: #121213; color: #f2f2f2;
             border: 1px solid #353537; padding: 3px 6px; }
         QWidget#detail { background: #2a2a2b; }
@@ -604,6 +630,20 @@ void ModActivityDialog::initUi()
         custom->addWidget(this->ui_.toDate);
         row->addWidget(this->ui_.customRange);
         row->addStretch(1);
+
+        auto *more = new QToolButton;
+        more->setObjectName("more");
+        more->setText("...");
+        more->setToolTip("Pause, stop or delete the counting");
+        more->setCursor(Qt::PointingHandCursor);
+        more->setPopupMode(QToolButton::InstantPopup);
+        auto *countingMenu = new QMenu(more);
+        QObject::connect(countingMenu, &QMenu::aboutToShow, this,
+                         [this, countingMenu] {
+                             this->fillCountingMenu(countingMenu);
+                         });
+        more->setMenu(countingMenu);
+        row->addWidget(more, 0, Qt::AlignVCenter);
         root->addLayout(row);
 
         auto *line = new QFrame;
@@ -851,6 +891,17 @@ void ModActivityDialog::initUi()
         this->ui_.footNote->setObjectName("foot");
         this->ui_.footNote->setWordWrap(true);
         row->addWidget(this->ui_.footNote, 1);
+        this->ui_.countingLink = new QPushButton;
+        this->ui_.countingLink->setObjectName("link");
+        this->ui_.countingLink->setFlat(true);
+        this->ui_.countingLink->setCursor(Qt::PointingHandCursor);
+        this->ui_.countingLink->hide();
+        QObject::connect(this->ui_.countingLink, &QPushButton::clicked, this,
+                         [this] {
+                             modactivity::setCounting(
+                                 this->channel_, modactivity::Counting::On);
+                         });
+        row->addWidget(this->ui_.countingLink);
         this->ui_.retry = new QPushButton("Retry");
         this->ui_.retry->setObjectName("link");
         this->ui_.retry->setFlat(true);
@@ -870,18 +921,83 @@ void ModActivityDialog::initUi()
     this->updateSyncFooter();
 }
 
+namespace {
+
+/// "17:52", or "18.10. 01:30" when it is not today
+QString shortTime(const QDateTime &time)
+{
+    const auto local = time.toLocalTime();
+    const auto clock = QLocale().toString(local.time(), QLocale::ShortFormat);
+    return local.date() == QDate::currentDate()
+               ? clock
+               : local.toString("dd.MM. ") + clock;
+}
+
+}  // namespace
+
 void ModActivityDialog::updateSyncFooter()
 {
+    using modactivity::Counting;
+
     const auto status = modactivity::syncStatus(this->channel_);
+    const auto track = modactivity::tracking(this->channel_);
     const QString help("Click a column to sort, click a mod for details.");
     const auto synced =
         status.lastSync.isValid()
             ? QLocale().toString(status.lastSync.time(), QLocale::ShortFormat)
             : QString();
+    // the server has not taken the last pause, stop or start yet
+    const bool notTaken = status.configured && track.serverPending;
+    const auto notTakenText = [&](const QString &what) {
+        return track.serverOutdated
+                   ? QString("%1 needs setup.ps1 update to %2 too.")
+                         .arg(status.host, what)
+                   : QString("%1 not reached yet, it gets the %2 on the next "
+                             "sync.")
+                         .arg(status.host, what);
+    };
+    const auto where = status.configured
+                           ? QString("on this PC and %1").arg(status.host)
+                           : QString("on this PC");
 
     QString text;
     QString dotColor;
-    if (!status.configured)
+    QString linkText;
+    bool showRetry = false;
+    if (track.counting == Counting::Paused)
+    {
+        const auto until = shortTime(track.until);
+        text = notTaken ? QString("Counting paused until %1 on this PC. %2")
+                              .arg(until, notTakenText("pause"))
+                        : QString("Counting paused until %1 %2. Mod actions "
+                                  "in this time are not counted.")
+                              .arg(until, where);
+        dotColor = "#e0a03c";
+        linkText = "Resume now";
+        showRetry = notTaken && !track.serverOutdated;
+        this->pauseTimer_->start(std::chrono::milliseconds(std::max<qint64>(
+            0, QDateTime::currentDateTime().msecsTo(track.until) + 500)));
+    }
+    else if (track.counting == Counting::Stopped)
+    {
+        const auto since =
+            track.since.isValid() ? shortTime(track.since) : QString();
+        text = notTaken ? QString("Counting stopped since %1 on this PC. %2")
+                              .arg(since, notTakenText("stop"))
+                        : QString("Counting stopped since %1 %2. Nothing is "
+                                  "counted until you start it again.")
+                              .arg(since, where);
+        dotColor = notTaken ? "#e0a03c" : "#8f9bb3";
+        linkText = "Start counting";
+        showRetry = notTaken && !track.serverOutdated;
+    }
+    else if (notTaken)
+    {
+        text = QString("Counting on this PC. %1").arg(notTakenText("start"));
+        dotColor = "#e0a03c";
+        showRetry = !track.serverOutdated;
+    }
+    else if (!status.configured)
     {
         text = "Counts what Chatterino9 sees while it is open, kept with no "
                "time limit. " +
@@ -907,14 +1023,259 @@ void ModActivityDialog::updateSyncFooter()
                       .arg(status.host, shown)
                 : QString("%1 not reachable, %2").arg(status.host, shown);
         dotColor = "#e0a03c";
+        showRetry = true;
+    }
+    if (this->deletedAt_.isValid())
+    {
+        text = QString("All counts deleted at %1. %2")
+                   .arg(shortTime(this->deletedAt_), text);
     }
 
     this->ui_.footNote->setText(text);
     this->ui_.syncDot->setVisible(!dotColor.isEmpty());
     this->ui_.syncDot->setStyleSheet(
         QString("background: %1; border-radius: 3px;").arg(dotColor));
-    this->ui_.retry->setVisible(status.configured &&
-                                (!status.ok || status.needsSignIn));
+    this->ui_.countingLink->setText(linkText);
+    this->ui_.countingLink->setVisible(!linkText.isEmpty());
+    this->ui_.retry->setVisible(status.configured && showRetry);
+}
+
+void ModActivityDialog::fillCountingMenu(QMenu *menu)
+{
+    using modactivity::Counting;
+
+    menu->clear();
+    const auto track = modactivity::tracking(this->channel_);
+    const auto host = modactivity::remoteHost();
+
+    QString header;
+    QString dotColor;
+    if (track.counting == Counting::Paused)
+    {
+        header = "Paused until " + shortTime(track.until);
+        dotColor = "#e0a03c";
+    }
+    else if (track.counting == Counting::Stopped)
+    {
+        header = track.since.isValid()
+                     ? "Stopped since " + shortTime(track.since)
+                     : QString("Stopped");
+        dotColor = "#8f9bb3";
+    }
+    else
+    {
+        header = host.isEmpty() ? QString("Counting on this PC")
+                                : "Counting on this PC and " + host;
+        dotColor = "#4fbf72";
+    }
+    auto *label = new QLabel(
+        QString("<span style=\"color: %1\">&#9679;</span>&nbsp;&nbsp;%2")
+            .arg(dotColor, header.toHtmlEscaped()));
+    label->setObjectName("menuHeader");
+    label->setTextFormat(Qt::RichText);
+    auto *headerAction = new QWidgetAction(menu);
+    headerAction->setDefaultWidget(label);
+    headerAction->setEnabled(false);
+    menu->addAction(headerAction);
+    menu->addSeparator();
+
+    const auto set = [this](Counting counting, const QDateTime &until = {}) {
+        modactivity::setCounting(this->channel_, counting, until);
+    };
+    if (track.counting == Counting::On)
+    {
+        auto *pause = menu->addMenu("Pause counting");
+        const std::array<std::pair<const char *, qint64>, 3> lengths{{
+            {"30 minutes", 30 * MINUTE_MS},
+            {"1 hour", HOUR_MS},
+            {"4 hours", 4 * HOUR_MS},
+        }};
+        for (const auto &[name, msecs] : lengths)
+        {
+            pause->addAction(name, this, [set, msecs] {
+                set(Counting::Paused,
+                    QDateTime::currentDateTime().addMSecs(msecs));
+            });
+        }
+    }
+    else
+    {
+        menu->addAction(track.counting == Counting::Paused ? "Resume counting"
+                                                           : "Start counting",
+                        this, [set] {
+                            set(Counting::On);
+                        });
+    }
+    if (track.counting != Counting::Stopped)
+    {
+        menu->addAction("Stop counting", this, [set] {
+            set(Counting::Stopped);
+        });
+    }
+    menu->addSeparator();
+    menu->addAction("Delete all counts...", this, [this] {
+        this->confirmDelete();
+    });
+}
+
+void ModActivityDialog::confirmDelete()
+{
+    using modactivity::Counting;
+
+    const auto host = modactivity::remoteHost();
+    const auto locale = QLocale();
+    const auto actionCount =
+        locale.toString(static_cast<qlonglong>(this->actions_.size()));
+    const auto track = modactivity::tracking(this->channel_);
+
+    const auto makeDialog = [](QDialog &dialog, const QString &step,
+                               const QString &heading) {
+        dialog.setWindowTitle("Delete all counts");
+        dialog.setMinimumWidth(420);
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->setContentsMargins(16, 14, 16, 12);
+        layout->setSpacing(10);
+        auto *stepLabel = new QLabel(step);
+        stepLabel->setObjectName("foot");
+        layout->addWidget(stepLabel);
+        auto *headingLabel = new QLabel(heading);
+        headingLabel->setObjectName("heading");
+        layout->addWidget(headingLabel);
+        return layout;
+    };
+    const auto addText = [](QVBoxLayout *layout, const QString &text) {
+        auto *label = new QLabel(text);
+        label->setObjectName("dim");
+        label->setTextFormat(Qt::RichText);
+        label->setWordWrap(true);
+        layout->addWidget(label);
+        return label;
+    };
+
+    // step 1: what gets deleted
+    {
+        QDialog dialog(this);
+        auto *layout = makeDialog(
+            dialog, "Step 1 of 2",
+            QString("Delete all mod activity of %1?").arg(this->channel_));
+        QStringList lines;
+        lines << (this->actions_.empty()
+                      ? QString("&bull; no mod actions counted on this PC")
+                      : QString("&bull; <span style=\"color: #f2f2f2\"><b>%1 "
+                                "mod actions</b></span> counted since %2")
+                            .arg(actionCount, QDateTime::fromMSecsSinceEpoch(
+                                                  this->actions_.front().msecs)
+                                                  .toString("dd.MM.yyyy")));
+        lines << QString("&bull; <span style=\"color: #f2f2f2\"><b>%1 "
+                         "streams</b></span> in the stream list")
+                     .arg(this->streams_.size());
+        lines << (host.isEmpty()
+                      ? QString("&bull; on this PC")
+                      : QString("&bull; on this PC and on %1").arg(host));
+        addText(layout, lines.join("<br>"));
+        addText(layout, QString("Emote stats and your filters stay. %1")
+                            .arg(track.counting == Counting::Stopped
+                                     ? "Counting stays stopped."
+                                 : track.counting == Counting::Paused
+                                     ? "Counting stays paused."
+                                     : "Counting carries on as before."));
+
+        auto *buttons = new QHBoxLayout;
+        auto *exportFirst = new QPushButton("Export CSV first");
+        exportFirst->setObjectName("link");
+        exportFirst->setFlat(true);
+        exportFirst->setCursor(Qt::PointingHandCursor);
+        QObject::connect(exportFirst, &QPushButton::clicked, this, [this] {
+            this->exportCsv();
+        });
+        buttons->addWidget(exportFirst);
+        buttons->addStretch(1);
+        auto *cancel = new QPushButton("Cancel");
+        auto *next = new QPushButton("Continue");
+        next->setObjectName("primary");
+        cancel->setDefault(true);
+        QObject::connect(cancel, &QPushButton::clicked, &dialog,
+                         &QDialog::reject);
+        QObject::connect(next, &QPushButton::clicked, &dialog,
+                         &QDialog::accept);
+        buttons->addWidget(cancel);
+        buttons->addWidget(next);
+        layout->addLayout(buttons);
+        if (dialog.exec() != QDialog::Accepted)
+        {
+            return;
+        }
+    }
+
+    // step 2: type the channel name
+    QDialog dialog(this);
+    auto *layout = makeDialog(dialog, "Step 2 of 2", "This cannot be undone.");
+    addText(layout,
+            QString("Type <span style=\"color: #f2f2f2\"><b>%1</b></span> to "
+                    "delete all %2 mod actions for good.")
+                .arg(this->channel_, actionCount));
+    auto *input = new QLineEdit;
+    layout->addWidget(input);
+    if (!host.isEmpty())
+    {
+        addText(layout,
+                QString("If %1 can't be reached, nothing is deleted anywhere.")
+                    .arg(host));
+    }
+    auto *error = new QLabel;
+    error->setObjectName("error");
+    error->setWordWrap(true);
+    error->hide();
+    layout->addWidget(error);
+
+    auto *buttons = new QHBoxLayout;
+    buttons->addStretch(1);
+    auto *cancel = new QPushButton("Cancel");
+    auto *remove = new QPushButton("Delete for good");
+    remove->setObjectName("danger");
+    remove->setEnabled(false);
+    remove->setAutoDefault(false);
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(
+        input, &QLineEdit::textChanged, &dialog,
+        [this, remove](const QString &text) {
+            remove->setEnabled(text.trimmed().toLower() == this->channel_);
+        });
+    QPointer<QDialog> guard(&dialog);
+    QPointer<ModActivityDialog> self(this);
+    QObject::connect(remove, &QPushButton::clicked, &dialog, [=, this] {
+        remove->setEnabled(false);
+        cancel->setEnabled(false);
+        input->setEnabled(false);
+        remove->setText("Deleting...");
+        error->hide();
+        modactivity::deleteAll(this->channel_, [=](const QString &failed) {
+            if (self && failed.isEmpty())
+            {
+                self->deletedAt_ = QDateTime::currentDateTime();
+                self->updateSyncFooter();
+            }
+            if (!guard)
+            {
+                return;
+            }
+            if (failed.isEmpty())
+            {
+                guard->accept();
+                return;
+            }
+            error->setText(failed);
+            error->show();
+            remove->setText("Delete for good");
+            remove->setEnabled(true);
+            cancel->setEnabled(true);
+            input->setEnabled(true);
+        });
+    });
+    buttons->addWidget(cancel);
+    buttons->addWidget(remove);
+    layout->addLayout(buttons);
+    dialog.exec();
 }
 
 QWidget *ModActivityDialog::createFilterPopup()

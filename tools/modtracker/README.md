@@ -23,18 +23,29 @@ when the Mod activity window opens and every 3 minutes while it is open, and
 merges them into the local files. An action the app saw itself within 5
 seconds of the server's copy counts once.
 
-Endpoints, all `GET`, all behind Cloudflare Access and the API key:
+Endpoints, all behind Cloudflare Access and the API key:
 
-- `/v1/status`: `{channel, signedIn, needsSignIn, connected, lastEventAt, serverTime, emotes: {connected, lastMessageAt, listsLoadedAt}}`
-- `/v1/<channel>/actions?since=<msecs>`: action lines newer than `since`
-- `/v1/<channel>/streams`: `streams.tsv`
-- `/v1/<channel>/emotes/days`: one line per counted UTC day, `YYYY-MM-DD<TAB>mtime`
-- `/v1/<channel>/emotes/day?d=YYYY-MM-DD`: that day's emote counts
+- `GET /v1/status`: `{channel, signedIn, needsSignIn, connected, lastEventAt, serverTime, tracking: {state, until, since}, emotes: {connected, lastMessageAt, listsLoadedAt}}`
+- `GET /v1/<channel>/actions?since=<msecs>`: action lines newer than `since`
+- `GET /v1/<channel>/streams`: `streams.tsv`
+- `GET /v1/<channel>/emotes/days`: one line per counted UTC day, `YYYY-MM-DD<TAB>mtime`
+- `GET /v1/<channel>/emotes/day?d=YYYY-MM-DD`: that day's emote counts
+- `POST /v1/<channel>/tracking` with `{"state": "on" | "paused" | "stopped", "until": msecs}`:
+  pauses (until `until`, at most 24 hours), stops or starts counting mod
+  actions. Kept in `tracking.json`. Emotes and streams are always counted.
+- `POST /v1/<channel>/delete` with `{"confirm": "<channel>"}`: deletes every
+  counted mod action and the stream list, answers `{actions}`
 
 The Emote stats window (`src/util/EmoteStats.cpp`) downloads the days that
 changed when it opens and every 3 minutes while it is open, and merges them
 with what the app counted itself: per hour and emote the higher count and
 all chatters seen.
+
+The Mod activity window's "..." menu pauses, stops and starts the counting
+and deletes the counts, on the PC and the server together. A pause, stop or
+start the server did not get is sent again on the next sync. Deleting asks
+the server first and deletes nothing on the PC when the server can't be
+reached.
 
 To pause: `setup.ps1 stop` (clears the counted mod actions, keeps the
 sign-in and the emote stats). `setup.ps1 start` is a fresh start: it clears
