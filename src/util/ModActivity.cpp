@@ -431,7 +431,8 @@ int mergeActionsLocked(Store &st, const QString &channel,
     std::vector<Action> fresh;
     // new lines per month file, so each file is opened once
     std::unordered_map<QString, QString> lines;
-    for (const auto &raw : body.split('\n'))
+    const auto rawLines = body.split('\n');
+    for (const auto &raw : rawLines)
     {
         Action action;
         if (!parseAction(QString::fromUtf8(raw), action))
@@ -482,12 +483,10 @@ int mergeActionsLocked(Store &st, const QString &channel,
         std::ranges::stable_sort(
             data.actions.begin() + static_cast<std::ptrdiff_t>(oldSize),
             data.actions.end(), {}, &Action::msecs);
-        std::inplace_merge(
-            data.actions.begin(),
-            data.actions.begin() + static_cast<std::ptrdiff_t>(oldSize),
-            data.actions.end(), [](const Action &a, const Action &b) {
-                return a.msecs < b.msecs;
-            });
+        std::ranges::inplace_merge(
+            data.actions,
+            data.actions.begin() + static_cast<std::ptrdiff_t>(oldSize), {},
+            &Action::msecs);
     }
     return added;
 }

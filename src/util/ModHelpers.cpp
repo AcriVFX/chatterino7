@@ -289,8 +289,7 @@ public:
                                QRegularExpression::CaseInsensitiveOption);
     }
 
-    void parseLine(QString line, const QDate &date,
-                   std::vector<LogTimeout> &out)
+    void parseLine(QString line, QDate date, std::vector<LogTimeout> &out)
     {
         static const QRegularExpression lineRe(
             R"(^\[(\d\d):(\d\d):(\d\d)\] (.*)$)");
@@ -414,8 +413,8 @@ private:
 
 }  // namespace
 
-void parseLogTimeouts(const QString &content, const QDate &date,
-                      const QString &login, std::vector<LogTimeout> &out)
+void parseLogTimeouts(const QString &content, QDate date, const QString &login,
+                      std::vector<LogTimeout> &out)
 {
     LogTimeoutParser parser(login);
     for (const auto &line : content.split('\n'))

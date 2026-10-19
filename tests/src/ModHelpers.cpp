@@ -19,7 +19,10 @@ void writeLog(const QTemporaryDir &dir, const QString &day,
     file.write(content);
 }
 
-const QDateTime NOW(QDate(2026, 10, 18), QTime(12, 0));
+QDateTime now()
+{
+    return {QDate(2026, 10, 18), QTime(12, 0)};
+}
 
 }  // namespace
 
@@ -30,7 +33,7 @@ TEST(ModHelpers, UnbanOnTheNextDayDropsTheBan)
              "[23:50:00] spammer has been permanently banned.\r\n");
     writeLog(dir, "2026-10-18", "[09:00:00] modx: modx unbanned spammer.\r\n");
 
-    auto out = readLogTimeouts(dir.path(), "chan", "spammer", NOW, 7);
+    auto out = readLogTimeouts(dir.path(), "chan", "spammer", now(), 7);
     ASSERT_TRUE(out.empty());
 }
 
@@ -42,7 +45,7 @@ TEST(ModHelpers, UnbanDropsTheBanBeforeALaterTimeout)
              "[08:00:01] spammer has been timed out for 1s.\r\n"
              "[09:00:00] modx: modx unbanned spammer.\r\n");
 
-    auto out = readLogTimeouts(dir.path(), "chan", "spammer", NOW, 7);
+    auto out = readLogTimeouts(dir.path(), "chan", "spammer", now(), 7);
     ASSERT_EQ(out.size(), 1U);
     ASSERT_FALSE(out[0].isBan());
 }
@@ -54,7 +57,7 @@ TEST(ModHelpers, BotTimeoutAfterMidnight)
     writeLog(dir, "2026-10-18",
              "[00:00:01] spammer has been timed out for 10m.\r\n");
 
-    auto out = readLogTimeouts(dir.path(), "chan", "spammer", NOW, 7);
+    auto out = readLogTimeouts(dir.path(), "chan", "spammer", now(), 7);
     ASSERT_EQ(out.size(), 1U);
     ASSERT_TRUE(out[0].automatic);
     ASSERT_FALSE(out[0].countsAsModAction());
@@ -74,7 +77,7 @@ TEST(ModHelpers, EventSubLines)
              "[10:30:00] troll: modx: modx timed out spammer for 1d\r\n"
              "[11:00:00] modx: modx banned spammer: bye\r\n");
 
-    auto out = readLogTimeouts(dir.path(), "chan", "spammer", NOW, 7);
+    auto out = readLogTimeouts(dir.path(), "chan", "spammer", now(), 7);
     ASSERT_EQ(out.size(), 2U);
     ASSERT_EQ(out[0].seconds, 600);
     ASSERT_TRUE(out[0].countsAsModAction());
@@ -88,6 +91,6 @@ TEST(ModHelpers, LocalizedModUnban)
              "[08:00:00] spammer has been permanently banned.\r\n"
              "[09:00:00] 모드 somemod: somemod unbanned spammer.\r\n");
 
-    auto out = readLogTimeouts(dir.path(), "chan", "spammer", NOW, 7);
+    auto out = readLogTimeouts(dir.path(), "chan", "spammer", now(), 7);
     ASSERT_TRUE(out.empty());
 }
