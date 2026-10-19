@@ -59,6 +59,9 @@ public:
      **/
     bool setRerun(bool isRerun);
 
+    /// Chatterino9: unread count shown as a pill after the title, 0 hides it
+    void setBadgeCount(int count);
+
     /**
      * @brief Returns true if any split in this tab is live
      **/
@@ -164,6 +167,7 @@ private:
 
     bool isLive_{};
     bool isRerun_{};
+    int badgeCount_ = 0;
 
     int growWidth_ = 0;
 

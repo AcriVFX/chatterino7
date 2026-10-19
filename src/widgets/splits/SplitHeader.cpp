@@ -26,6 +26,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutHelper.hpp"
+#include "util/MentionHistory.hpp"
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
@@ -400,6 +401,14 @@ void SplitHeader::initializeLayout()
         makeWidget<BaseWidget>([](auto w) {
             w->setScaleIndependentSize(8, 4);
         }),
+        // Chatterino9: /mentions only
+        this->markReadButton_ = makeWidget<LabelButton>([](auto w) {
+            w->setText(QStringLiteral("Mark all read"));
+            w->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
+            w->setToolTip(QStringLiteral(
+                "Clear the unread count and the \"New\" line"));
+            w->hide();
+        }),
         // mode
         this->modeButton_ = makeWidget<LabelButton>([&](auto w) {
             w->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
@@ -450,6 +459,10 @@ void SplitHeader::initializeLayout()
                     break;
             }
         });
+
+    QObject::connect(this->markReadButton_, &Button::leftClicked, this, [] {
+        mentionhistory::markAllRead();
+    });
 
     QObject::connect(this->chattersButton_, &Button::leftClicked, this,
                      [this]() {
@@ -1003,6 +1016,8 @@ void SplitHeader::handleChannelChanged()
     this->channelConnections_.clear();
 
     auto channel = this->split_->getChannel();
+    this->markReadButton_->setVisible(channel->getType() ==
+                                      Channel::Type::TwitchMentions);
     if (auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
     {
         this->channelConnections_.managedConnect(

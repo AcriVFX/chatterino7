@@ -5,6 +5,7 @@
 #include "widgets/splits/SplitContainer.hpp"
 
 #include "Application.hpp"
+#include "common/Channel.hpp"
 #include "common/Common.hpp"
 #include "common/QLogging.hpp"
 #include "common/WindowDescriptors.hpp"
@@ -12,6 +13,7 @@
 #include "singletons/Fonts.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/MentionHistory.hpp"
 #include "util/QMagicEnum.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/NotebookTab.hpp"
@@ -40,6 +42,11 @@ SplitContainer::SplitContainer(Notebook *parent)
     , tab_(nullptr)
 {
     this->refreshTabTitle();
+
+    // Chatterino9: unread count on a /mentions tab
+    this->signalHolder_.managedConnect(mentionhistory::changed(), [this] {
+        this->refreshTabTitle();
+    });
 
     this->signalHolder_.managedConnect(
         Split::modifierStatusChanged, [this](auto modifiers) {
@@ -1019,6 +1026,12 @@ void SplitContainer::refreshTabTitle()
     }
 
     this->tab_->setDefaultTitle(newTitle);
+
+    // Chatterino9: unread mentions on the tab that shows /mentions
+    const bool hasMentions = std::ranges::any_of(this->splits_, [](auto *s) {
+        return s->getChannel()->getType() == Channel::Type::TwitchMentions;
+    });
+    this->tab_->setBadgeCount(hasMentions ? mentionhistory::unreadCount() : 0);
 }
 
 void SplitContainer::refreshTabLiveStatus()

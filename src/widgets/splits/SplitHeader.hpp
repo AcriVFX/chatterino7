@@ -87,6 +87,8 @@ private:
     Label *titleLabel_{};
 
     LabelButton *modeButton_{};
+    // Chatterino9: "Mark all read" in /mentions
+    LabelButton *markReadButton_{};
     QAction *modeActionSetEmote{};
     QAction *modeActionSetSub{};
     QAction *modeActionSetSlow{};
