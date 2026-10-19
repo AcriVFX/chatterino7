@@ -295,10 +295,25 @@ void MessageLayoutContainer::paintWordMarks(QPainter &painter,
             continue;
         }
         const auto &text = element->getText();
+        // the word without punctuation around it ("W!" -> "W")
+        QStringView bare(text);
+        while (!bare.isEmpty() && !bare.front().isLetterOrNumber())
+        {
+            bare = bare.mid(1);
+        }
+        while (!bare.isEmpty() && !bare.back().isLetterOrNumber())
+        {
+            bare.chop(1);
+        }
         bool marked = false;
         for (const auto &word : words)
         {
-            if (text.contains(word, Qt::CaseInsensitive) ||
+            // a short match ("W", "ok") marks only that word, not every
+            // word that has those letters in it
+            const bool inWord =
+                word.size() >= 3 ? text.contains(word, Qt::CaseInsensitive)
+                                 : bare.compare(word, Qt::CaseInsensitive) == 0;
+            if (inWord ||
                 (text.size() >= 2 && word.contains(text, Qt::CaseInsensitive)))
             {
                 marked = true;

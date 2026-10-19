@@ -440,6 +440,25 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
             QColor(0x3a, 0x3a, 0x40), std::move(icon));
     }
 
+    // a row whose content is hidden below gets no pills either, or a lone
+    // counter or chip would be left on an otherwise empty row
+    const bool rowHidden =
+        (hideModerated && this->message_->flags.has(MessageFlag::Disabled)) ||
+        (hideBlockedTermAutomodMessages &&
+         this->message_->flags.has(MessageFlag::AutoModBlockedTerm)) ||
+        (this->message_->flags.has(MessageFlag::RestrictedMessage) &&
+         getApp()->getStreamerMode()->shouldHideRestrictedUsers()) ||
+        (this->message_->flags.has(MessageFlag::ModerationAction) &&
+         (hideModerationActions ||
+          getApp()->getStreamerMode()->shouldHideModActions())) ||
+        (hideSimilar && this->message_->flags.has(MessageFlag::Similar));
+    if (rowHidden)
+    {
+        this->laneTag_.reset();
+        this->laneRepeat_.reset();
+        this->laneChip_.reset();
+    }
+
     // the tag goes right after the timestamp (Twitch messages start with a
     // hidden channel name, so the timestamp is not always the first element)
     const MessageElement *tagAfter = nullptr;
@@ -519,8 +538,7 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     {
         this->laneRepeat_->addToContainer(this->container_, ctx);
     }
-    if (this->laneChip_ &&
-        !(hideModerated && this->message_->flags.has(MessageFlag::Disabled)))
+    if (this->laneChip_)
     {
         this->laneChip_->addToContainer(this->container_, ctx);
     }
