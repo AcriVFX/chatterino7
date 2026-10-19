@@ -2300,15 +2300,20 @@ void TwitchChannel::unpinMessageAs(const QString &messageID,
 {
     getHelix()->unpinChatMessage(
         this->roomId(), moderator.getUserId(), messageID,
-        [weak = this->weakFromThis()] {
+        [weak = this->weakFromThis(), messageID] {
             auto chan = weak.lock();
             if (!chan)
             {
                 return;
             }
 
-            // Chatterino9: no chat line on success, the pin banner hides
-            chan->clearPinnedMessage();
+            // Chatterino9: no chat line on success, the pin banner hides.
+            // Another mod may have pinned something new meanwhile.
+            if (chan->pinnedMessage_ &&
+                chan->pinnedMessage_->messageID == messageID)
+            {
+                chan->clearPinnedMessage();
+            }
         },
         [weak = this->weakFromThis(), messageID](HelixUnpinMessageError error,
                                                  auto message) {
@@ -2766,6 +2771,8 @@ void TwitchChannel::applyPinnedChatUpdate(bool isUpdate,
 
 void TwitchChannel::clearPinnedMessage()
 {
+    // an answer to an older Helix request must not bring the pin back
+    ++this->pinnedMessageRequestId_;
     if (!this->pinnedMessage_)
     {
         return;
@@ -2790,14 +2797,18 @@ void TwitchChannel::unpinCurrentMessage()
     const auto msgId = this->pinnedMessage_->messageID;
     getHelix()->unpinChatMessage(
         this->roomId(), currentAccount->getUserId(), msgId,
-        [weak = this->weakFromThis()] {
+        [weak = this->weakFromThis(), msgId] {
             auto self = weak.lock();
             if (!self)
             {
                 return;
             }
-            self->pinnedMessage_.reset();
-            self->pinnedMessageChanged.invoke();
+            // another mod may have pinned something new meanwhile
+            if (self->pinnedMessage_ &&
+                self->pinnedMessage_->messageID == msgId)
+            {
+                self->clearPinnedMessage();
+            }
         },
         [](HelixUnpinMessageError /*error*/, const QString &message) {
             qCWarning(chatterinoTwitch)
@@ -2814,7 +2825,8 @@ constexpr auto SEEN_PREDICTION_TIMEOUT = std::chrono::minutes(5);
 
 void TwitchChannel::trackPredictionBadge(const Message &message)
 {
-    if (message.loginName.isEmpty())
+    // system lines (e.g. a mod's timeout line) carry no badges
+    if (message.loginName.isEmpty() || message.flags.has(MessageFlag::System))
     {
         return;
     }
@@ -2828,10 +2840,6 @@ void TwitchChannel::trackPredictionBadge(const Message &message)
             break;
         }
     }
-    if (badge == nullptr || badge->value_.isEmpty())
-    {
-        return;
-    }
 
     auto seenAt = message.serverReceivedTime.isValid()
                       ? message.serverReceivedTime
@@ -2841,6 +2849,24 @@ void TwitchChannel::trackPredictionBadge(const Message &message)
         std::chrono::seconds(SEEN_PREDICTION_TIMEOUT).count())
     {
         // e.g. old messages from the history
+        return;
+    }
+
+    if (badge == nullptr || badge->value_.isEmpty())
+    {
+        // Twitch takes the badge away when a prediction ends, so a voter
+        // without it is no longer in this prediction. Without this, a new
+        // prediction with the same outcomes (e.g. Yes/No) started within
+        // a few minutes would count the old votes too.
+        if (this->predictionVoters_.erase(message.loginName) > 0)
+        {
+            if (this->predictionVoters_.empty())
+            {
+                this->predictionTitles_.clear();
+                this->predictionLastSeen_ = {};
+            }
+            this->seenPredictionChanged.invoke();
+        }
         return;
     }
 

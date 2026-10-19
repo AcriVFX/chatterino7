@@ -121,13 +121,22 @@ ExpectedStr<Action> parseAction(const CommandContext &ctx)
 {
     QCommandLineParser parser;
     parser.setSingleDashWordOptionMode(QCommandLineParser::ParseAsLongOptions);
+    // Chatterino9: options only before the text, so "/pin Rules: -no spam"
+    // keeps "-no" and "-d" can be part of the text
     parser.setOptionsAfterPositionalArgumentsMode(
-        QCommandLineParser::ParseAsOptions);
+        QCommandLineParser::ParseAsPositionalArguments);
     QCommandLineOption idOption(u"id"_s, {}, u"ID"_s);
     QCommandLineOption durationOption(QStringList{u"d"_s, u"duration"_s}, {},
                                       u"duration"_s);
     parser.addOptions({idOption, durationOption});
     parser.parse(ctx.words);
+    if (const auto unknown = parser.unknownOptionNames(); !unknown.isEmpty())
+    {
+        // the text would lose these words otherwise
+        return makeUnexpected(u"Unknown option \"-"_s + unknown.first() +
+                              u"\". Put -- before the text if it starts "
+                              u"with a dash."_s);
+    }
 
     std::optional<std::chrono::seconds> duration;
     auto durationText = parser.value(durationOption);
