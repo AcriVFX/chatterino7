@@ -277,7 +277,7 @@ void NotebookGroupHeader::paintContent(QPainter &painter)
         painter.setPen(Qt::NoPen);
         painter.setBrush(this->theme->tabs.liveIndicator);
         painter.drawEllipse(
-            QRectF(x, centerY - diameter / 2, diameter, diameter));
+            QRectF(x, centerY - (diameter / 2), diameter, diameter));
         painter.restore();
         x += static_cast<int>((4 + 3) * scale);
 
@@ -402,7 +402,7 @@ void NotebookGroupOfflineButton::showPopup()
                              popup->close();
                              this->notebook_->select(page);
                          });
-        layout->addWidget(button, 1 + index / OFFLINE_POPUP_COLUMNS,
+        layout->addWidget(button, 1 + (index / OFFLINE_POPUP_COLUMNS),
                           index % OFFLINE_POPUP_COLUMNS);
         index++;
     }
