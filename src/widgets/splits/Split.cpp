@@ -799,6 +799,15 @@ void Split::updateWhispersPanel()
     if (whispers && this->whispersPanel_ == nullptr)
     {
         this->whispersPanel_ = new WhispersPanel(this);
+        // like the chat input: focusing the panel selects this split
+        this->signalHolder_.managedConnect(this->whispersPanel_->focused,
+                                           [this] {
+                                               this->focused.invoke();
+                                           });
+        this->signalHolder_.managedConnect(this->whispersPanel_->focusLost,
+                                           [this] {
+                                               this->focusLost.invoke();
+                                           });
         // under the header, above the hidden chat
         this->vbox_->insertWidget(1, this->whispersPanel_, 1);
     }

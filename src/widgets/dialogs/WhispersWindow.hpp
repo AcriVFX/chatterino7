@@ -9,10 +9,13 @@
 #include "widgets/BaseWidget.hpp"
 #include "widgets/BaseWindow.hpp"
 
+#include <boost/signals2/connection.hpp>
+#include <pajlada/signals/signal.hpp>
 #include <pajlada/signals/signalholder.hpp>
 #include <QString>
 
 #include <memory>
+#include <vector>
 
 class QLabel;
 class QLineEdit;
@@ -43,8 +46,12 @@ public:
 
     /// Invoked when another conversation was opened
     pajlada::Signals::NoArgSignal partnerChanged;
+    /// Invoked when the panel gets or loses keyboard focus
+    pajlada::Signals::NoArgSignal focused;
+    pajlada::Signals::NoArgSignal focusLost;
 
 protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void changeEvent(QEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
@@ -77,6 +84,7 @@ private:
     qint64 lastSendMsecs_ = 0;
 
     pajlada::Signals::SignalHolder signalHolder_;
+    std::vector<boost::signals2::scoped_connection> bSignals_;
 };
 
 class WhispersWindow : public BaseWindow

@@ -26,6 +26,7 @@
 #include "widgets/splits/SplitContainer.hpp"
 #include "widgets/Window.hpp"
 
+#include <QApplication>
 #include <QCursor>
 #include <QDateTime>
 #include <QDir>
@@ -298,23 +299,40 @@ MessagePtr buildDaySeparator(QDate date)
 /// A split to open usercards from: the selected one, else any
 Split *anySplit()
 {
+    // a Twitch channel split, so the usercard has a channel to work in (the
+    // /whispers tab may be the selected one)
+    auto isTwitch = [](Split *split) {
+        return split != nullptr && split->getChannel()->isTwitchChannel();
+    };
     auto &notebook = getApp()->getWindows()->getMainWindow().getNotebook();
     if (auto *page = notebook.getSelectedPage())
     {
-        if (auto *split = page->getSelectedSplit())
+        if (auto *split = page->getSelectedSplit(); isTwitch(split))
         {
             return split;
         }
     }
+    Split *fallback = nullptr;
     for (int i = 0; i < notebook.getPageCount(); i++)
     {
         auto *page = dynamic_cast<SplitContainer *>(notebook.getPageAt(i));
-        if (page != nullptr && !page->getSplits().empty())
+        if (page == nullptr)
         {
-            return page->getSplits().front();
+            continue;
+        }
+        for (auto *split : page->getSplits())
+        {
+            if (isTwitch(split))
+            {
+                return split;
+            }
+            if (fallback == nullptr)
+            {
+                fallback = split;
+            }
         }
     }
-    return nullptr;
+    return fallback;
 }
 
 /// The first /whispers split in the main window and its tab, if any
@@ -388,8 +406,41 @@ WhispersPanel::WhispersPanel(QWidget *parent)
             }
         });
 
+    // another account has other whispers: start over with its newest one
+    this->bSignals_.emplace_back(
+        getApp()->getAccounts()->twitch.currentUserChanged.connect([this] {
+            this->partner_.clear();
+            this->viewChannel_.reset();
+            this->search_->clear();
+            this->openPartner({});
+            this->partnerChanged.invoke();
+            this->showPartner({});
+        }));
+
+    this->input_->installEventFilter(this);
+    this->search_->installEventFilter(this);
+    this->list_->installEventFilter(this);
+
     this->reloadList();
     this->showPartner({});
+}
+
+bool WhispersPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::FocusIn)
+    {
+        this->focused.invoke();
+    }
+    else if (event->type() == QEvent::FocusOut)
+    {
+        // only when focus leaves the panel, not between its parts
+        auto *now = QApplication::focusWidget();
+        if (now == nullptr || !this->isAncestorOf(now))
+        {
+            this->focusLost.invoke();
+        }
+    }
+    return BaseWidget::eventFilter(watched, event);
 }
 
 void WhispersPanel::showPartner(const QString &partner)
