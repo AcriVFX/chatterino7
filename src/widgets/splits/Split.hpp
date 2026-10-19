@@ -185,9 +185,10 @@ private:
     bool isDragging_{};
 
     QVBoxLayout *const vbox_;
-    SplitHeader *const header_;
+    // built before the header: its constructor already asks for them
     PinnedMessageWidget *const pinnedBanner_;
     PredictionStripWidget *const predictionStrip_;
+    SplitHeader *const header_;
     WhispersPanel *whispersPanel_ = nullptr;
     ChannelView *const view_;
     SplitInput *const input_;

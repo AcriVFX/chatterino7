@@ -1051,11 +1051,8 @@ void SplitHeader::updateFeatureButtons()
     this->modActivityButton_->setVisible(mod);
     this->emoteStatsButton_->setVisible(show);
 
-    // blue while the prediction strip shows a running prediction (the strip
-    // doesn't exist yet while the split is being built, its channel is empty
-    // then)
-    auto *strip = mod ? this->split_->getPredictionStrip() : nullptr;
-    const bool running = strip != nullptr && !strip->isHidden();
+    // blue while the prediction strip shows a running prediction
+    const bool running = mod && !this->split_->getPredictionStrip()->isHidden();
     this->predictionButton_->setColor(
         running ? std::optional<QColor>(this->theme->accent) : std::nullopt);
     this->predictionButton_->setToolTip(
