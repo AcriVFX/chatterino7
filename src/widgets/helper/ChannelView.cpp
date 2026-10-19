@@ -1938,8 +1938,8 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         const int gap = static_cast<int>(6 * scale);
         const int width = this->width() - this->scrollBar_->width();
         const int y = *mentionsNewLineY;
-        const QRect textRect((width - textWidth) / 2 - gap,
-                             y - metrics.height() / 2, textWidth + 2 * gap,
+        const QRect textRect(((width - textWidth) / 2) - gap,
+                             y - (metrics.height() / 2), textWidth + (2 * gap),
                              metrics.height());
 
         painter.fillRect(QRect(0, y - 1, width, std::max(1, int(scale))),

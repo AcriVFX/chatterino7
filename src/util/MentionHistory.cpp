@@ -40,13 +40,15 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
-#include <QtConcurrent>
+#include <QtConcurrentRun>
 #include <QTextStream>
 #include <QTimer>
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <mutex>
+#include <ranges>
 #include <set>
 
 namespace {
@@ -68,7 +70,7 @@ constexpr int SWEEP_DELAY_MS = 20000;
 
 /// Answer rows use this before the id of the message they show, so they never
 /// clash with a mention of the same message
-const QString ANSWER_PREFIX = QStringLiteral("answer:");
+constexpr QLatin1String ANSWER_PREFIX("answer:");
 
 struct Store {
     /// Account whose history is loaded, empty if none yet
@@ -282,7 +284,7 @@ QStringList readLines(const QString &path)
 
 void appendLine(const QString &dir, const QString &channel, const QString &line)
 {
-    std::lock_guard lock(fileMutex());
+    std::scoped_lock lock(fileMutex());
     if (!QDir().mkpath(dir))
     {
         return;
@@ -325,8 +327,9 @@ QSet<QString> &savedIdsOf(const QString &channel)
     QSet<QString> ids;
     if (!st.dir.isEmpty())
     {
-        std::lock_guard lock(fileMutex());
-        for (const auto &text : readLines(channelFile(st.dir, channel)))
+        std::scoped_lock lock(fileMutex());
+        const auto lines = readLines(channelFile(st.dir, channel));
+        for (const auto &text : lines)
         {
             const auto id = lineId(text);
             if (!id.isEmpty())
@@ -413,7 +416,7 @@ QString ensureLoaded()
     if (switched)
     {
         // the rows of the last account go, the saved ones of this one come
-        QTimer::singleShot(0, [] {
+        QTimer::singleShot(0, QCoreApplication::instance(), [] {
             mentionsChannel()->clearMessages();
             sweep(true);
         });
@@ -557,7 +560,7 @@ void ensureHooked()
 
     // open channels bring their saved mentions back once their history is
     // loaded; the rest come back a little later
-    QTimer::singleShot(SWEEP_DELAY_MS, [] {
+    QTimer::singleShot(SWEEP_DELAY_MS, QCoreApplication::instance(), [] {
         if (!ensureLoaded().isEmpty())
         {
             sweep(false);
@@ -623,11 +626,11 @@ MessagePtr answeredMention(const Message &message)
 
     if (message.replyParent)
     {
-        for (auto m = snapshot.rbegin(); m != snapshot.rend(); ++m)
+        for (const auto &m : std::views::reverse(snapshot))
         {
-            if ((*m)->id == message.replyParent->id && isMention(**m))
+            if (m->id == message.replyParent->id && isMention(*m))
             {
-                return *m;
+                return m;
             }
         }
     }
@@ -656,14 +659,13 @@ MessagePtr answeredMention(const Message &message)
     const auto msecs = msecsOf(message) > 0
                            ? msecsOf(message)
                            : QDateTime::currentMSecsSinceEpoch();
-    for (auto m = snapshot.rbegin(); m != snapshot.rend(); ++m)
+    for (const auto &m : std::views::reverse(snapshot))
     {
-        const auto &msg = **m;
-        const auto age = msecs - msecsOf(msg);
-        if (isMention(msg) && age >= 0 && age <= ANSWER_WINDOW_MS &&
-            candidates.contains(msg.loginName.toLower()))
+        const auto age = msecs - msecsOf(*m);
+        if (isMention(*m) && age >= 0 && age <= ANSWER_WINDOW_MS &&
+            candidates.contains(m->loginName.toLower()))
         {
-            return *m;
+            return m;
         }
     }
     return nullptr;
@@ -737,7 +739,7 @@ void recordMention(const MessagePtr &message, const QByteArray &rawIrc)
 /// channel's emotes and badges. Any thread.
 MessagePtr buildPlain(Communi::IrcMessage *irc, const QString &channelName)
 {
-    auto *priv = dynamic_cast<Communi::IrcPrivateMessage *>(irc);
+    auto *priv = qobject_cast<Communi::IrcPrivateMessage *>(irc);
     if (priv == nullptr)
     {
         return nullptr;
@@ -812,7 +814,7 @@ Loaded loadSaved(const QString &dir, const QString &name,
 
     QStringList lines;
     {
-        std::lock_guard lock(fileMutex());
+        std::scoped_lock lock(fileMutex());
         const auto path = channelFile(dir, name);
         lines = readLines(path);
         if (lines.size() > MAX_LINES)
@@ -827,7 +829,7 @@ Loaded loadSaved(const QString &dir, const QString &name,
         }
     }
 
-    for (const auto &text : lines)
+    for (const auto &text : std::as_const(lines))
     {
         const auto id = lineId(text);
         if (!id.isEmpty())
@@ -844,7 +846,8 @@ Loaded loadSaved(const QString &dir, const QString &name,
         {
             continue;
         }
-        const auto rowId = line.answer ? ANSWER_PREFIX + line.id : line.id;
+        const auto rowId =
+            line.answer ? QString(ANSWER_PREFIX) + line.id : line.id;
         if (present.contains(rowId))
         {
             continue;
@@ -947,6 +950,7 @@ void finishRestore(const QString &name, Loaded loaded,
     }
 
     auto batch = std::move(loaded.mentions);
+    batch.reserve(batch.size() + loaded.answers.size());
     for (const auto &line : loaded.answers)
     {
         // without its mention an answer means nothing
@@ -1132,10 +1136,10 @@ void watchView(ChannelView *view)
         QObject::connect(v.timer, &QTimer::timeout, [] {
             updateActive();
         });
-        v.timer->start(500);
+        v.timer->start(std::chrono::milliseconds(500));
     }
     // not right away: this runs while the view paints
-    QTimer::singleShot(0, [] {
+    QTimer::singleShot(0, view, [] {
         updateActive();
     });
 }

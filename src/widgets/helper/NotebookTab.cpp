@@ -1061,7 +1061,7 @@ void NotebookTab::paintEvent(QPaintEvent *)
         painter.drawText(titleRect, this->getTitle(), option);
 
         const QRect pill(titleRect.right() + 1 + badgeGap(scale),
-                         textRect.center().y() - badge.height() / 2 + 1,
+                         textRect.center().y() - (badge.height() / 2) + 1,
                          badge.width(), badge.height());
         painter.save();
         painter.setRenderHint(QPainter::Antialiasing);
