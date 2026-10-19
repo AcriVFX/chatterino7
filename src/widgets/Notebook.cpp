@@ -1392,6 +1392,26 @@ std::vector<NotebookTab *> Notebook::tabsInGroup(
     return tabs;
 }
 
+namespace {
+
+/// Tabs like /mentions or /whispers never go live, live-only groups keep
+/// showing them
+bool tabCanGoLive(const NotebookTab *tab)
+{
+    auto *container = dynamic_cast<SplitContainer *>(tab->page);
+    if (container == nullptr)
+    {
+        return true;
+    }
+
+    return std::ranges::any_of(container->getSplits(), [](Split *split) {
+        auto type = split->getChannel()->getType();
+        return type == Channel::Type::Twitch || type == Channel::Type::Kick;
+    });
+}
+
+}  // namespace
+
 bool Notebook::groupAllowsTab(const NotebookTab *tab) const
 {
     auto *group = this->findTabGroup(tab->getGroup());
@@ -1405,7 +1425,7 @@ bool Notebook::groupAllowsTab(const NotebookTab *tab) const
     }
     if (group->liveOnly)
     {
-        return tab->isLive();
+        return tab->isLive() || !tabCanGoLive(tab);
     }
     return true;
 }
