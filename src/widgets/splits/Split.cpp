@@ -763,6 +763,11 @@ PinnedMessageWidget *Split::getPinnedBanner() const
     return this->pinnedBanner_;
 }
 
+PredictionStripWidget *Split::getPredictionStrip() const
+{
+    return this->predictionStrip_;
+}
+
 void Split::updatePinnedBannerChannel()
 {
     auto *tc = dynamic_cast<TwitchChannel *>(this->getChannel().get());

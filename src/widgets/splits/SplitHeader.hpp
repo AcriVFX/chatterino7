@@ -38,6 +38,8 @@ public:
     void updateChannelText();
     void updateIcons();
     void updatePinButton();
+    // Chatterino9: predictions, mod activity and emote stats buttons
+    void updateFeatureButtons();
     // Invoked when SplitHeader should update anything refering to a TwitchChannel's mode
     // has changed (e.g. sub mode toggled)
     void updateRoomModes();
@@ -70,6 +72,8 @@ private:
     void resetThumbnail();
 
     void handleChannelChanged();
+    void openModActivity();
+    void openEmoteStats();
 
     Split *const split_{};
     QString tooltipText_{};
@@ -96,6 +100,9 @@ private:
     SvgButton *moderationButton_{};
     SvgButton *chattersButton_{};
     SvgButton *pinButton_{};
+    SvgButton *predictionButton_{};
+    SvgButton *modActivityButton_{};
+    SvgButton *emoteStatsButton_{};
     DrawnButton *addButton_{};
 
     // states

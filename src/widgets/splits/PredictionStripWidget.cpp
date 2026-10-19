@@ -75,19 +75,32 @@ void PredictionStripWidget::setChannel(TwitchChannel *channel)
 
 void PredictionStripWidget::refresh()
 {
+    const bool wasHidden = this->isHidden();
     if (this->channel_ == nullptr || this->channel_->seenPrediction().empty())
     {
         this->expireTimer_->stop();
         this->hide();
-        return;
+    }
+    else
+    {
+        if (!this->expireTimer_->isActive())
+        {
+            this->expireTimer_->start();
+        }
+        this->show();
+        this->update();
     }
 
-    if (!this->expireTimer_->isActive())
+    if (this->isHidden() != wasHidden)
     {
-        this->expireTimer_->start();
+        this->visibilityChanged.invoke();
     }
-    this->show();
-    this->update();
+}
+
+void PredictionStripWidget::openPredictions(const QString &channelName)
+{
+    QDesktopServices::openUrl(
+        QUrl(u"https://www.twitch.tv/popout/%1/chat"_s.arg(channelName)));
 }
 
 QSize PredictionStripWidget::sizeHint() const
@@ -219,9 +232,7 @@ void PredictionStripWidget::mousePressEvent(QMouseEvent *event)
     if (event->button() == Qt::LeftButton && this->channel_ != nullptr &&
         this->manageRect_.contains(event->pos()))
     {
-        QDesktopServices::openUrl(
-            QUrl(u"https://www.twitch.tv/popout/%1/chat"_s.arg(
-                this->channel_->getName())));
+        PredictionStripWidget::openPredictions(this->channel_->getName());
     }
     // don't pass clicks on to the split
 }

@@ -6,6 +6,7 @@
 
 #include "widgets/BaseWidget.hpp"
 
+#include <pajlada/signals/signal.hpp>
 #include <pajlada/signals/signalholder.hpp>
 #include <QRect>
 
@@ -33,6 +34,12 @@ public:
     void setChannel(TwitchChannel *channel);
 
     QSize sizeHint() const override;
+
+    /// Opens the channel's Twitch popout chat, where mods run predictions
+    static void openPredictions(const QString &channelName);
+
+    /// Invoked when the strip shows up or goes away
+    pajlada::Signals::NoArgSignal visibilityChanged;
 
 protected:
     void paintEvent(QPaintEvent *event) override;

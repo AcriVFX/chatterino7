@@ -36,6 +36,7 @@
 #include "widgets/helper/CommonTexts.hpp"
 #include "widgets/Label.hpp"
 #include "widgets/splits/PinnedMessageWidget.hpp"
+#include "widgets/splits/PredictionStripWidget.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/splits/SplitContainer.hpp"
 #include "widgets/TooltipWidget.hpp"
@@ -48,6 +49,7 @@
 #include <QPainter>
 
 #include <cmath>
+#include <optional>
 
 namespace {
 
@@ -368,6 +370,33 @@ void SplitHeader::initializeLayout()
     this->pinButton_->setColor(this->theme->accent);
     this->pinButton_->hide();
 
+    // Chatterino9: shortcuts to predictions and the stats windows
+    this->predictionButton_ = new SvgButton(
+        {
+            .dark = ":/buttons/predictions-darkMode.svg",
+            .light = ":/buttons/predictions-lightMode.svg",
+        },
+        this, {4, 4});
+    this->predictionButton_->hide();
+
+    this->modActivityButton_ = new SvgButton(
+        {
+            .dark = ":/buttons/modActivity-darkMode.svg",
+            .light = ":/buttons/modActivity-lightMode.svg",
+        },
+        this, {4, 4});
+    this->modActivityButton_->setToolTip(QStringLiteral("Mod activity"));
+    this->modActivityButton_->hide();
+
+    this->emoteStatsButton_ = new SvgButton(
+        {
+            .dark = ":/buttons/emoteStats-darkMode.svg",
+            .light = ":/buttons/emoteStats-lightMode.svg",
+        },
+        this, {4, 4});
+    this->emoteStatsButton_->setToolTip(QStringLiteral("Emote stats"));
+    this->emoteStatsButton_->hide();
+
     this->addButton_ = new DrawnButton(DrawnButton::Symbol::Plus,
                                        {
                                            .padding = 3,
@@ -408,6 +437,10 @@ void SplitHeader::initializeLayout()
         }),
         // pin indicator
         this->pinButton_,
+        // predictions, mod activity, emote stats
+        this->predictionButton_,
+        this->modActivityButton_,
+        this->emoteStatsButton_,
         // moderator
         this->moderationButton_,
         // chatter list
@@ -459,6 +492,22 @@ void SplitHeader::initializeLayout()
     QObject::connect(this->pinButton_, &Button::leftClicked, this, [this]() {
         this->split_->togglePinnedBanner();
     });
+
+    QObject::connect(this->predictionButton_, &Button::leftClicked, this,
+                     [this]() {
+                         PredictionStripWidget::openPredictions(
+                             this->split_->getChannel()->getName());
+                     });
+
+    QObject::connect(this->modActivityButton_, &Button::leftClicked, this,
+                     [this]() {
+                         this->openModActivity();
+                     });
+
+    QObject::connect(this->emoteStatsButton_, &Button::leftClicked, this,
+                     [this]() {
+                         this->openEmoteStats();
+                     });
 
     QObject::connect(this->addButton_, &Button::leftClicked, this, [this]() {
         this->split_->addSibling();
@@ -553,25 +602,16 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
         // Chatterino9: per-mod activity for this channel
         if (twitchChannel && twitchChannel->hasModRights())
         {
-            menu->addAction("Mod activity", this->split_,
-                            [this, twitchChannel] {
-                                auto *dialog = new ModActivityDialog(
-                                    twitchChannel->getName(), this->split_);
-                                dialog->show();
-                                dialog->raise();
-                                dialog->activateWindow();
-                            });
+            menu->addAction("Mod activity", this->split_, [this] {
+                this->openModActivity();
+            });
         }
 
         // Chatterino9: how often each emote is used in this channel
         if (twitchChannel)
         {
             menu->addAction("Emote stats", this->split_, [this] {
-                auto *dialog = new EmoteStatsDialog(this->split_->getChannel(),
-                                                    this->split_);
-                dialog->show();
-                dialog->raise();
-                dialog->activateWindow();
+                this->openEmoteStats();
             });
         }
 
@@ -992,6 +1032,54 @@ void SplitHeader::updatePinButton()
     this->pinButton_->setToolTip(banner != nullptr && !banner->isHidden()
                                      ? QStringLiteral("Hide pinned message")
                                      : QStringLiteral("Show pinned message"));
+
+    this->updateFeatureButtons();
+}
+
+void SplitHeader::updateFeatureButtons()
+{
+    auto channel = this->split_->getChannel();
+    auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get());
+
+    // like the pin button: only in splits that show the whole chat, never in
+    // filtered lane splits
+    const bool show =
+        twitchChannel != nullptr && this->split_->showsPinnedMessage();
+    const bool mod = show && twitchChannel->hasModRights();
+
+    this->predictionButton_->setVisible(mod);
+    this->modActivityButton_->setVisible(mod);
+    this->emoteStatsButton_->setVisible(show);
+
+    // blue while the prediction strip shows a running prediction (the strip
+    // doesn't exist yet while the split is being built, its channel is empty
+    // then)
+    auto *strip = mod ? this->split_->getPredictionStrip() : nullptr;
+    const bool running = strip != nullptr && !strip->isHidden();
+    this->predictionButton_->setColor(
+        running ? std::optional<QColor>(this->theme->accent) : std::nullopt);
+    this->predictionButton_->setToolTip(
+        running ? QStringLiteral("Prediction running, open predictions "
+                                 "(Twitch popout chat)")
+                : QStringLiteral("Open predictions (Twitch popout chat)"));
+}
+
+void SplitHeader::openModActivity()
+{
+    auto *dialog = new ModActivityDialog(this->split_->getChannel()->getName(),
+                                         this->split_);
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void SplitHeader::openEmoteStats()
+{
+    auto *dialog =
+        new EmoteStatsDialog(this->split_->getChannel(), this->split_);
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 void SplitHeader::handleChannelChanged()
@@ -1019,6 +1107,11 @@ void SplitHeader::handleChannelChanged()
             this->split_->getPinnedBanner()->visibilityChanged, [this]() {
                 this->updatePinButton();
             });
+
+        this->channelConnections_.managedConnect(
+            this->split_->getPredictionStrip()->visibilityChanged, [this]() {
+                this->updateFeatureButtons();
+            });
     }
     else if (auto *kickChannel = dynamic_cast<KickChannel *>(channel.get()))
     {
@@ -1041,6 +1134,9 @@ void SplitHeader::scaleChangedEvent(float scale)
     this->moderationButton_->setFixedWidth(w);
     this->chattersButton_->setFixedWidth(w);
     this->pinButton_->setFixedWidth(w);
+    this->predictionButton_->setFixedWidth(w);
+    this->modActivityButton_->setFixedWidth(w);
+    this->emoteStatsButton_->setFixedWidth(w);
 
     this->addButton_->setFixedWidth(addSplitWidth);
 }
@@ -1250,6 +1346,8 @@ void SplitHeader::updateIcons()
         this->moderationButton_->hide();
         this->chattersButton_->hide();
     }
+
+    this->updateFeatureButtons();
 }
 
 void SplitHeader::paintEvent(QPaintEvent * /*event*/)

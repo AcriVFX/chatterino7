@@ -58,6 +58,7 @@ public:
     ChannelView &getChannelView();
     SplitInput &getInput();
     [[nodiscard]] PinnedMessageWidget *getPinnedBanner() const;
+    [[nodiscard]] PredictionStripWidget *getPredictionStrip() const;
 
     IndirectChannel getIndirectChannel();
     ChannelPtr getChannel() const;
