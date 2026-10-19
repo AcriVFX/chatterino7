@@ -364,10 +364,8 @@ void SplitHeader::initializeLayout()
             .light = ":/buttons/pinnedMessage-chat.svg",
         },
         this, {4, 4});
-    this->pinButton_->setToolTip(QStringLiteral("Toggle pinned message"));
-    this->pinButton_->setColor(this->theme->isLightTheme()
-                                   ? QColor(0x42, 0x42, 0x42)
-                                   : QColor(0xc0, 0xc0, 0xc0));
+    this->pinButton_->setToolTip(QStringLiteral("Hide pinned message"));
+    this->pinButton_->setColor(this->theme->accent);
     this->pinButton_->hide();
 
     this->addButton_ = new DrawnButton(DrawnButton::Symbol::Plus,
@@ -986,18 +984,14 @@ void SplitHeader::updatePinButton()
                                   this->split_->showsPinnedMessage() &&
                                   twitchChannel->getPinnedMessage() != nullptr;
 
+    // Chatterino9: the button only exists while something is pinned and is
+    // always blue then, shown or hidden
     this->pinButton_->setVisible(hasPinnedMessage);
+    this->pinButton_->setColor(this->theme->accent);
     auto *banner = this->split_->getPinnedBanner();
-    if (hasPinnedMessage && banner != nullptr && banner->isVisible())
-    {
-        this->pinButton_->setColor(this->theme->accent);
-    }
-    else
-    {
-        this->pinButton_->setColor(this->theme->isLightTheme()
-                                       ? QColor(0x42, 0x42, 0x42)
-                                       : QColor(0xc0, 0xc0, 0xc0));
-    }
+    this->pinButton_->setToolTip(banner != nullptr && !banner->isHidden()
+                                     ? QStringLiteral("Hide pinned message")
+                                     : QStringLiteral("Show pinned message"));
 }
 
 void SplitHeader::handleChannelChanged()
