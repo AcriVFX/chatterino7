@@ -989,6 +989,7 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
                 page->applyFromDescriptor(*tab.rootNode_);
             }
         }
+        window.getNotebook().finishLoadingTabGroups();
         window.show();
 
         // Set window state

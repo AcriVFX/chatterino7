@@ -147,8 +147,11 @@ public:
     /// Sets the tab's group without moving it, used when loading the layout.
     /// Creates the group if needed.
     void assignTabGroup(NotebookTab *tab, const QString &name);
+    /// Call after assignTabGroup for all loaded tabs: regroups the tab order,
+    /// drops empty groups and applies collapsed/live-only
+    void finishLoadingTabGroups();
     /// Moves the tab into the group (to its end), or out of its group if
-    /// name is empty
+    /// name is empty. Does nothing while the tab layout is locked.
     void moveTabToGroup(NotebookTab *tab, const QString &name);
     void promptNewTabGroup(NotebookTab *tab);
     void toggleTabGroupCollapsed(NotebookTabGroup *group);

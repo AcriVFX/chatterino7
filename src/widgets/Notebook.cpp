@@ -245,17 +245,27 @@ void Notebook::duplicatePage(QWidget *page)
         newTabPosition = tabPosition + 1;
     }
 
+    // addPageAt inserts into items_, which can leave item dangling
+    auto *sourceTab = item->tab;
+
     QString newTabTitle = "";
-    if (item->tab->hasCustomTitle())
+    if (sourceTab->hasCustomTitle())
     {
-        newTabTitle = item->tab->getCustomTitle();
+        newTabTitle = sourceTab->getCustomTitle();
     }
 
     auto *tab =
         this->addPageAt(newContainer, newTabPosition, newTabTitle, false);
-    tab->copyHighlightStateAndSourcesFrom(item->tab);
+    tab->copyHighlightStateAndSourcesFrom(sourceTab);
 
     newContainer->setTab(tab);
+
+    // The copy sits right after the source, so it joins the source's group
+    if (!sourceTab->getGroup().isEmpty())
+    {
+        this->assignTabGroup(tab, sourceTab->getGroup());
+        this->updateVisibilityFilter();
+    }
 }
 
 void Notebook::removeCurrentPage()
@@ -1328,6 +1338,9 @@ void Notebook::sortTabsAlphabetically()
         return lhs.compare(rhs, Qt::CaseInsensitive) < 0;
     });
 
+    // Keep the tabs of each group together, sorted within the group
+    this->normalizeGroupOrder();
+
     getApp()->getWindows()->queueSave();
     this->performLayout(true);
 }
@@ -1505,10 +1518,17 @@ void Notebook::assignTabGroup(NotebookTab *tab, const QString &name)
     tab->setGroup(name);
 }
 
+void Notebook::finishLoadingTabGroups()
+{
+    this->normalizeGroupOrder();
+    this->pruneEmptyTabGroups();
+    this->updateVisibilityFilter();
+}
+
 void Notebook::moveTabToGroup(NotebookTab *tab, const QString &name)
 {
     const auto oldGroup = tab->getGroup();
-    if (oldGroup == name)
+    if (oldGroup == name || this->isNotebookLayoutLocked())
     {
         return;
     }
@@ -1546,6 +1566,11 @@ void Notebook::moveTabToGroup(NotebookTab *tab, const QString &name)
 
 void Notebook::promptNewTabGroup(NotebookTab *tab)
 {
+    if (this->isNotebookLayoutLocked())
+    {
+        return;
+    }
+
     bool ok = false;
     auto name =
         QInputDialog::getText(this, "New group",
@@ -1574,9 +1599,14 @@ void Notebook::showTabGroupMenu(NotebookTabGroup *group, QPoint globalPos)
     // Look the group up by name in the actions, it may be gone by then
     const auto name = group->name;
 
-    menu->addAction("Rename group", [this, name] {
+    // Collapse and "Only show live tabs" only change what's shown, the rest
+    // changes the layout and respects "Lock Tab Layout"
+    const auto locked = this->isNotebookLayoutLocked();
+
+    auto *rename = menu->addAction("Rename group", [this, name] {
         this->renameTabGroup(name);
     });
+    rename->setEnabled(!locked);
 
     auto *liveOnly = menu->addAction("Only show live tabs");
     liveOnly->setCheckable(true);
@@ -1609,9 +1639,10 @@ void Notebook::showTabGroupMenu(NotebookTabGroup *group, QPoint globalPos)
     moveRight->setEnabled(this->canMoveTabGroup(name, 1));
 
     menu->addSeparator();
-    menu->addAction("Ungroup (keeps the tabs)", [this, name] {
+    auto *ungroup = menu->addAction("Ungroup (keeps the tabs)", [this, name] {
         this->removeTabGroup(name);
     });
+    ungroup->setEnabled(!locked);
 
     menu->popup(globalPos);
 }
@@ -1675,6 +1706,11 @@ void Notebook::pruneEmptyTabGroups()
 
 void Notebook::removeTabGroup(const QString &name)
 {
+    if (this->isNotebookLayoutLocked())
+    {
+        return;
+    }
+
     for (auto &item : this->items_)
     {
         if (item.tab->getGroup() == name)
@@ -1688,7 +1724,7 @@ void Notebook::removeTabGroup(const QString &name)
 void Notebook::renameTabGroup(const QString &name)
 {
     auto *group = this->findTabGroup(name);
-    if (group == nullptr)
+    if (group == nullptr || this->isNotebookLayoutLocked())
     {
         return;
     }

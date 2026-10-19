@@ -352,6 +352,13 @@ void NotebookTab::recreateMoveToGroupMenu()
 {
     this->moveToGroupMenu_->clear();
 
+    if (this->notebook_->isNotebookLayoutLocked())
+    {
+        this->moveToGroupMenu_->addAction("Unlock the tab layout first")
+            ->setEnabled(false);
+        return;
+    }
+
     auto addGroupAction = [this](const QString &label, const QString &group) {
         auto *action = this->moveToGroupMenu_->addAction(label);
         action->setCheckable(true);
