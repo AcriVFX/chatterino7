@@ -92,7 +92,11 @@ private:
     QString topEmote_;
     /// The channel's own Twitch emotes, name to id
     QHash<QString, QString> twitchChannelEmotes_;
-    bool twitchEmotesRequested_ = false;
+    /// twitchChannelEmotes_ came from Helix at least once; until then (or
+    /// when logged out) Twitch rows are not filtered
+    bool twitchEmotesLoaded_ = false;
+    bool twitchEmotesLoading_ = false;
+    qint64 twitchEmotesRequestedAt_ = 0;
 
     struct {
         QButtonGroup *ranges = nullptr;

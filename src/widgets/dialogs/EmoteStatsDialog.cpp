@@ -22,6 +22,7 @@
 
 #include <QAbstractItemView>
 #include <QButtonGroup>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -37,6 +38,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QScrollBar>
 #include <QStyledItemDelegate>
@@ -49,6 +51,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <utility>
 
 namespace chatterino {
@@ -176,42 +179,43 @@ QString viewFile()
                : QDir(misc).filePath(QStringLiteral("EmoteStats/view.json"));
 }
 
-/// Global 7TV, BTTV and FFZ emotes seen so far ("7tv\tEZ"), saved in
-/// Misc/EmoteStats/globals.json. An emote that was once a global and was
-/// later dropped from the global list must not show as removed from the
-/// channel. Only used from the GUI thread.
-QSet<QString> &seenGlobals()
+/// Emote names ("7tv\tEZ") saved in a JSON list under Misc/EmoteStats,
+/// read once per file. Only used from the GUI thread.
+QSet<QString> &seenNames(const QString &file)
 {
-    static QSet<QString> seen = [] {
+    // std::map: references stay valid when another file is added
+    static std::map<QString, QSet<QString>> cache;
+    auto it = cache.find(file);
+    if (it == cache.end())
+    {
         QSet<QString> names;
-        const auto &misc = getApp()->getPaths().miscDirectory;
-        QFile file(
-            QDir(misc).filePath(QStringLiteral("EmoteStats/globals.json")));
-        if (!misc.isEmpty() && file.open(QIODevice::ReadOnly))
+        QFile json(file);
+        if (!file.isEmpty() && json.open(QIODevice::ReadOnly))
         {
-            const auto list = QJsonDocument::fromJson(file.readAll()).array();
+            const auto list = QJsonDocument::fromJson(json.readAll()).array();
             for (const auto &name : list)
             {
                 names.insert(name.toString());
             }
         }
-        return names;
-    }();
-    return seen;
+        it = cache.emplace(file, std::move(names)).first;
+    }
+    return it->second;
 }
 
-/// Adds the current global emotes to seenGlobals()
-void rememberGlobals()
+using EmoteSets =
+    std::vector<std::pair<Source, std::shared_ptr<const EmoteMap>>>;
+
+/// Adds the names in sets to seenNames(file) and saves the file when it grew
+void rememberNames(const QString &file, const EmoteSets &sets)
 {
-    auto &seen = seenGlobals();
+    if (file.isEmpty())
+    {
+        return;
+    }
+    auto &seen = seenNames(file);
     const auto before = seen.size();
-    const std::array<std::pair<Source, std::shared_ptr<const EmoteMap>>, 3>
-        globals{{
-            {Source::SevenTv, getApp()->getSeventvEmotes()->globalEmotes()},
-            {Source::Bttv, getApp()->getBttvEmotes()->emotes()},
-            {Source::Ffz, getApp()->getFfzEmotes()->emotes()},
-        }};
-    for (const auto &[source, map] : globals)
+    for (const auto &[source, map] : sets)
     {
         if (!map)
         {
@@ -222,9 +226,7 @@ void rememberGlobals()
             seen.insert(rowKey(source, name.string));
         }
     }
-    const auto &misc = getApp()->getPaths().miscDirectory;
-    if (seen.size() == before || misc.isEmpty() ||
-        !QDir().mkpath(QDir(misc).filePath(QStringLiteral("EmoteStats"))))
+    if (seen.size() == before || !QDir().mkpath(QFileInfo(file).path()))
     {
         return;
     }
@@ -233,13 +235,37 @@ void rememberGlobals()
     {
         list.append(name);
     }
-    QSaveFile file(
-        QDir(misc).filePath(QStringLiteral("EmoteStats/globals.json")));
-    if (file.open(QIODevice::WriteOnly))
+    QSaveFile out(file);
+    if (out.open(QIODevice::WriteOnly))
     {
-        file.write(QJsonDocument(list).toJson(QJsonDocument::Compact));
-        file.commit();
+        out.write(QJsonDocument(list).toJson(QJsonDocument::Compact));
+        out.commit();
     }
+}
+
+/// Global 7TV, BTTV and FFZ emotes seen so far. An emote that was once a
+/// global and was later dropped from the global list must not show as
+/// removed from the channel.
+QString globalsFile()
+{
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    return misc.isEmpty()
+               ? QString()
+               : QDir(misc).filePath(QStringLiteral("EmoteStats/globals.json"));
+}
+
+/// 7TV, BTTV and FFZ emotes seen in the channel's own sets. A former global
+/// the channel had and then removed still goes to Removed.
+QString channelEmotesFile(const QString &channel)
+{
+    static const QRegularExpression validName(QStringLiteral("^[a-z0-9_]+$"));
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    if (misc.isEmpty() || !validName.match(channel).hasMatch())
+    {
+        return {};
+    }
+    return QDir(misc).filePath(
+        QStringLiteral("EmoteStats/%1/channel-emotes.json").arg(channel));
 }
 
 class SortItem : public QTableWidgetItem
@@ -698,7 +724,8 @@ void EmoteStatsDialog::initUi()
         layout->addWidget(title);
         auto *text = new QLabel(
             "Counts are from before they were removed. If one is added back, "
-            "it moves back to its own tab with its history.");
+            "it moves back to its own tab with its history. A 7TV emote that "
+            "was renamed in the channel is listed here under its old name.");
         text->setObjectName("dim");
         text->setWordWrap(true);
         layout->addWidget(text);
@@ -887,28 +914,94 @@ void EmoteStatsDialog::fillTable()
         channel ? channel->bttvEmotes() : std::shared_ptr<const EmoteMap>();
     const auto ffzMap =
         channel ? channel->ffzEmotes() : std::shared_ptr<const EmoteMap>();
-    rememberGlobals();
-    auto loaded = [](const std::shared_ptr<const EmoteMap> &map) {
+    const auto globals = globalsFile();
+    rememberNames(
+        globals,
+        {
+            {Source::SevenTv, getApp()->getSeventvEmotes()->globalEmotes()},
+            {Source::Bttv, getApp()->getBttvEmotes()->emotes()},
+            {Source::Ffz, getApp()->getFfzEmotes()->emotes()},
+        });
+    // An empty set counts as loaded only after the channel loaded it: a
+    // channel whose BTTV set became empty has all its BTTV emotes removed.
+    // EMPTY_EMOTE_MAP means the provider is turned off or failed.
+    auto loadedSet = [](const std::shared_ptr<const EmoteMap> &map,
+                        bool loaded) {
+        return loaded && map && map != EMPTY_EMOTE_MAP;
+    };
+    const bool seventvLoaded =
+        channel && loadedSet(seventvMap, channel->seventvEmotesLoaded());
+    const bool bttvLoaded =
+        channel && loadedSet(bttvMap, channel->bttvEmotesLoaded());
+    const bool ffzLoaded =
+        channel && loadedSet(ffzMap, channel->ffzEmotesLoaded());
+    const auto channelFile = channelEmotesFile(this->channel_);
+    {
+        EmoteSets sets;
+        if (seventvLoaded)
+        {
+            sets.emplace_back(Source::SevenTv, seventvMap);
+        }
+        if (bttvLoaded)
+        {
+            sets.emplace_back(Source::Bttv, bttvMap);
+        }
+        if (ffzLoaded)
+        {
+            sets.emplace_back(Source::Ffz, ffzMap);
+        }
+        rememberNames(channelFile, sets);
+    }
+    const auto &seenGlobals = seenNames(globals);
+    const auto &seenInChannel = seenNames(channelFile);
+    auto notEmpty = [](const std::shared_ptr<const EmoteMap> &map) {
         return map && !map->empty();
     };
     // without the global list an old global could look like a removed emote
     const bool seventvGlobals =
-        loaded(getApp()->getSeventvEmotes()->globalEmotes());
-    const bool bttvGlobals = loaded(getApp()->getBttvEmotes()->emotes());
-    const bool ffzGlobals = loaded(getApp()->getFfzEmotes()->emotes());
+        notEmpty(getApp()->getSeventvEmotes()->globalEmotes());
+    const bool bttvGlobals = notEmpty(getApp()->getBttvEmotes()->emotes());
+    const bool ffzGlobals = notEmpty(getApp()->getFfzEmotes()->emotes());
+
+    // Twitch emotes are matched by the channel's Helix list. Modified sub
+    // emotes (papaL_HF) belong to their base emote.
+    static const QRegularExpression modifiedEmote(
+        QStringLiteral("^(.+)_(BW|HF|SG|SQ|TK)$"));
+    auto twitchId = [this](const QString &name) -> QString {
+        auto id = this->twitchChannelEmotes_.constFind(name);
+        if (id != this->twitchChannelEmotes_.constEnd())
+        {
+            return *id;
+        }
+        const auto match = modifiedEmote.match(name);
+        if (match.hasMatch())
+        {
+            id = this->twitchChannelEmotes_.constFind(match.captured(1));
+            if (id != this->twitchChannelEmotes_.constEnd())
+            {
+                return *id + '_' + match.captured(2);
+            }
+        }
+        return {};
+    };
+
     enum class Kind : std::uint8_t { Channel, Removed, Hidden };
     auto kindOf = [&](Source source, const QString &name) {
         const EmoteName emoteName{name};
         auto check = [&](const std::shared_ptr<const EmoteMap> &map,
-                         bool global, bool globalsLoaded) {
-            global = global || seenGlobals().contains(rowKey(source, name));
+                         bool setLoaded, bool currentGlobal,
+                         bool globalsLoaded) {
             if (map && map->contains(emoteName))
             {
                 return Kind::Channel;
             }
-            // the channel's emotes are not loaded (yet): it was counted as a
+            const auto key = rowKey(source, name);
+            // still usable as a global: later uses count as global ones
+            const bool global = currentGlobal || (seenGlobals.contains(key) &&
+                                                  !seenInChannel.contains(key));
+            // the channel's set is not loaded (yet): it was counted as a
             // channel emote unless it is a global
-            if (!map || map->empty())
+            if (!setLoaded)
             {
                 return global ? Kind::Hidden : Kind::Channel;
             }
@@ -917,21 +1010,24 @@ void EmoteStatsDialog::fillTable()
         switch (source)
         {
             case Source::Twitch:
-                return this->twitchChannelEmotes_.contains(name) ? Kind::Channel
-                                                                 : Kind::Hidden;
+                // logged out or Helix failed: every counted Twitch emote
+                // is listed, like before
+                return !this->twitchEmotesLoaded_ || !twitchId(name).isEmpty()
+                           ? Kind::Channel
+                           : Kind::Hidden;
             case Source::SevenTv:
-                return check(seventvMap,
+                return check(seventvMap, seventvLoaded,
                              getApp()->getSeventvEmotes()->globalEmote(
                                  emoteName) != std::nullopt,
                              seventvGlobals);
             case Source::Bttv:
                 return check(
-                    bttvMap,
+                    bttvMap, bttvLoaded,
                     getApp()->getBttvEmotes()->emote(emoteName) != std::nullopt,
                     bttvGlobals);
             case Source::Ffz:
                 return check(
-                    ffzMap,
+                    ffzMap, ffzLoaded,
                     getApp()->getFfzEmotes()->emote(emoteName) != std::nullopt,
                     ffzGlobals);
         }
@@ -997,17 +1093,34 @@ void EmoteStatsDialog::fillTable()
     }
     unused.sort(Qt::CaseInsensitive);
 
-    // pictures of the channel's Twitch emotes
-    for (const auto &row : rows)
+    // pictures of the channel's Twitch emotes, from the Helix list or else
+    // from the emotes the account can use
     {
-        auto id = this->twitchChannelEmotes_.constFind(row.name);
-        if (row.source == Source::Twitch &&
-            id != this->twitchChannelEmotes_.constEnd())
+        auto account = getApp()->getAccounts()->twitch.getCurrent();
+        auto accountEmotes = account->accessEmotes();
+        for (const auto &row : rows)
         {
-            emotes.insert(
-                rowKey(row.source, row.name),
-                getApp()->getEmotes()->getTwitchEmotes()->getOrCreateEmote(
-                    EmoteId{*id}, EmoteName{row.name}));
+            if (row.source != Source::Twitch)
+            {
+                continue;
+            }
+            const auto key = rowKey(row.source, row.name);
+            const auto id = twitchId(row.name);
+            if (!id.isEmpty())
+            {
+                emotes.insert(
+                    key,
+                    getApp()->getEmotes()->getTwitchEmotes()->getOrCreateEmote(
+                        EmoteId{id}, EmoteName{row.name}));
+            }
+            else if (*accountEmotes)
+            {
+                auto emote = (*accountEmotes)->find(EmoteName{row.name});
+                if (emote != (*accountEmotes)->end())
+                {
+                    emotes.insert(key, emote->second);
+                }
+            }
         }
     }
     this->ui_.emoteDelegate->setEmotes(std::move(emotes));
@@ -1133,17 +1246,27 @@ void EmoteStatsDialog::fillTable()
 
 void EmoteStatsDialog::loadTwitchChannelEmotes()
 {
-    if (this->twitchEmotesRequested_)
+    // the list is refreshed every 10 minutes so emotes added while the
+    // window is open show up; a failed request is tried again after 2
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 wait =
+        this->twitchEmotesLoaded_ ? 10 * 60 * 1000 : 2 * 60 * 1000;
+    if (this->twitchEmotesLoading_ ||
+        (this->twitchEmotesRequestedAt_ > 0 &&
+         now - this->twitchEmotesRequestedAt_ < wait))
     {
         return;
     }
     auto channel = this->twitchChannel();
-    if (!channel || channel->roomId().isEmpty())
+    if (!channel || channel->roomId().isEmpty() ||
+        getApp()->getAccounts()->twitch.getCurrent()->isAnon())
     {
-        // the channel is still joining, try again on the next reload
+        // still joining, or logged out (Helix needs an account): the
+        // Twitch rows stay unfiltered until the list loads
         return;
     }
-    this->twitchEmotesRequested_ = true;
+    this->twitchEmotesLoading_ = true;
+    this->twitchEmotesRequestedAt_ = now;
     std::weak_ptr<bool> alive = this->lifetime_;
     getHelix()->getChannelEmotes(
         channel->roomId(),
@@ -1152,6 +1275,8 @@ void EmoteStatsDialog::loadTwitchChannelEmotes()
             {
                 return;
             }
+            this->twitchEmotesLoading_ = false;
+            this->twitchEmotesLoaded_ = true;
             this->twitchChannelEmotes_.clear();
             for (const auto &emote : emotes)
             {
@@ -1164,8 +1289,8 @@ void EmoteStatsDialog::loadTwitchChannelEmotes()
             {
                 return;
             }
-            // try again on the next reload
-            this->twitchEmotesRequested_ = false;
+            // keeps the list from before, if there is one
+            this->twitchEmotesLoading_ = false;
         });
 }
 

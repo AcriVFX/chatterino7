@@ -498,16 +498,34 @@ void TwitchChannel::refreshSevenTVChannelEmotes(bool manualRefresh)
 void TwitchChannel::setBttvEmotes(std::shared_ptr<const EmoteMap> &&map)
 {
     this->bttvEmotes_.set(std::move(map));
+    this->bttvEmotesLoaded_ = true;
 }
 
 void TwitchChannel::setFfzEmotes(std::shared_ptr<const EmoteMap> &&map)
 {
     this->ffzEmotes_.set(std::move(map));
+    this->ffzEmotesLoaded_ = true;
 }
 
 void TwitchChannel::setSeventvEmotes(std::shared_ptr<const EmoteMap> &&map)
 {
     this->seventvEmotes_.set(std::move(map));
+    this->seventvEmotesLoaded_ = true;
+}
+
+bool TwitchChannel::bttvEmotesLoaded() const
+{
+    return this->bttvEmotesLoaded_;
+}
+
+bool TwitchChannel::ffzEmotesLoaded() const
+{
+    return this->ffzEmotesLoaded_;
+}
+
+bool TwitchChannel::seventvEmotesLoaded() const
+{
+    return this->seventvEmotesLoaded_;
 }
 
 void TwitchChannel::addQueuedRedemption(const QString &rewardId,
