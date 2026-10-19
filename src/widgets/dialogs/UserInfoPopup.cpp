@@ -1050,9 +1050,15 @@ void UserInfoPopup::updateTimeoutHistory(const QString &login)
     QString channelName = twitchChannel->getName();
     QString directory = baseDirectory % u"/Twitch/Channels/" % channelName;
 
+    // own pool: reading big log files must not hold up the global pool,
+    // which also decodes emote images
+    static auto *logPool = [] {
+        auto *pool = new QThreadPool;
+        pool->setMaxThreadCount(2);
+        return pool;
+    }();
     std::weak_ptr<bool> hack = this->lifetimeHack_;
-    QThreadPool::globalInstance()->start([this, hack, directory, channelName,
-                                          login] {
+    logPool->start([this, hack, directory, channelName, login] {
         auto now = QDateTime::currentDateTime();
         auto timeouts = modhelpers::readLogTimeouts(directory, channelName,
                                                     login, now, days);
@@ -1303,6 +1309,11 @@ void UserInfoPopup::updateUserData()
 
             // Ensure recent messages are shown
             this->updateLatestMessages();
+
+            // the name is known only now
+            this->ui_.hideMessages->setChecked(
+                getSettings()->isHiddenUser(this->userName_));
+            this->ui_.hideMessages->setEnabled(true);
         }
 
         this->userId_ = user.id;
@@ -1543,6 +1554,8 @@ void UserInfoPopup::updateUserData()
     this->ui_.hideMessages->setChecked(
         getSettings()->isHiddenUser(this->userName_));
     this->ui_.hideMessages->setVisible(!isMyself);
+    // opened by user ID: wait for the name (set in onUserFetched)
+    this->ui_.hideMessages->setEnabled(!this->userName_.isEmpty());
 }
 
 void UserInfoPopup::loadAvatar(const QString &userID, const QString &pictureURL,

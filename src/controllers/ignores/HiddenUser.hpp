@@ -20,7 +20,9 @@ class HiddenUser
 {
 public:
     HiddenUser(const QString &name, QString since)
-        : name_(name.trimmed())
+        // "@Name" typed in the settings table matches too
+        : name_(name.trimmed().startsWith(u'@') ? name.trimmed().mid(1)
+                                                : name.trimmed())
         , since_(std::move(since))
     {
     }

@@ -246,96 +246,147 @@ qint64 parseLogDuration(const QString &text)
     return total;
 }
 
-void parseLogTimeouts(const QString &content, const QDate &date,
-                      const QString &login, std::vector<LogTimeout> &out)
+namespace {
+
+/// Parses log lines of one user. The state (the user's last message) carries
+/// over from one day's file to the next, so a bot timeout right after
+/// midnight and an unban on the next day are still recognized.
+class LogTimeoutParser
 {
-    static const QRegularExpression lineRe(
-        R"(^\[(\d\d):(\d\d):(\d\d)\] (.*)$)");
-    static const QRegularExpression vanishRe(
-        R"(^!(?:v|vanish)\b)", QRegularExpression::CaseInsensitiveOption);
-
-    const QString escaped = QRegularExpression::escape(login);
-    const QRegularExpression timeoutRe(
-        u"^"_s + escaped + uR"( has been timed out for (.+?)\.\s*$)"_s,
-        QRegularExpression::CaseInsensitiveOption);
-    const QRegularExpression banRe(
-        u"^"_s + escaped + uR"( has been permanently banned)"_s,
-        QRegularExpression::CaseInsensitiveOption);
-    // "login: text" or "Localized login: text"
-    // "[time] mod: mod unbanned login."
-    const QRegularExpression unbanRe(
-        uR"(^\S+: \S+ unbanned )"_s + escaped + uR"(\.)"_s,
-        QRegularExpression::CaseInsensitiveOption);
-    const QRegularExpression messageRe(
-        uR"(^(?:\S+ )?)"_s + escaped + uR"(: (.*)$)"_s,
-        QRegularExpression::CaseInsensitiveOption);
-
-    QDateTime lastMessageTime;
-    QString lastMessage;
-
-    for (const auto &rawLine : content.split('\n'))
+public:
+    explicit LogTimeoutParser(const QString &login)
+        : login_(login)
     {
-        QString line = rawLine;
+        const QString escaped = QRegularExpression::escape(login);
+        // IRC: "login has been timed out for 10m."
+        this->timeoutRe_ = QRegularExpression(
+            u"^"_s + escaped + uR"( has been timed out for (.+?)\.\s*$)"_s,
+            QRegularExpression::CaseInsensitiveOption);
+        this->banRe_ = QRegularExpression(
+            u"^"_s + escaped + uR"( has been permanently banned)"_s,
+            QRegularExpression::CaseInsensitiveOption);
+        // EventSub (mods): "mod: mod timed out login for 10m: reason" and
+        // "mod: mod banned login." Only one of the IRC and EventSub lines
+        // ends up in the log. Shared chat ("... in otherchannel") doesn't
+        // count for this channel.
+        this->modTimeoutRe_ = QRegularExpression(
+            uR"(^(\S+): \1 timed out )"_s + escaped +
+                uR"( for ([0-9dhms ]+?)( in \S+)?\s*(?:[.:]|$))"_s,
+            QRegularExpression::CaseInsensitiveOption);
+        this->modBanRe_ =
+            QRegularExpression(uR"(^(\S+): \1 banned )"_s + escaped +
+                                   uR"(( in \S+)?\s*(?:[.:]|$))"_s,
+                               QRegularExpression::CaseInsensitiveOption);
+        // "[time] mod: mod unbanned login." or "Localized mod: mod unbanned"
+        // (the name before and after the colon must be the same, so a chat
+        // message can't fake one)
+        this->unbanRe_ = QRegularExpression(
+            uR"(^(?:[^\s:]+ )?(\S+): \1 unbanned )"_s + escaped + uR"(\.)"_s,
+            QRegularExpression::CaseInsensitiveOption);
+        // "login: text" or "Localized login: text"
+        this->messageRe_ =
+            QRegularExpression(uR"(^(?:\S+ )?)"_s + escaped + uR"(: (.*)$)"_s,
+                               QRegularExpression::CaseInsensitiveOption);
+    }
+
+    void parseLine(QString line, const QDate &date,
+                   std::vector<LogTimeout> &out)
+    {
+        static const QRegularExpression lineRe(
+            R"(^\[(\d\d):(\d\d):(\d\d)\] (.*)$)");
+        static const QRegularExpression vanishRe(
+            R"(^!(?:v|vanish)\b)", QRegularExpression::CaseInsensitiveOption);
+
         if (line.endsWith('\r'))
         {
             line.chop(1);
         }
+        // every line we care about names the user, skip the rest cheaply
+        if (!line.contains(this->login_, Qt::CaseInsensitive))
+        {
+            return;
+        }
         auto m = lineRe.match(line);
         if (!m.hasMatch())
         {
-            continue;
+            return;
         }
         QDateTime time(date, QTime(m.captured(1).toInt(), m.captured(2).toInt(),
                                    m.captured(3).toInt()));
         QString rest = m.captured(4);
 
-        if (unbanRe.match(rest).hasMatch())
+        if (this->unbanRe_.match(rest).hasMatch())
         {
-            if (!out.empty() && out.back().isBan() &&
-                out.back().time.date() == date)
+            // drop the latest ban, also when it was on an earlier day or
+            // a timeout was logged after it
+            auto ban =
+                std::find_if(out.rbegin(), out.rend(), [](const LogTimeout &t) {
+                    return t.isBan();
+                });
+            if (ban != out.rend())
             {
-                out.pop_back();
+                out.erase(std::next(ban).base());
             }
-            continue;
+            return;
         }
 
-        if (auto mm = messageRe.match(rest); mm.hasMatch())
+        if (auto mm = this->messageRe_.match(rest); mm.hasMatch())
         {
-            lastMessageTime = time;
-            lastMessage = mm.captured(1);
-            continue;
+            this->lastMessageTime_ = time;
+            this->lastMessage_ = mm.captured(1);
+            return;
         }
 
         LogTimeout timeout;
-        if (auto mm = timeoutRe.match(rest); mm.hasMatch())
+        if (auto mm = this->timeoutRe_.match(rest); mm.hasMatch())
         {
             timeout.duration = mm.captured(1);
             timeout.seconds = parseLogDuration(timeout.duration);
         }
-        else if (banRe.match(rest).hasMatch())
+        else if (this->banRe_.match(rest).hasMatch())
         {
+            timeout.duration = u"ban"_s;
+            timeout.seconds = -1;
+        }
+        else if (auto mm = this->modTimeoutRe_.match(rest); mm.hasMatch())
+        {
+            if (!mm.captured(3).isEmpty())
+            {
+                return;  // shared chat
+            }
+            timeout.duration = mm.captured(2).trimmed();
+            timeout.seconds = parseLogDuration(timeout.duration);
+        }
+        else if (auto mm = this->modBanRe_.match(rest); mm.hasMatch())
+        {
+            if (!mm.captured(2).isEmpty())
+            {
+                return;  // shared chat
+            }
             timeout.duration = u"ban"_s;
             timeout.seconds = -1;
         }
         else
         {
-            continue;
+            return;
         }
 
         timeout.time = time;
-        // the same timeout shown twice (e.g. by two clients) without a message in between
-        if (!lastMessageTime.isValid() && !out.empty() &&
-            out.back().seconds == timeout.seconds &&
+        // the same timeout shown twice (e.g. by two clients, or the IRC and
+        // the EventSub line) without a message in between
+        if (!this->lastMessageTime_.isValid() && !out.empty() &&
+            out.back().isBan() == timeout.isBan() &&
+            std::abs(out.back().seconds - timeout.seconds) <= 2 &&
             out.back().time.secsTo(time) <= 5)
         {
-            continue;
+            return;
         }
-        if (lastMessageTime.isValid())
+        if (this->lastMessageTime_.isValid())
         {
-            auto since = lastMessageTime.secsTo(time);
+            auto since = this->lastMessageTime_.secsTo(time);
             timeout.automatic = since >= 0 && since <= 2;
             timeout.vanish = since >= 0 && since <= 90 &&
-                             vanishRe.match(lastMessage).hasMatch();
+                             vanishRe.match(this->lastMessage_).hasMatch();
         }
         // bans are always shown, even if a bot gave them
         if (timeout.isBan())
@@ -344,8 +395,32 @@ void parseLogTimeouts(const QString &content, const QDate &date,
             timeout.vanish = false;
         }
         out.push_back(timeout);
-        lastMessageTime = {};
-        lastMessage.clear();
+        this->lastMessageTime_ = {};
+        this->lastMessage_.clear();
+    }
+
+private:
+    QString login_;
+    QRegularExpression timeoutRe_;
+    QRegularExpression banRe_;
+    QRegularExpression modTimeoutRe_;
+    QRegularExpression modBanRe_;
+    QRegularExpression unbanRe_;
+    QRegularExpression messageRe_;
+
+    QDateTime lastMessageTime_;
+    QString lastMessage_;
+};
+
+}  // namespace
+
+void parseLogTimeouts(const QString &content, const QDate &date,
+                      const QString &login, std::vector<LogTimeout> &out)
+{
+    LogTimeoutParser parser(login);
+    for (const auto &line : content.split('\n'))
+    {
+        parser.parseLine(line, date, out);
     }
 }
 
@@ -360,6 +435,7 @@ std::vector<LogTimeout> readLogTimeouts(const QString &channelLogDirectory,
         return out;
     }
 
+    LogTimeoutParser parser(login);
     QDir dir(channelLogDirectory);
     for (int i = days; i >= 0; i--)
     {
@@ -370,7 +446,11 @@ std::vector<LogTimeout> readLogTimeouts(const QString &channelLogDirectory,
         {
             continue;
         }
-        parseLogTimeouts(QString::fromUtf8(file.readAll()), date, login, out);
+        // line by line: busy channels write 100+ MB a day
+        while (!file.atEnd())
+        {
+            parser.parseLine(QString::fromUtf8(file.readLine()), date, out);
+        }
     }
 
     const auto cutoff = now.addDays(-days);
