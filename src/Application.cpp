@@ -64,6 +64,7 @@
 #include "singletons/Toasts.hpp"
 #include "singletons/Updates.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/EmoteStats.hpp"
 #include "util/Helpers.hpp"
 #include "util/PostToThread.hpp"
 #include "widgets/Notebook.hpp"
@@ -657,6 +658,9 @@ KickChatServer *Application::getKickChatServer()
 void Application::aboutToQuit()
 {
     ABOUT_TO_QUIT.store(true);
+
+    // Chatterino9: save the last emote counts (they are written every 30s)
+    emotestats::flush();
 
     this->eventSub->setQuitting();
 
