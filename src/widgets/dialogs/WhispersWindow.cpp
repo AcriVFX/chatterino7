@@ -718,7 +718,15 @@ void WhispersWindow::showConversation(const QString &partner)
     auto [page, split] = whispersSplit();
     if (split != nullptr)
     {
-        getApp()->getWindows()->getMainWindow().getNotebook().select(page);
+        // e.g. a whisper clicked in a popup window, or Chatterino minimized
+        auto &mainWindow = getApp()->getWindows()->getMainWindow();
+        if (mainWindow.isMinimized())
+        {
+            mainWindow.showNormal();
+        }
+        mainWindow.raise();
+        mainWindow.activateWindow();
+        mainWindow.getNotebook().select(page);
         page->setSelected(split);
         auto *panel = split->getWhispersPanel();
         panel->showPartner(partner);
