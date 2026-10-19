@@ -55,7 +55,9 @@
 
 #include <QCheckBox>
 #include <QDesktopServices>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QMetaEnum>
 #include <QMovie>
@@ -174,6 +176,41 @@ QString hashUrl(const QString &url)
         QCryptographicHash::hash(bytes, QCryptographicHash::Sha256));
 
     return hashBytes.toHex();
+}
+
+/// Whether Chatterino writes logs for `channelName` that the timeout reader
+/// understands: logging on for the channel and [hh:mm:ss] timestamps
+bool timeoutLogsReadable(const QString &channelName)
+{
+    auto *settings = getSettings();
+    if (!settings->enableLogging)
+    {
+        return false;
+    }
+    if (settings->onlyLogListedChannels)
+    {
+        const auto listed = settings->loggedChannels.readOnly();
+        if (std::ranges::none_of(*listed, [&](const ChannelLog &log) {
+                return log.channelName().compare(channelName,
+                                                 Qt::CaseInsensitive) == 0;
+            }))
+        {
+            return false;
+        }
+    }
+    const QString format = settings->logTimestampFormat;
+    return QTime(13, 5, 7).toString(format) == u"13:05:07";
+}
+
+void showNoTimeoutLogs(Label *label)
+{
+    label->setText(QStringLiteral("Timeouts (7d): no logs"));
+    label->setToolTip(
+        QStringLiteral("Chat logging is off for this channel or uses another "
+                       "timestamp format, so timeouts can't be counted"));
+    auto palette = label->palette();
+    palette.setColor(QPalette::WindowText, QColor("#aaa"));
+    label->setPalette(palette);
 }
 
 }  // namespace
@@ -1050,6 +1087,12 @@ void UserInfoPopup::updateTimeoutHistory(const QString &login)
     QString channelName = twitchChannel->getName();
     QString directory = baseDirectory % u"/Twitch/Channels/" % channelName;
 
+    if (!timeoutLogsReadable(channelName))
+    {
+        showNoTimeoutLogs(label);
+        return;
+    }
+
     // own pool: reading big log files must not hold up the global pool,
     // which also decodes emote images
     static auto *logPool = [] {
@@ -1062,14 +1105,26 @@ void UserInfoPopup::updateTimeoutHistory(const QString &login)
         auto now = QDateTime::currentDateTime();
         auto timeouts = modhelpers::readLogTimeouts(directory, channelName,
                                                     login, now, days);
+        bool anyLog = false;
+        for (int i = 0; i <= days && !anyLog; i++)
+        {
+            anyLog = QFileInfo::exists(QDir(directory).filePath(
+                channelName % u'-' %
+                now.date().addDays(-i).toString(u"yyyy-MM-dd"_s) % u".log"));
+        }
 
-        postToThread([this, hack, timeouts = std::move(timeouts), now] {
+        postToThread([this, hack, timeouts = std::move(timeouts), now, anyLog] {
             if (!hack.lock())
             {
                 return;
             }
 
             auto *label = this->ui_.timeoutHistoryLabel;
+            if (!anyLog)
+            {
+                showNoTimeoutLogs(label);
+                return;
+            }
             int modTimeouts = 0;
             int bans = 0;
             int bots = 0;
