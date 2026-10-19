@@ -206,6 +206,27 @@ void importLogsOnce(const QString &account, const QString &dir)
     {
         return;
     }
+    // The logs don't say which account got a whisper, so they belong to
+    // the first account only. Others would get conversations they never had.
+    {
+        QDir parent(dir);
+        parent.cdUp();
+        const auto accounts =
+            parent.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const auto &other : accounts)
+        {
+            if (QFile::exists(QDir(parent.filePath(other))
+                                  .filePath(QStringLiteral("imported-logs"))))
+            {
+                QFile flag(flagPath);
+                if (flag.open(QIODevice::WriteOnly))
+                {
+                    flag.write("imported by another account");
+                }
+                return;
+            }
+        }
+    }
 
     static const QRegularExpression fileRe(
         QStringLiteral("^whispers-(\\d{4}-\\d{2}-\\d{2})\\.log$"));
