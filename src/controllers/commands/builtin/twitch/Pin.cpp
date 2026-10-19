@@ -133,9 +133,9 @@ ExpectedStr<Action> parseAction(const CommandContext &ctx)
     if (const auto unknown = parser.unknownOptionNames(); !unknown.isEmpty())
     {
         // the text would lose these words otherwise
-        return makeUnexpected(u"Unknown option \"-"_s + unknown.first() +
-                              u"\". Put -- before the text if it starts "
-                              u"with a dash."_s);
+        return makeUnexpected(
+            QString(u"Unknown option \"-"_s + unknown.first() +
+                    u"\". Put -- before the text if it starts with a dash."_s));
     }
 
     std::optional<std::chrono::seconds> duration;

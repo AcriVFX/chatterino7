@@ -146,11 +146,13 @@ void PinnedMessageWidget::tickProgress()
         // Clearing re-enters refresh() and frees the pin, which refresh()
         // may still be reading, so do it once the current call is done.
         QTimer::singleShot(0, this, [this] {
-            if (this->channel_ && this->channel_->getPinnedMessage() &&
-                this->channel_->getPinnedMessage()->endsAt &&
-                this->channel_->getPinnedMessage()->endsAt->isValid() &&
-                *this->channel_->getPinnedMessage()->endsAt <=
-                    QDateTime::currentDateTimeUtc())
+            if (this->channel_ == nullptr)
+            {
+                return;
+            }
+            const auto *pin = this->channel_->getPinnedMessage();
+            if (pin != nullptr && pin->endsAt && pin->endsAt->isValid() &&
+                *pin->endsAt <= QDateTime::currentDateTimeUtc())
             {
                 this->channel_->clearPinnedMessage();
             }
