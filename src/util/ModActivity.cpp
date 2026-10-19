@@ -13,6 +13,7 @@
 #include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QSet>
 #include <QStringView>
 #include <QTextStream>
@@ -128,10 +129,23 @@ struct ChannelData {
     std::vector<Stream> streams;
 };
 
+struct TrackingData {
+    bool loaded = false;
+    Counting counting = Counting::On;
+    qint64 until = 0;
+    qint64 since = 0;
+    bool pending = false;
+    bool outdated = false;
+    /// Goes up on every change, so a late server answer to an older change
+    /// can't mark a newer one as taken
+    int revision = 0;
+};
+
 struct Store {
     std::mutex mutex;
     std::unordered_map<QString, ChannelData> channels;
     std::unordered_map<QString, LiveStream> live;
+    std::unordered_map<QString, TrackingData> tracking;
     /// Shares one copy of each name between all loaded actions
     QSet<QString> names;
 };
@@ -178,6 +192,95 @@ void appendLine(const QString &path, const QString &line)
         QTextStream out(&file);
         out << line << '\n';
     }
+}
+
+// ------------------------------------------------------------- tracking
+
+constexpr std::array<std::pair<Counting, QStringView>, 3> COUNTING_KEYS{{
+    {Counting::On, u"on"},
+    {Counting::Paused, u"paused"},
+    {Counting::Stopped, u"stopped"},
+}};
+
+QString countingKey(Counting counting)
+{
+    for (const auto &[c, key] : COUNTING_KEYS)
+    {
+        if (c == counting)
+        {
+            return key.toString();
+        }
+    }
+    return {};
+}
+
+std::optional<Counting> countingFromKey(const QString &key)
+{
+    for (const auto &[c, name] : COUNTING_KEYS)
+    {
+        if (key == name)
+        {
+            return c;
+        }
+    }
+    return std::nullopt;
+}
+
+/// Misc/ModActivity/<channel>/tracking.json
+void saveTrackingLocked(const QString &channel, const TrackingData &t)
+{
+    const auto dir = channelDir(channel);
+    if (!ensureDir(dir))
+    {
+        return;
+    }
+    QFile file(QDir(dir).filePath(QStringLiteral("tracking.json")));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        file.write(QJsonDocument(QJsonObject{
+                                     {"state", countingKey(t.counting)},
+                                     {"until", t.until},
+                                     {"since", t.since},
+                                     {"pending", t.pending},
+                                 })
+                       .toJson(QJsonDocument::Compact));
+    }
+}
+
+/// The tracking state of `channel`; a pause that ran out turns into On
+TrackingData &trackingLocked(Store &st, const QString &channel, qint64 now)
+{
+    auto &t = st.tracking[channel];
+    if (!t.loaded)
+    {
+        t.loaded = true;
+        const auto dir = channelDir(channel);
+        QFile file(dir.isEmpty()
+                       ? QString()
+                       : QDir(dir).filePath(QStringLiteral("tracking.json")));
+        if (!dir.isEmpty() && file.open(QIODevice::ReadOnly))
+        {
+            const auto obj = QJsonDocument::fromJson(file.readAll()).object();
+            if (auto counting = countingFromKey(obj.value(u"state").toString()))
+            {
+                t.counting = *counting;
+                t.until = obj.value(u"until").toInteger();
+                t.since = obj.value(u"since").toInteger();
+                t.pending = obj.value(u"pending").toBool();
+            }
+        }
+    }
+    if (t.counting == Counting::Paused && t.until <= now)
+    {
+        // the server's pause runs out at the same time
+        t.counting = Counting::On;
+        t.since = t.until;
+        t.until = 0;
+        t.pending = false;
+        ++t.revision;
+        saveTrackingLocked(channel, t);
+    }
+    return t;
 }
 
 void loadStreams(ChannelData &data, const QString &dir)
@@ -441,6 +544,9 @@ struct SyncState {
     /// Time of the newest server action merged so far
     qint64 cursor = 0;
     qint64 lastSync = 0;
+    /// Goes up when the counts are deleted, so a sync that was already
+    /// running doesn't bring the deleted actions back
+    int epoch = 0;
 };
 
 QString syncFile(const QString &channel)
@@ -501,14 +607,15 @@ void finishSync(const QString &channel, bool ok)
 }
 
 NetworkRequest serverRequest(const RemoteConfig &config, const QString &path,
-                             const QUrlQuery &query = {})
+                             const QUrlQuery &query = {},
+                             NetworkRequestType type = NetworkRequestType::Get)
 {
     auto url = config.url;
     url.setPath(path);
     url.setQuery(query);
     // Cloudflare Access answers a missing key with a redirect to its login
     // page, which must count as a failure
-    auto request = NetworkRequest(url)
+    auto request = NetworkRequest(url, type)
                        .followRedirects(false)
                        .timeout(SYNC_TIMEOUT_MSECS)
                        .header("X-Modtracker-Key", config.apiKey);
@@ -527,11 +634,113 @@ bool isOk(const NetworkResult &result)
     return result.status() == 200;
 }
 
+/// Sends the tracking state of `channel` to the server if it hasn't taken it
+/// yet. Returns whether it was sent.
+bool pushTracking(const QString &channel, const RemoteConfig &config)
+{
+    QJsonObject body;
+    int revision = 0;
+    {
+        auto &st = store();
+        std::scoped_lock lock(st.mutex);
+        const auto &t =
+            trackingLocked(st, channel, QDateTime::currentMSecsSinceEpoch());
+        if (!t.pending)
+        {
+            return false;
+        }
+        body = {
+            {"state", countingKey(t.counting)},
+            {"until", t.until},
+        };
+        revision = t.revision;
+    }
+
+    serverRequest(config, QStringLiteral("/v1/%1/tracking").arg(channel), {},
+                  NetworkRequestType::Post)
+        .json(body)
+        .onSuccess([channel, revision](const NetworkResult &result) {
+            if (!isOk(result))
+            {
+                return;
+            }
+            {
+                auto &st = store();
+                std::scoped_lock lock(st.mutex);
+                auto &t = trackingLocked(st, channel,
+                                         QDateTime::currentMSecsSinceEpoch());
+                t.outdated = false;
+                if (t.revision == revision)
+                {
+                    t.pending = false;
+                    saveTrackingLocked(channel, t);
+                }
+            }
+            syncStatusChanged().invoke();
+        })
+        .onError([channel](const NetworkResult &result) {
+            // a server from before the tracking controls
+            if (result.status() == 404)
+            {
+                auto &st = store();
+                std::scoped_lock lock(st.mutex);
+                trackingLocked(st, channel, QDateTime::currentMSecsSinceEpoch())
+                    .outdated = true;
+            }
+            syncStatusChanged().invoke();
+        })
+        .execute();
+    return true;
+}
+
+/// Takes the server's tracking state when the app has nothing to send
+void adoptServerTracking(const QString &channel, const QJsonObject &obj)
+{
+    const auto counting = countingFromKey(obj.value(u"state").toString());
+    if (!counting)
+    {
+        // a server from before the tracking controls
+        return;
+    }
+    const auto until =
+        *counting == Counting::Paused ? obj.value(u"until").toInteger() : 0;
+
+    auto &st = store();
+    std::scoped_lock lock(st.mutex);
+    auto &t = trackingLocked(st, channel, QDateTime::currentMSecsSinceEpoch());
+    t.outdated = false;
+    if (t.pending || (t.counting == *counting && t.until == until))
+    {
+        return;
+    }
+    t.counting = *counting;
+    t.until = until;
+    t.since = obj.value(u"since").toInteger();
+    ++t.revision;
+    saveTrackingLocked(channel, t);
+}
+
+/// A sync that started before the counts were deleted stops here
+bool deletedSince(const QString &channel, int epoch)
+{
+    auto &state = syncState(channel);
+    if (state.epoch == epoch)
+    {
+        return false;
+    }
+    state.running = false;
+    return true;
+}
+
 void fetchStreams(const QString &channel, const RemoteConfig &config,
-                  bool anyAdded)
+                  bool anyAdded, int epoch)
 {
     serverRequest(config, QStringLiteral("/v1/%1/streams").arg(channel))
-        .onSuccess([channel, anyAdded](const NetworkResult &result) {
+        .onSuccess([channel, anyAdded, epoch](const NetworkResult &result) {
+            if (deletedSince(channel, epoch))
+            {
+                return;
+            }
             if (!isOk(result))
             {
                 finishSync(channel, false);
@@ -556,7 +765,7 @@ void fetchStreams(const QString &channel, const RemoteConfig &config,
         .execute();
 }
 
-void fetchActions(const QString &channel, const RemoteConfig &config)
+void fetchActions(const QString &channel, const RemoteConfig &config, int epoch)
 {
     const auto &state = syncState(channel);
     QUrlQuery query;
@@ -565,7 +774,11 @@ void fetchActions(const QString &channel, const RemoteConfig &config)
                            0, state.cursor - SYNC_OVERLAP_MSECS)));
 
     serverRequest(config, QStringLiteral("/v1/%1/actions").arg(channel), query)
-        .onSuccess([channel, config](const NetworkResult &result) {
+        .onSuccess([channel, config, epoch](const NetworkResult &result) {
+            if (deletedSince(channel, epoch))
+            {
+                return;
+            }
             if (!isOk(result))
             {
                 finishSync(channel, false);
@@ -581,7 +794,7 @@ void fetchActions(const QString &channel, const RemoteConfig &config)
                     mergeActionsLocked(st, channel, result.getData(), newest);
             }
             state.cursor = newest;
-            fetchStreams(channel, config, added > 0);
+            fetchStreams(channel, config, added > 0, epoch);
         })
         .onError([channel](const NetworkResult &) {
             finishSync(channel, false);
@@ -610,6 +823,12 @@ void record(const QString &channel, const QDateTime &time, Kind kind,
     {
         auto &st = store();
         std::scoped_lock lock(st.mutex);
+
+        if (trackingLocked(st, key, QDateTime::currentMSecsSinceEpoch())
+                .counting != Counting::On)
+        {
+            return;
+        }
 
         const auto dir = channelDir(key);
         if (ensureDir(dir))
@@ -736,7 +955,12 @@ void syncFromServer(const QString &channel)
     state.running = true;
 
     serverRequest(*config, QStringLiteral("/v1/status"))
-        .onSuccess([key, config = *config](const NetworkResult &result) {
+        .onSuccess([key, config = *config,
+                    epoch = state.epoch](const NetworkResult &result) {
+            if (deletedSince(key, epoch))
+            {
+                return;
+            }
             const auto status = result.parseJson();
             // a server counting another channel has nothing for this one
             if (!isOk(result) || status.value(u"channel").toString() != key)
@@ -745,7 +969,11 @@ void syncFromServer(const QString &channel)
                 return;
             }
             syncState(key).needsSignIn = status.value(u"needsSignIn").toBool();
-            fetchActions(key, config);
+            if (!pushTracking(key, config))
+            {
+                adoptServerTracking(key, status.value(u"tracking").toObject());
+            }
+            fetchActions(key, config, epoch);
         })
         .onError([key](const NetworkResult &) {
             finishSync(key, false);
@@ -794,6 +1022,148 @@ QString remoteHost()
 {
     const auto config = remoteConfig();
     return config ? config->url.host() : QString();
+}
+
+Tracking tracking(const QString &channel)
+{
+    const auto key = channel.toLower();
+    auto &st = store();
+    std::scoped_lock lock(st.mutex);
+    const auto &t =
+        trackingLocked(st, key, QDateTime::currentMSecsSinceEpoch());
+    return {
+        .counting = t.counting,
+        .until = t.counting == Counting::Paused
+                     ? QDateTime::fromMSecsSinceEpoch(t.until)
+                     : QDateTime(),
+        .since =
+            t.since > 0 ? QDateTime::fromMSecsSinceEpoch(t.since) : QDateTime(),
+        .serverPending = t.pending,
+        .serverOutdated = t.outdated,
+    };
+}
+
+void setCounting(const QString &channel, Counting counting,
+                 const QDateTime &until)
+{
+    const auto key = channel.toLower();
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    if (counting == Counting::Paused &&
+        (!until.isValid() || until.toMSecsSinceEpoch() <= now))
+    {
+        return;
+    }
+    {
+        auto &st = store();
+        std::scoped_lock lock(st.mutex);
+        auto &t = trackingLocked(st, key, now);
+        t.counting = counting;
+        t.until = counting == Counting::Paused ? until.toMSecsSinceEpoch() : 0;
+        t.since = now;
+        // also without a server, so one set up later gets it
+        t.pending = true;
+        ++t.revision;
+        saveTrackingLocked(key, t);
+    }
+    if (const auto config = remoteConfig())
+    {
+        pushTracking(key, *config);
+    }
+    syncStatusChanged().invoke();
+}
+
+namespace {
+
+void deleteLocal(const QString &channel)
+{
+    {
+        auto &st = store();
+        std::scoped_lock lock(st.mutex);
+        const auto dir = channelDir(channel);
+        if (!dir.isEmpty())
+        {
+            QDir qdir(dir);
+            const auto files = qdir.entryList({QStringLiteral("actions-*.tsv"),
+                                               QStringLiteral("streams.tsv")},
+                                              QDir::Files);
+            for (const auto &name : files)
+            {
+                QFile::remove(qdir.filePath(name));
+            }
+        }
+        auto &data = st.channels[channel];
+        data = {};
+        data.loaded = true;
+        // the running stream gets its row again on the next status refresh
+        auto live = st.live.find(channel);
+        if (live != st.live.end())
+        {
+            live->second.lastWritten = 0;
+        }
+    }
+
+    // whatever the server has now was counted after the delete
+    auto &state = syncState(channel);
+    ++state.epoch;
+    state.cursor = 0;
+    saveSyncState(channel, state);
+    updated().invoke();
+}
+
+}  // namespace
+
+void deleteAll(const QString &channel,
+               std::function<void(const QString &error)> done)
+{
+    const auto key = channel.toLower();
+    const auto config = remoteConfig();
+    if (!config)
+    {
+        deleteLocal(key);
+        done({});
+        return;
+    }
+
+    const auto host = config->url.host();
+    serverRequest(*config, QStringLiteral("/v1/%1/delete").arg(key), {},
+                  NetworkRequestType::Post)
+        .json(QJsonObject{{"confirm", key}})
+        .onSuccess([key, host, done](const NetworkResult &result) {
+            if (!isOk(result))
+            {
+                done(QString("%1 did not delete the counts, so nothing was "
+                             "deleted.")
+                         .arg(host));
+                return;
+            }
+            deleteLocal(key);
+            done({});
+            syncFromServer(key);
+        })
+        .onError([host, done](const NetworkResult &result) {
+            const auto status = result.status();
+            if (!status)
+            {
+                done(QString("%1 could not be reached, so nothing was "
+                             "deleted.")
+                         .arg(host));
+            }
+            else if (*status == 404)
+            {
+                // a server from before the tracking controls
+                done(QString("%1 needs setup.ps1 update before it can "
+                             "delete, so nothing was deleted.")
+                         .arg(host));
+            }
+            else
+            {
+                done(QString("%1 did not delete the counts (error %2), so "
+                             "nothing was deleted.")
+                         .arg(host)
+                         .arg(*status));
+            }
+        })
+        .execute();
 }
 
 }  // namespace chatterino::modactivity
