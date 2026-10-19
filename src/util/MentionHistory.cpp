@@ -225,8 +225,7 @@ QStringList readLines(const QString &path)
     return lines;
 }
 
-void appendLine(const QString &dir, const QString &channel,
-                const QString &line)
+void appendLine(const QString &dir, const QString &channel, const QString &line)
 {
     if (!QDir().mkpath(dir))
     {
@@ -429,24 +428,23 @@ void ensureHooked()
     std::ignore = channel->filledInMessages.connect([](auto &&...) {
         onMentionsChanged();
     });
-    std::ignore = getApp()->getAccounts()->twitch.currentUserChanged.connect(
-        [] {
+    std::ignore =
+        getApp()->getAccounts()->twitch.currentUserChanged.connect([] {
             ensureLoaded();
             notifyChanged();
         });
 }
 
 /// The small indented line that shows your answer under a mention
-MessagePtr buildAnswer(const QString &channel, const QString &id,
-                       qint64 msecs, const QColor &color, const QString &text)
+MessagePtr buildAnswer(const QString &channel, const QString &id, qint64 msecs,
+                       const QColor &color, const QString &text)
 {
     const auto time = QDateTime::fromMSecsSinceEpoch(msecs);
 
     MessageBuilder b;
     // two em spaces indent the line
-    b.emplace<TextElement>(QStringLiteral("  "),
-                           MessageElementFlag::Text, MessageColor::System,
-                           FontStyle::ChatMediumSmall);
+    b.emplace<TextElement>(QStringLiteral("  "), MessageElementFlag::Text,
+                           MessageColor::System, FontStyle::ChatMediumSmall);
     b.emplace<TextElement>(time.time().toString(getSettings()->timestampFormat),
                            MessageElementFlag::Timestamp, MessageColor::System,
                            FontStyle::ChatMediumSmall);
@@ -543,13 +541,13 @@ MessagePtr makeAnswer(const Message &message)
     if (!st.dir.isEmpty() && !st.savedIds.contains(message.id))
     {
         st.savedIds.insert(message.id);
-        appendLine(st.dir, message.channelName,
-                   QStringLiteral("A\t") + QString::number(msecs) + u'\t' +
-                       message.id + u'\t' +
-                       (message.usernameColor.isValid()
-                            ? message.usernameColor.name()
-                            : QString()) +
-                       u'\t' + escapeField(text));
+        appendLine(
+            st.dir, message.channelName,
+            QStringLiteral("A\t") + QString::number(msecs) + u'\t' +
+                message.id + u'\t' +
+                (message.usernameColor.isValid() ? message.usernameColor.name()
+                                                 : QString()) +
+                u'\t' + escapeField(text));
     }
     return buildAnswer(message.channelName, message.id, msecs,
                        message.usernameColor, text);
@@ -670,8 +668,7 @@ void onChatMessage(const MessagePtr &message, const QByteArray &rawIrc,
             ensureLoaded();
             if (auto answer = makeAnswer(*message))
             {
-                mentionsChannel()->addMessage(answer,
-                                              MessageContext::Original);
+                mentionsChannel()->addMessage(answer, MessageContext::Original);
             }
         });
     }

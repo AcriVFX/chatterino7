@@ -405,8 +405,8 @@ void SplitHeader::initializeLayout()
         this->markReadButton_ = makeWidget<LabelButton>([](auto w) {
             w->setText(QStringLiteral("Mark all read"));
             w->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
-            w->setToolTip(QStringLiteral(
-                "Clear the unread count and the \"New\" line"));
+            w->setToolTip(
+                QStringLiteral("Clear the unread count and the \"New\" line"));
             w->hide();
         }),
         // mode

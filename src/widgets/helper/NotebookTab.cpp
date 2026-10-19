@@ -1070,8 +1070,7 @@ void NotebookTab::paintEvent(QPaintEvent *)
         painter.drawRoundedRect(pill, badge.height() / 2.0,
                                 badge.height() / 2.0);
         painter.setPen(Qt::white);
-        painter.setFont(
-            app->getFonts()->getFont(FontStyle::ChatSmall, scale));
+        painter.setFont(app->getFonts()->getFont(FontStyle::ChatSmall, scale));
         painter.drawText(pill, Qt::AlignCenter, badgeText(this->badgeCount_));
         painter.restore();
     }
