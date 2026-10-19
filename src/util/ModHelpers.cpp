@@ -11,6 +11,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <ranges>
 
 namespace chatterino::modhelpers {
 
@@ -318,11 +319,9 @@ public:
         {
             // drop the latest ban, also when it was on an earlier day or
             // a timeout was logged after it
-            auto ban =
-                std::find_if(out.rbegin(), out.rend(), [](const LogTimeout &t) {
-                    return t.isBan();
-                });
-            if (ban != out.rend())
+            auto newestFirst = std::views::reverse(out);
+            auto ban = std::ranges::find_if(newestFirst, &LogTimeout::isBan);
+            if (ban != newestFirst.end())
             {
                 out.erase(std::next(ban).base());
             }
@@ -417,7 +416,8 @@ void parseLogTimeouts(const QString &content, QDate date, const QString &login,
                       std::vector<LogTimeout> &out)
 {
     LogTimeoutParser parser(login);
-    for (const auto &line : content.split('\n'))
+    const auto lines = content.split('\n');
+    for (const auto &line : lines)
     {
         parser.parseLine(line, date, out);
     }

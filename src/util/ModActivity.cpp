@@ -1183,7 +1183,7 @@ void deleteLocal(const QString &channel)
 }  // namespace
 
 void deleteAll(const QString &channel,
-               std::function<void(const QString &error)> done)
+               const std::function<void(const QString &error)> &done)
 {
     const auto key = channel.toLower();
     const auto config = remoteConfigFor(key);

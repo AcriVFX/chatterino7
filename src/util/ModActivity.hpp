@@ -135,6 +135,6 @@ void setCounting(const QString &channel, Counting counting,
 /// text when it worked, or what went wrong, and then nothing was deleted.
 /// Must be called from the GUI thread.
 void deleteAll(const QString &channel,
-               std::function<void(const QString &error)> done);
+               const std::function<void(const QString &error)> &done);
 
 }  // namespace chatterino::modactivity
