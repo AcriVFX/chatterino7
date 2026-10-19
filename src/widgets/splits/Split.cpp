@@ -28,6 +28,7 @@
 #include "widgets/dialogs/SelectChannelDialog.hpp"
 #include "widgets/dialogs/SelectChannelFiltersDialog.hpp"
 #include "widgets/dialogs/UserInfoPopup.hpp"
+#include "widgets/dialogs/WhispersWindow.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/DebugPopup.hpp"
 #include "widgets/helper/NotebookTab.hpp"
@@ -186,6 +187,12 @@ Split::Split(QWidget *parent)
                 return;
             }
 
+            if (this->whispersPanel_ != nullptr &&
+                !this->whispersPanel_->isHidden())
+            {
+                return;
+            }
+
             if (newText.isEmpty())
             {
                 this->input_->hide();
@@ -199,6 +206,12 @@ Split::Split(QWidget *parent)
 
     getSettings()->showEmptyInput.connect(
         [this](const bool &showEmptyInput) {
+            if (this->whispersPanel_ != nullptr &&
+                !this->whispersPanel_->isHidden())
+            {
+                return;
+            }
+
             if (showEmptyInput)
             {
                 this->input_->show();
@@ -768,6 +781,50 @@ PredictionStripWidget *Split::getPredictionStrip() const
     return this->predictionStrip_;
 }
 
+WhispersPanel *Split::getWhispersPanel() const
+{
+    if (this->whispersPanel_ == nullptr || this->whispersPanel_->isHidden())
+    {
+        return nullptr;
+    }
+    return this->whispersPanel_;
+}
+
+void Split::updateWhispersPanel()
+{
+    // Chatterino9: /whispers splits show the whisper conversations instead of
+    // all whispers in one chat
+    const bool whispers =
+        this->getChannel()->getType() == Channel::Type::TwitchWhispers;
+    if (whispers && this->whispersPanel_ == nullptr)
+    {
+        this->whispersPanel_ = new WhispersPanel(this);
+        // under the header, above the hidden chat
+        this->vbox_->insertWidget(1, this->whispersPanel_, 1);
+    }
+    if (this->whispersPanel_ == nullptr)
+    {
+        return;
+    }
+
+    this->whispersPanel_->setVisible(whispers);
+    this->view_->setVisible(!whispers);
+    if (whispers)
+    {
+        this->input_->hide();
+        this->setFocusProxy(this->whispersPanel_->input());
+    }
+    else
+    {
+        if (getSettings()->showEmptyInput ||
+            !this->input_->getInputText().isEmpty())
+        {
+            this->input_->show();
+        }
+        this->setFocusProxy(this->input_->ui_.textEdit);
+    }
+}
+
 void Split::updatePinnedBannerChannel()
 {
     auto *tc = dynamic_cast<TwitchChannel *>(this->getChannel().get());
@@ -885,6 +942,7 @@ void Split::setChannel(IndirectChannel newChannel)
     this->channel_ = newChannel;
 
     this->view_->setChannel(newChannel.get());
+    this->updateWhispersPanel();
 
     this->usermodeChangedConnection_.disconnect();
     this->roomModeChangedConnection_.disconnect();

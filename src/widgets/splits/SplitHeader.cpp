@@ -619,7 +619,7 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
         if (this->split_->getChannel()->isTwitchChannel())
         {
             menu->addAction("Whispers window", this->split_, [] {
-                WhispersWindow::showConversation();
+                WhispersWindow::showWindow();
             });
         }
 

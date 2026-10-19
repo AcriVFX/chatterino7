@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 namespace {
 
@@ -316,57 +317,37 @@ Split *anySplit()
     return nullptr;
 }
 
+/// The first /whispers split in the main window and its tab, if any
+std::pair<SplitContainer *, Split *> whispersSplit()
+{
+    auto &notebook = getApp()->getWindows()->getMainWindow().getNotebook();
+    for (int i = 0; i < notebook.getPageCount(); i++)
+    {
+        auto *page = dynamic_cast<SplitContainer *>(notebook.getPageAt(i));
+        if (page == nullptr)
+        {
+            continue;
+        }
+        for (auto *split : page->getSplits())
+        {
+            if (split->getWhispersPanel() != nullptr)
+            {
+                return {page, split};
+            }
+        }
+    }
+    return {nullptr, nullptr};
+}
+
 }  // namespace
 
 namespace chatterino {
 
-void WhispersWindow::showConversation(const QString &partner)
+// WhispersPanel
+
+WhispersPanel::WhispersPanel(QWidget *parent)
+    : BaseWidget(parent)
 {
-    auto &window = instance();
-    if (!window)
-    {
-        window = new WhispersWindow();
-    }
-
-    window->reloadList();
-    if (!partner.isEmpty())
-    {
-        window->openPartner(partner.toLower());
-    }
-    else if (window->partner_.isEmpty() && window->list_->count() > 0)
-    {
-        window->openPartner(
-            window->list_->item(0)->data(PartnerRole).toString());
-    }
-
-    if (window->isMinimized())
-    {
-        window->showNormal();
-    }
-    window->show();
-    window->raise();
-    window->activateWindow();
-    window->input_->setFocus();
-}
-
-WhispersWindow::WhispersWindow()
-    : BaseWindow({
-          BaseWindow::DisableCustomScaling,
-          BaseWindow::DisableLayoutSave,
-          BaseWindow::BoundsCheckOnShow,
-      })
-{
-    this->setAttribute(Qt::WA_DeleteOnClose);
-    this->setWindowTitle("Whispers");
-    this->resize(1000, 680);
-
-    const auto path = geometryPath();
-    QFile geometry(path);
-    if (!path.isEmpty() && geometry.open(QIODevice::ReadOnly))
-    {
-        this->restoreGeometry(geometry.readAll());
-    }
-
     this->initUi();
 
     this->signalHolder_.managedConnect(
@@ -406,13 +387,41 @@ WhispersWindow::WhispersWindow()
                 this->viewChannel_->addMessage(message, MessageContext::Repost);
             }
         });
+
+    this->reloadList();
+    this->showPartner({});
 }
 
-void WhispersWindow::initUi()
+void WhispersPanel::showPartner(const QString &partner)
 {
+    this->reloadList();
+    if (!partner.isEmpty())
+    {
+        this->openPartner(partner.toLower());
+    }
+    else if (this->partner_.isEmpty() && this->list_->count() > 0)
+    {
+        this->openPartner(this->list_->item(0)->data(PartnerRole).toString());
+    }
+}
+
+QLineEdit *WhispersPanel::input() const
+{
+    return this->input_;
+}
+
+QString WhispersPanel::openDisplayName() const
+{
+    return this->displayName_;
+}
+
+void WhispersPanel::initUi()
+{
+    this->setObjectName("whispersRoot");
+    this->setAttribute(Qt::WA_StyledBackground);
     this->setStyleSheet(R"(
         * { font-family: "Segoe UI"; font-size: 13px; color: #ececec; }
-        QWidget#root { background: #111111; }
+        QWidget#whispersRoot { background: #111111; }
         QWidget#side { background: #111111; border-right: 1px solid #2a2a2d; }
         QWidget#head { background: #1d1d1f; border-bottom: 1px solid #2a2a2d; }
         QLabel#name { font-weight: 600; }
@@ -428,11 +437,9 @@ void WhispersWindow::initUi()
         QPushButton:disabled { color: #4a4a4e; border-color: #222225; }
     )");
 
-    auto *root = new QHBoxLayout(this->getLayoutContainer());
+    auto *root = new QHBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
-    this->getLayoutContainer()->setObjectName("root");
-
     // conversation list
     auto *side = new QWidget;
     side->setObjectName("side");
@@ -537,7 +544,7 @@ void WhispersWindow::initUi()
     this->openPartner({});
 }
 
-void WhispersWindow::reloadList()
+void WhispersPanel::reloadList()
 {
     const auto filter = this->search_->text().trimmed().toLower();
     auto conversations = whisperhistory::conversations();
@@ -570,10 +577,9 @@ void WhispersWindow::reloadList()
                                         : c.lastText);
         item->setData(TimeRole,
                       c.lastMsecs > 0 ? shortTime(c.lastMsecs) : QString());
-        item->setData(UnreadRole,
-                      c.partner == this->partner_ && this->isActiveWindow()
-                          ? 0
-                          : c.unread);
+        item->setData(UnreadRole, c.partner == this->partner_ && this->isSeen()
+                                      ? 0
+                                      : c.unread);
         this->list_->addItem(item);
         if (c.partner == this->partner_)
         {
@@ -588,7 +594,7 @@ void WhispersWindow::reloadList()
         }));
 }
 
-void WhispersWindow::openPartner(const QString &partner)
+void WhispersPanel::openPartner(const QString &partner)
 {
     const bool changed = partner != this->partner_;
     this->partner_ = partner;
@@ -603,8 +609,7 @@ void WhispersWindow::openPartner(const QString &partner)
         }
     }
     this->nameLabel_->setText(display);
-    this->setWindowTitle(partner.isEmpty() ? QString("Whispers")
-                                           : "Whispers - " + display);
+    this->displayName_ = partner.isEmpty() ? QString() : display;
     this->usercardButton_->setEnabled(!partner.isEmpty());
     this->input_->setEnabled(!partner.isEmpty());
     this->input_->setPlaceholderText(partner.isEmpty() ? QString()
@@ -616,9 +621,13 @@ void WhispersWindow::openPartner(const QString &partner)
     }
     this->markOpenRead();
     this->reloadList();
+    if (changed)
+    {
+        this->partnerChanged.invoke();
+    }
 }
 
-void WhispersWindow::loadConversation()
+void WhispersPanel::loadConversation()
 {
     this->viewChannel_ =
         std::make_shared<Channel>("Whispers window", Channel::Type::None);
@@ -639,7 +648,7 @@ void WhispersWindow::loadConversation()
     this->view_->setChannel(this->viewChannel_);
 }
 
-void WhispersWindow::sendInput()
+void WhispersPanel::sendInput()
 {
     const auto text = this->input_->text().trimmed();
     if (text.isEmpty() || this->partner_.isEmpty())
@@ -653,7 +662,7 @@ void WhispersWindow::sendInput()
     this->input_->clear();
 }
 
-void WhispersWindow::openUsercard()
+void WhispersPanel::openUsercard()
 {
     auto *split = anySplit();
     if (this->partner_.isEmpty() || split == nullptr)
@@ -666,12 +675,112 @@ void WhispersWindow::openUsercard()
     popup->show();
 }
 
-void WhispersWindow::markOpenRead()
+void WhispersPanel::markOpenRead()
 {
-    if (!this->partner_.isEmpty() && this->isActiveWindow())
+    if (!this->partner_.isEmpty() && this->isSeen())
     {
         whisperhistory::markRead(this->partner_);
     }
+}
+
+bool WhispersPanel::isSeen() const
+{
+    return this->isVisible() && this->isActiveWindow();
+}
+
+void WhispersPanel::changeEvent(QEvent *event)
+{
+    BaseWidget::changeEvent(event);
+    if (event->type() == QEvent::ActivationChange && this->isSeen())
+    {
+        this->markOpenRead();
+        this->reloadList();
+    }
+}
+
+void WhispersPanel::showEvent(QShowEvent *event)
+{
+    BaseWidget::showEvent(event);
+    // e.g. the /whispers tab was selected
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            this->markOpenRead();
+            this->reloadList();
+        },
+        Qt::QueuedConnection);
+}
+
+// WhispersWindow
+
+void WhispersWindow::showConversation(const QString &partner)
+{
+    auto [page, split] = whispersSplit();
+    if (split != nullptr)
+    {
+        getApp()->getWindows()->getMainWindow().getNotebook().select(page);
+        page->setSelected(split);
+        auto *panel = split->getWhispersPanel();
+        panel->showPartner(partner);
+        panel->input()->setFocus();
+        return;
+    }
+    WhispersWindow::showWindow(partner);
+}
+
+void WhispersWindow::showWindow(const QString &partner)
+{
+    auto &window = instance();
+    if (!window)
+    {
+        window = new WhispersWindow();
+    }
+
+    window->panel_->showPartner(partner);
+
+    if (window->isMinimized())
+    {
+        window->showNormal();
+    }
+    window->show();
+    window->raise();
+    window->activateWindow();
+    window->panel_->input()->setFocus();
+}
+
+WhispersWindow::WhispersWindow()
+    : BaseWindow({
+          BaseWindow::DisableCustomScaling,
+          BaseWindow::DisableLayoutSave,
+          BaseWindow::BoundsCheckOnShow,
+      })
+{
+    this->setAttribute(Qt::WA_DeleteOnClose);
+    this->resize(1000, 680);
+
+    const auto path = geometryPath();
+    QFile geometry(path);
+    if (!path.isEmpty() && geometry.open(QIODevice::ReadOnly))
+    {
+        this->restoreGeometry(geometry.readAll());
+    }
+
+    auto *layout = new QHBoxLayout(this->getLayoutContainer());
+    layout->setContentsMargins(0, 0, 0, 0);
+    this->panel_ = new WhispersPanel(this);
+    layout->addWidget(this->panel_);
+
+    this->signalHolder_.managedConnect(this->panel_->partnerChanged, [this] {
+        this->updateTitle();
+    });
+    this->updateTitle();
+}
+
+void WhispersWindow::updateTitle()
+{
+    const auto display = this->panel_->openDisplayName();
+    this->setWindowTitle(display.isEmpty() ? QString("Whispers")
+                                           : "Whispers - " + display);
 }
 
 void WhispersWindow::keyPressEvent(QKeyEvent *event)
@@ -708,16 +817,6 @@ void WhispersWindow::closeEvent(QCloseEvent *event)
         }
     }
     BaseWindow::closeEvent(event);
-}
-
-void WhispersWindow::changeEvent(QEvent *event)
-{
-    BaseWindow::changeEvent(event);
-    if (event->type() == QEvent::ActivationChange && this->isActiveWindow())
-    {
-        this->markOpenRead();
-        this->reloadList();
-    }
 }
 
 }  // namespace chatterino

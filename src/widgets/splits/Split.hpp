@@ -26,6 +26,7 @@ class SplitContainer;
 class SplitOverlay;
 class PinnedMessageWidget;
 class PredictionStripWidget;
+class WhispersPanel;
 class SelectChannelDialog;
 class OverlayWindow;
 
@@ -59,6 +60,9 @@ public:
     SplitInput &getInput();
     [[nodiscard]] PinnedMessageWidget *getPinnedBanner() const;
     [[nodiscard]] PredictionStripWidget *getPredictionStrip() const;
+    /// Chatterino9: the whisper conversations a /whispers split shows instead
+    /// of its chat, nullptr in other splits
+    [[nodiscard]] WhispersPanel *getWhispersPanel() const;
 
     IndirectChannel getIndirectChannel();
     ChannelPtr getChannel() const;
@@ -141,6 +145,7 @@ private:
     void channelNameUpdated(const QString &newChannelName);
     void handleModifiers(Qt::KeyboardModifiers modifiers);
     void updateInputPlaceholder();
+    void updateWhispersPanel();
     void updatePinnedBannerChannel();
     void addShortcuts() override;
 
@@ -183,6 +188,7 @@ private:
     SplitHeader *const header_;
     PinnedMessageWidget *const pinnedBanner_;
     PredictionStripWidget *const predictionStrip_;
+    WhispersPanel *whispersPanel_ = nullptr;
     ChannelView *const view_;
     SplitInput *const input_;
     SplitOverlay *const overlay_;
