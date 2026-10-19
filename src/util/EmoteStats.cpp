@@ -732,6 +732,11 @@ std::optional<Source> classify(const TwitchChannel &channel,
     return std::nullopt;
 }
 
+bool countsChannel(const QString &channel)
+{
+    return channel.compare(u"papaplatte", Qt::CaseInsensitive) == 0;
+}
+
 void recordMessage(const QString &channel, const QString &messageId,
                    const QString &login, const QDateTime &time,
                    const std::vector<Use> &uses)

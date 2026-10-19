@@ -54,6 +54,10 @@ struct Use {
 std::optional<Source> classify(const TwitchChannel &channel,
                                const QString &name);
 
+/// Whether live chat in `channel` is counted. Only papaplatte is: counting
+/// every joined channel filled the disk for channels nobody looks at.
+bool countsChannel(const QString &channel);
+
 /// Counts one live chat message of `login` in `channel`. `uses` may repeat an
 /// emote, it counts once. History loaded on join must not be passed in; a
 /// message id seen before is ignored.
