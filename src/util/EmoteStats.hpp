@@ -61,8 +61,12 @@ void recordMessage(const QString &channel, const QString &messageId,
                    const QString &login, const QDateTime &time,
                    const std::vector<Use> &uses);
 
-/// Writes the counts not saved yet (they are saved every 30 seconds anyway)
+/// Saves the counts not saved yet (they are saved every 30 seconds anyway).
+/// The files are written on a background thread; load() waits for them.
 void flush();
+
+/// flush() and wait until the files are written. For quitting.
+void flushAndWait();
 
 struct Row {
     Source source = Source::Twitch;

@@ -33,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
@@ -228,6 +229,7 @@ void flushLocked(Store &st)
         {
             continue;
         }
+        std::optional<qint64> oldestQueued;
         for (auto &[day, data] : live.days)
         {
             if (data.dirty)
@@ -236,11 +238,18 @@ void flushLocked(Store &st)
                                   QDir(dir).filePath(dayName(day) + ".tsv"),
                                   data.buckets);
                 data.dirty = false;
+                if (!oldestQueued)
+                {
+                    oldestQueued = day;
+                }
             }
         }
-        // keep only the newest days in memory, once they are on disk
+        // keep only the newest days in memory, once they are on disk. A day
+        // queued just now stays until the next flush, so a failed write can
+        // still mark it dirty again
         while (live.days.size() > DAYS_IN_MEMORY &&
-               !live.days.begin()->second.dirty)
+               !live.days.begin()->second.dirty &&
+               live.days.begin()->first != oldestQueued)
         {
             live.days.erase(live.days.begin());
         }
@@ -778,17 +787,22 @@ void recordMessage(const QString &channel, const QString &messageId,
 
 void flush()
 {
-    {
-        auto &st = store();
-        std::scoped_lock lock(st.mutex);
-        flushLocked(st);
-    }
-    // callers read the files next
+    auto &st = store();
+    std::scoped_lock lock(st.mutex);
+    flushLocked(st);
+}
+
+void flushAndWait()
+{
+    flush();
     writerPool().waitForDone();
 }
 
 Stats load(const QString &channel, qint64 from, qint64 to)
 {
+    // the counts flush() handed to the writer are on disk before reading
+    writerPool().waitForDone();
+
     Stats stats;
     const auto key = channel.toLower();
     const std::array<QString, 3> dirs{

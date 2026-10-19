@@ -660,7 +660,7 @@ void Application::aboutToQuit()
     ABOUT_TO_QUIT.store(true);
 
     // Chatterino9: save the last emote counts (they are written every 30s)
-    emotestats::flush();
+    emotestats::flushAndWait();
 
     this->eventSub->setQuitting();
 
