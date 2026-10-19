@@ -21,6 +21,7 @@
 #include "widgets/AccountSwitchPopup.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/FramelessEmbedWindow.hpp"
+#include "widgets/helper/NotebookGroup.hpp"
 #include "widgets/helper/NotebookTab.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/OverlayWindow.hpp"
@@ -541,6 +542,22 @@ void WindowManager::save()
         }
 
         windowObj.insert("tabs", tabsArr);
+
+        // tab groups
+        QJsonArray groupsArr;
+        for (const auto &group : window->getNotebook().tabGroups())
+        {
+            groupsArr.append(QJsonObject{
+                {"name", group->name},
+                {"collapsed", group->collapsed},
+                {"liveOnly", group->liveOnly},
+            });
+        }
+        if (!groupsArr.isEmpty())
+        {
+            windowObj.insert("tabGroups", groupsArr);
+        }
+
         windowArr.append(windowObj);
     }
 
@@ -663,6 +680,12 @@ void WindowManager::encodeTab(SplitContainer *tab, bool isSelected,
 
     // highlighting on new messages
     obj.insert("highlightsEnabled", tab->getTab()->hasHighlightsEnabled());
+
+    // tab group
+    if (!tab->getTab()->getGroup().isEmpty())
+    {
+        obj.insert("group", tab->getTab()->getGroup());
+    }
 
     // splits
     QJsonObject splits;
@@ -931,6 +954,13 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
             }
         }
 
+        // tab groups
+        for (const auto &group : windowData.tabGroups_)
+        {
+            window.getNotebook().addTabGroup(group.name_, group.collapsed_,
+                                             group.liveOnly_);
+        }
+
         // open tabs
         for (const auto &tab : windowData.tabs_)
         {
@@ -950,6 +980,9 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
 
             // highlighting on new messages
             page->getTab()->setHighlightsEnabled(tab.highlightsEnabled_);
+
+            // tab group
+            window.getNotebook().assignTabGroup(page->getTab(), tab.group_);
 
             if (tab.rootNode_)
             {

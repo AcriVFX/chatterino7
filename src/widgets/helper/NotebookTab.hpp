@@ -42,6 +42,11 @@ public:
     bool isSelected() const;
     void setSelected(bool value);
 
+    /// Name of the tab group this tab is in, empty if it's in none.
+    /// Use Notebook::moveTabToGroup to move tabs between groups.
+    const QString &getGroup() const;
+    void setGroup(const QString &group);
+
     void setInLastRow(bool value);
     void setTabLocation(NotebookTabLocation location);
 
@@ -140,6 +145,10 @@ private:
     void updateHighlightStateDueSourcesChange();
 
     void recreateCloseMultipleTabsMenu(NotebookTabLocation tabLocation);
+    void recreateMoveToGroupMenu();
+
+    /// Lets the group header/offline button repaint their unread state
+    void highlightStateChanged();
 
     QPropertyAnimation positionChangedAnimation_;
     QPoint positionAnimationDesiredPoint_;
@@ -148,6 +157,7 @@ private:
 
     QString customTitle_;
     QString defaultTitle_;
+    QString group_;
 
     bool selected_{};
     bool mouseOver_{};
@@ -169,6 +179,7 @@ private:
 
     QMenu menu_;
     QMenu *closeMultipleTabsMenu_{};
+    QMenu *moveToGroupMenu_{};
     QAction *closeTabsBeforeSelectedAction_{};
     QAction *closeTabsAfterSelectedAction_{};
 

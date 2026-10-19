@@ -15,7 +15,9 @@
 #include <QWidget>
 
 #include <functional>
+#include <memory>
 #include <span>
+#include <vector>
 
 namespace chatterino {
 
@@ -24,6 +26,8 @@ class PixmapButton;
 class Window;
 class DrawnButton;
 class NotebookTab;
+class NotebookGroupWidget;
+struct NotebookTabGroup;
 class SplitContainer;
 class Split;
 
@@ -35,7 +39,7 @@ class Notebook : public BaseWidget
 
 public:
     explicit Notebook(QWidget *parent);
-    ~Notebook() override = default;
+    ~Notebook() override;
 
     NotebookTab *addPage(QWidget *page, QString title = QString(),
                          bool select = false);
@@ -126,6 +130,31 @@ public:
     // Update layout and tab visibility
     void refresh();
 
+    NotebookTabLocation tabLocation() const;
+
+    /// Returns true if the tab is shown in the tab bar right now
+    bool isTabShown(const NotebookTab *tab) const;
+
+    // Tab groups ("folders" in the tab bar)
+    const std::vector<std::unique_ptr<NotebookTabGroup>> &tabGroups() const;
+    NotebookTabGroup *findTabGroup(const QString &name) const;
+    /// Tabs of the group, in tab order
+    std::vector<NotebookTab *> tabsInGroup(const NotebookTabGroup *group) const;
+
+    /// Creates the group if it doesn't exist yet
+    NotebookTabGroup *addTabGroup(const QString &name, bool collapsed = false,
+                                  bool liveOnly = false);
+    /// Sets the tab's group without moving it, used when loading the layout.
+    /// Creates the group if needed.
+    void assignTabGroup(NotebookTab *tab, const QString &name);
+    /// Moves the tab into the group (to its end), or out of its group if
+    /// name is empty
+    void moveTabToGroup(NotebookTab *tab, const QString &name);
+    void promptNewTabGroup(NotebookTab *tab);
+    void toggleTabGroupCollapsed(NotebookTabGroup *group);
+    void showTabGroupMenu(NotebookTabGroup *group, QPoint globalPos);
+    void tabHighlightChanged(NotebookTab *tab);
+
 protected:
     bool getShowTabs() const;
     void setShowTabs(bool value);
@@ -176,6 +205,14 @@ protected:
     void sortTabsAlphabetically();
 
 private:
+    /// One thing in the tab bar: a tab or a group header/offline button
+    struct LayoutUnit {
+        NotebookTab *tab{};
+        NotebookGroupWidget *groupWidget{};
+        /// Extra space before this unit, between groups
+        bool gapBefore{};
+    };
+
     struct LayoutContext {
         int left = 0;
         int right = 0;
@@ -189,8 +226,9 @@ private:
 
         int buttonWidth = 0;
         int buttonHeight = 0;
+        int groupSpacing = 0;
 
-        std::span<Item> items;
+        std::span<LayoutUnit> units;
     };
 
     void performHorizontalLayout(const LayoutContext &ctx, bool animated);
@@ -208,6 +246,19 @@ private:
     void resizeAddButton();
 
     bool containsPage(QWidget *page);
+
+    std::vector<LayoutUnit> buildLayoutUnits();
+    bool groupAllowsTab(const NotebookTab *tab) const;
+    void updateVisibilityFilter();
+    /// Keeps the tabs of each group next to each other, at the position of
+    /// the group's first tab
+    void normalizeGroupOrder();
+    void pruneEmptyTabGroups();
+    void removeTabGroup(const QString &name);
+    void renameTabGroup(const QString &name);
+    void moveTabGroup(const QString &name, int direction);
+    bool canMoveTabGroup(const QString &name, int direction) const;
+    void tabGroupsChanged();
     Item *findItem(QWidget *page);
 
     static bool containsChild(const QObject *obj, const QObject *child);
@@ -237,8 +288,12 @@ private:
     QAction *toggleTopMostAction_;
 
     // This filter, if set, is used to figure out the visibility of
-    // the tabs in this notebook.
+    // the tabs in this notebook. It combines the user's filter (e.g. "Only
+    // show live tabs") with the tab groups.
     TabVisibilityFilter tabVisibilityFilter_;
+    TabVisibilityFilter userTabVisibilityFilter_;
+
+    std::vector<std::unique_ptr<NotebookTabGroup>> tabGroups_;
 };
 
 class SplitNotebook : public Notebook
