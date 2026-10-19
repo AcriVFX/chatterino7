@@ -14,6 +14,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QSaveFile>
 #include <QSet>
 #include <QStringView>
 #include <QTextStream>
@@ -234,8 +235,10 @@ void saveTrackingLocked(const QString &channel, const TrackingData &t)
     {
         return;
     }
-    QFile file(QDir(dir).filePath(QStringLiteral("tracking.json")));
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    // QSaveFile: a crash while writing must not leave an empty file, which
+    // would turn a stop back into counting
+    QSaveFile file(QDir(dir).filePath(QStringLiteral("tracking.json")));
+    if (file.open(QIODevice::WriteOnly))
     {
         file.write(QJsonDocument(QJsonObject{
                                      {"state", countingKey(t.counting)},
@@ -244,6 +247,7 @@ void saveTrackingLocked(const QString &channel, const TrackingData &t)
                                      {"pending", t.pending},
                                  })
                        .toJson(QJsonDocument::Compact));
+        file.commit();
     }
 }
 
@@ -417,9 +421,17 @@ int mergeActionsLocked(Store &st, const QString &channel,
         saved.insert(sameActionKey(action), action.msecs);
     }
 
-    int added = 0;
-    const auto lines = body.split('\n');
-    for (const auto &raw : lines)
+    // the server may not have taken a pause or stop yet (or is too old for
+    // it): what it counted since then stays out, like record() does here
+    const auto &tracking =
+        trackingLocked(st, channel, QDateTime::currentMSecsSinceEpoch());
+    const qint64 offSince =
+        tracking.counting == Counting::On ? -1 : tracking.since;
+
+    std::vector<Action> fresh;
+    // new lines per month file, so each file is opened once
+    std::unordered_map<QString, QString> lines;
+    for (const auto &raw : body.split('\n'))
     {
         Action action;
         if (!parseAction(QString::fromUtf8(raw), action))
@@ -427,23 +439,55 @@ int mergeActionsLocked(Store &st, const QString &channel,
             continue;
         }
         newest = std::max(newest, action.msecs);
-        const auto [first, last] =
-            std::as_const(saved).equal_range(sameActionKey(action));
-        if (std::any_of(first, last, [&](qint64 msecs) {
-                return std::abs(msecs - action.msecs) <= SAME_ACTION_MSECS;
-            }))
+        if (offSince >= 0 && action.msecs >= offSince)
         {
             continue;
         }
+        auto [first, last] = saved.equal_range(sameActionKey(action));
+        auto match = std::find_if(first, last, [&](qint64 msecs) {
+            return std::abs(msecs - action.msecs) <= SAME_ACTION_MSECS;
+        });
+        if (match != last)
+        {
+            // each saved action stands for one server action only: three
+            // deletes of the same user in two seconds stay three
+            saved.erase(match);
+            continue;
+        }
 
-        appendLine(QDir(dir).filePath(actionFile(action.msecs)),
-                   formatAction(action));
+        auto &chunk = lines[actionFile(action.msecs)];
+        chunk += formatAction(action);
+        chunk += u'\n';
         action.moderator = intern(st, action.moderator);
         action.target = intern(st, action.target);
-        auto pos = std::ranges::upper_bound(data.actions, action.msecs, {},
-                                            &Action::msecs);
-        data.actions.insert(pos, std::move(action));
-        ++added;
+        fresh.push_back(std::move(action));
+    }
+
+    for (const auto &[name, chunk] : lines)
+    {
+        QFile file(QDir(dir).filePath(name));
+        if (file.open(QIODevice::Append | QIODevice::Text))
+        {
+            QTextStream out(&file);
+            out << chunk;
+        }
+    }
+
+    // one sort instead of an insert in the middle for every action
+    const auto added = static_cast<int>(fresh.size());
+    if (added > 0)
+    {
+        const auto oldSize = data.actions.size();
+        std::ranges::move(fresh, std::back_inserter(data.actions));
+        std::ranges::stable_sort(
+            data.actions.begin() + static_cast<std::ptrdiff_t>(oldSize),
+            data.actions.end(), {}, &Action::msecs);
+        std::inplace_merge(
+            data.actions.begin(),
+            data.actions.begin() + static_cast<std::ptrdiff_t>(oldSize),
+            data.actions.end(), [](const Action &a, const Action &b) {
+                return a.msecs < b.msecs;
+            });
     }
     return added;
 }
@@ -535,6 +579,27 @@ std::optional<RemoteConfig> remoteConfig()
     return config;
 }
 
+/// The channel the mod tracker server counts, learned from /v1/status.
+/// The server serves only that channel, so the others act as if there was
+/// no server (no "needs setup.ps1 update" for them). Only used from the GUI
+/// thread.
+QString &serverChannel()
+{
+    static QString channel;
+    return channel;
+}
+
+/// remoteConfig(), unless the server is known to count another channel
+std::optional<RemoteConfig> remoteConfigFor(const QString &channel)
+{
+    auto config = remoteConfig();
+    if (config && !serverChannel().isEmpty() && serverChannel() != channel)
+    {
+        return std::nullopt;
+    }
+    return config;
+}
+
 /// Only used from the GUI thread
 struct SyncState {
     bool loaded = false;
@@ -582,14 +647,16 @@ void saveSyncState(const QString &channel, const SyncState &state)
     {
         return;
     }
-    QFile file(syncFile(channel));
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    // a lost cursor would download the whole history again
+    QSaveFile file(syncFile(channel));
+    if (file.open(QIODevice::WriteOnly))
     {
         file.write(QJsonDocument(QJsonObject{
                                      {"cursor", state.cursor},
                                      {"lastSync", state.lastSync},
                                  })
                        .toJson(QJsonDocument::Compact));
+        file.commit();
     }
 }
 
@@ -962,6 +1029,10 @@ void syncFromServer(const QString &channel)
                 return;
             }
             const auto status = result.parseJson();
+            if (isOk(result) && !status.value(u"channel").toString().isEmpty())
+            {
+                serverChannel() = status.value(u"channel").toString();
+            }
             // a server counting another channel has nothing for this one
             if (!isOk(result) || status.value(u"channel").toString() != key)
             {
@@ -984,7 +1055,7 @@ void syncFromServer(const QString &channel)
 SyncStatus syncStatus(const QString &channel)
 {
     const auto key = channel.toLower();
-    const auto config = remoteConfig();
+    const auto config = remoteConfigFor(key);
     if (!config)
     {
         return {};
@@ -1065,7 +1136,7 @@ void setCounting(const QString &channel, Counting counting,
         ++t.revision;
         saveTrackingLocked(key, t);
     }
-    if (const auto config = remoteConfig())
+    if (const auto config = remoteConfigFor(key))
     {
         pushTracking(key, *config);
     }
@@ -1116,7 +1187,7 @@ void deleteAll(const QString &channel,
                std::function<void(const QString &error)> done)
 {
     const auto key = channel.toLower();
-    const auto config = remoteConfig();
+    const auto config = remoteConfigFor(key);
     if (!config)
     {
         deleteLocal(key);
@@ -1125,6 +1196,33 @@ void deleteAll(const QString &channel,
     }
 
     const auto host = config->url.host();
+    if (serverChannel().isEmpty())
+    {
+        // find out first which channel the server counts, it only knows
+        // that one
+        serverRequest(*config, QStringLiteral("/v1/status"))
+            .onSuccess([channel, host, done](const NetworkResult &result) {
+                const auto name =
+                    result.parseJson().value(u"channel").toString();
+                if (!isOk(result) || name.isEmpty())
+                {
+                    done(QString("%1 could not be reached, so nothing was "
+                                 "deleted.")
+                             .arg(host));
+                    return;
+                }
+                serverChannel() = name;
+                deleteAll(channel, done);
+            })
+            .onError([host, done](const NetworkResult &) {
+                done(QString("%1 could not be reached, so nothing was "
+                             "deleted.")
+                         .arg(host));
+            })
+            .execute();
+        return;
+    }
+
     serverRequest(*config, QStringLiteral("/v1/%1/delete").arg(key), {},
                   NetworkRequestType::Post)
         .json(QJsonObject{{"confirm", key}})
