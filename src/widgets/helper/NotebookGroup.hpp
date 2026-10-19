@@ -35,7 +35,7 @@ struct NotebookTabGroup {
 
 /// The 2px line under every tab, header and button of a group
 QColor notebookGroupMarkerColor(const Theme *theme);
-QRect notebookGroupMarkerRect(const QRect &rect, NotebookTabLocation location,
+QRect notebookGroupMarkerRect(QRect rect, NotebookTabLocation location,
                               int thickness);
 
 /// Base for the widgets a group adds to the tab bar

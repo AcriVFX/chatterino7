@@ -156,7 +156,7 @@ public:
     void promptNewTabGroup(NotebookTab *tab);
     void toggleTabGroupCollapsed(NotebookTabGroup *group);
     void showTabGroupMenu(NotebookTabGroup *group, QPoint globalPos);
-    void tabHighlightChanged(NotebookTab *tab);
+    void tabHighlightChanged(NotebookTab *tab) const;
 
 protected:
     bool getShowTabs() const;

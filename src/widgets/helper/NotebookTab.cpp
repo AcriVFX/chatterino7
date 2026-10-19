@@ -375,7 +375,7 @@ void NotebookTab::recreateMoveToGroupMenu()
     }
 
     this->moveToGroupMenu_->addSeparator();
-    this->moveToGroupMenu_->addAction("New group...", [this] {
+    this->moveToGroupMenu_->addAction("New group...", this, [this] {
         this->notebook_->promptNewTabGroup(this);
     });
 }

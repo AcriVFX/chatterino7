@@ -38,6 +38,7 @@
 #include <QUuid>
 #include <QWidget>
 
+#include <array>
 #include <ranges>
 #include <utility>
 
@@ -618,7 +619,7 @@ void Notebook::rearrangePage(QWidget *page, int index)
     // Dragging a tab onto a tab of a group moves it into that group,
     // dragging it onto a tab without a group takes it out of its group
     auto *tab = this->getTabFromPage(page);
-    const auto targetGroup = this->items_[index].tab->getGroup();
+    const auto targetGroup = this->items_.at(index).tab->getGroup();
 
     this->items_.move(this->indexOf(page), index);
 
@@ -866,9 +867,9 @@ void Notebook::performHorizontalLayout(const LayoutContext &ctx, bool animated)
                 unit.groupWidget->resize(unit.groupWidget->desiredWidth(),
                                          ctx.tabHeight);
             }
-            QWidget *widget = unit.tab != nullptr
-                                  ? static_cast<QWidget *>(unit.tab)
-                                  : unit.groupWidget;
+            const QWidget *widget = unit.tab != nullptr
+                                        ? static_cast<QWidget *>(unit.tab)
+                                        : unit.groupWidget;
 
             auto gap = unit.gapBefore && !isFirst ? ctx.groupSpacing : 0;
             auto fitsInLine = ((isLast ? ctx.addButtonWidth : 0) + x + gap +
@@ -1033,7 +1034,8 @@ void Notebook::performVerticalLayout(const LayoutContext &ctx, bool animated)
     {
         return;
     }
-    int count = ctx.units.size() + (this->showAddButton_ ? 1 : 0);
+    int count =
+        static_cast<int>(ctx.units.size()) + (this->showAddButton_ ? 1 : 0);
     int columnCount = ceil((float)count / tabsPerColumn);
 
     // only add width of all the tabs if they are not hidden
@@ -1437,13 +1439,13 @@ std::vector<Notebook::LayoutUnit> Notebook::buildLayoutUnits()
     };
 
     std::vector<LayoutUnit> units;
-    units.reserve(this->items_.size() + 2 * this->tabGroups_.size());
+    units.reserve(this->items_.size() + (2 * this->tabGroups_.size()));
 
     std::vector<const NotebookTabGroup *> placed;
     std::vector<const NotebookGroupWidget *> shownWidgets;
     bool afterGroup = false;
 
-    for (const auto &item : this->items_)
+    for (const auto &item : std::as_const(this->items_))
     {
         auto *group = this->findTabGroup(item.tab->getGroup());
         if (group == nullptr)
@@ -1466,7 +1468,7 @@ std::vector<Notebook::LayoutUnit> Notebook::buildLayoutUnits()
         shownWidgets.push_back(group->header);
 
         int hidden = 0;
-        for (const auto &groupItem : this->items_)
+        for (const auto &groupItem : std::as_const(this->items_))
         {
             if (groupItem.tab->getGroup() != group->name)
             {
@@ -1492,9 +1494,8 @@ std::vector<Notebook::LayoutUnit> Notebook::buildLayoutUnits()
 
     for (const auto &group : this->tabGroups_)
     {
-        for (NotebookGroupWidget *widget :
-             {static_cast<NotebookGroupWidget *>(group->header),
-              static_cast<NotebookGroupWidget *>(group->offlineButton)})
+        for (NotebookGroupWidget *widget : std::array<NotebookGroupWidget *, 2>{
+                 group->header, group->offlineButton})
         {
             widget->setVisible(this->showTabs_ &&
                                std::ranges::find(shownWidgets, widget) !=
@@ -1567,11 +1568,11 @@ void Notebook::moveTabToGroup(NotebookTab *tab, const QString &name)
     int anchor = -1;
     for (int i = 0; i < this->items_.count(); i++)
     {
-        if (this->items_[i].tab == tab)
+        if (this->items_.at(i).tab == tab)
         {
             from = i;
         }
-        else if (this->items_[i].tab->getGroup() == anchorGroup)
+        else if (this->items_.at(i).tab->getGroup() == anchorGroup)
         {
             anchor = i;
         }
@@ -1623,7 +1624,7 @@ void Notebook::showTabGroupMenu(NotebookTabGroup *group, QPoint globalPos)
     // changes the layout and respects "Lock Tab Layout"
     const auto locked = this->isNotebookLayoutLocked();
 
-    auto *rename = menu->addAction("Rename group", [this, name] {
+    auto *rename = menu->addAction("Rename group", this, [this, name] {
         this->renameTabGroup(name);
     });
     rename->setEnabled(!locked);
@@ -1641,33 +1642,35 @@ void Notebook::showTabGroupMenu(NotebookTabGroup *group, QPoint globalPos)
                          }
                      });
 
-    menu->addAction(group->collapsed ? "Expand" : "Collapse", [this, name] {
-        if (auto *g = this->findTabGroup(name))
-        {
-            this->toggleTabGroupCollapsed(g);
-        }
-    });
+    menu->addAction(group->collapsed ? "Expand" : "Collapse", this,
+                    [this, name] {
+                        if (auto *g = this->findTabGroup(name))
+                        {
+                            this->toggleTabGroupCollapsed(g);
+                        }
+                    });
 
-    auto *moveLeft = menu->addAction("Move group left", [this, name] {
+    auto *moveLeft = menu->addAction("Move group left", this, [this, name] {
         this->moveTabGroup(name, -1);
     });
     moveLeft->setEnabled(this->canMoveTabGroup(name, -1));
 
-    auto *moveRight = menu->addAction("Move group right", [this, name] {
+    auto *moveRight = menu->addAction("Move group right", this, [this, name] {
         this->moveTabGroup(name, 1);
     });
     moveRight->setEnabled(this->canMoveTabGroup(name, 1));
 
     menu->addSeparator();
-    auto *ungroup = menu->addAction("Ungroup (keeps the tabs)", [this, name] {
-        this->removeTabGroup(name);
-    });
+    auto *ungroup =
+        menu->addAction("Ungroup (keeps the tabs)", this, [this, name] {
+            this->removeTabGroup(name);
+        });
     ungroup->setEnabled(!locked);
 
     menu->popup(globalPos);
 }
 
-void Notebook::tabHighlightChanged(NotebookTab *tab)
+void Notebook::tabHighlightChanged(NotebookTab *tab) const
 {
     if (auto *group = this->findTabGroup(tab->getGroup()))
     {
@@ -1682,7 +1685,7 @@ void Notebook::normalizeGroupOrder()
     ordered.reserve(this->items_.size());
     std::vector<QString> placed;
 
-    for (const auto &item : this->items_)
+    for (const auto &item : std::as_const(this->items_))
     {
         const auto &group = item.tab->getGroup();
         if (group.isEmpty())
@@ -1695,7 +1698,7 @@ void Notebook::normalizeGroupOrder()
             continue;
         }
         placed.push_back(group);
-        for (const auto &groupItem : this->items_)
+        for (const auto &groupItem : std::as_const(this->items_))
         {
             if (groupItem.tab->getGroup() == group)
             {
@@ -1826,8 +1829,7 @@ bool Notebook::canMoveTabGroup(const QString &name, int direction) const
     auto segments = tabSegments(this->items_);
     auto index = segmentIndexOfGroup(segments, name);
     auto target = index + direction;
-    return index != -1 && target >= 0 &&
-           target < static_cast<int>(segments.size());
+    return index != -1 && target >= 0 && std::cmp_less(target, segments.size());
 }
 
 void Notebook::moveTabGroup(const QString &name, int direction)

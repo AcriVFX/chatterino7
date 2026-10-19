@@ -90,15 +90,15 @@ struct TabDescriptor {
     bool selected_{false};
     bool highlightsEnabled_{true};
     // Name of the tab group, empty if the tab is in none
-    QString group_;
+    QString group;
 
     std::optional<NodeDescriptor> rootNode_;
 };
 
 struct TabGroupDescriptor {
-    QString name_;
-    bool collapsed_{false};
-    bool liveOnly_{false};
+    QString name;
+    bool collapsed{false};
+    bool liveOnly{false};
 };
 
 struct WindowDescriptor {
@@ -114,7 +114,7 @@ struct WindowDescriptor {
     QRect geometry_;
 
     std::vector<TabDescriptor> tabs_;
-    std::vector<TabGroupDescriptor> tabGroups_;
+    std::vector<TabGroupDescriptor> tabGroups;
 };
 
 class WindowLayout

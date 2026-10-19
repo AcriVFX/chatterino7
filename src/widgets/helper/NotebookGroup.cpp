@@ -89,7 +89,7 @@ QColor notebookGroupMarkerColor(const Theme *theme)
     return color;
 }
 
-QRect notebookGroupMarkerRect(const QRect &rect, NotebookTabLocation location,
+QRect notebookGroupMarkerRect(QRect rect, NotebookTabLocation location,
                               int thickness)
 {
     switch (location)
@@ -339,7 +339,10 @@ void NotebookGroupOfflineButton::paintContent(QPainter &painter)
     painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text);
 
     this->paintChevron(
-        painter, {textRect.right() + (5 + 4) * scale, this->height() / 2.0}, 0);
+        painter,
+        {static_cast<qreal>(textRect.right()) + ((5 + 4) * scale),
+         this->height() / 2.0},
+        0);
 }
 
 void NotebookGroupOfflineButton::showPopup()

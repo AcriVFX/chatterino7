@@ -955,10 +955,10 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
         }
 
         // tab groups
-        for (const auto &group : windowData.tabGroups_)
+        for (const auto &group : windowData.tabGroups)
         {
-            window.getNotebook().addTabGroup(group.name_, group.collapsed_,
-                                             group.liveOnly_);
+            window.getNotebook().addTabGroup(group.name, group.collapsed,
+                                             group.liveOnly);
         }
 
         // open tabs
@@ -982,7 +982,7 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
             page->getTab()->setHighlightsEnabled(tab.highlightsEnabled_);
 
             // tab group
-            window.getNotebook().assignTabGroup(page->getTab(), tab.group_);
+            window.getNotebook().assignTabGroup(page->getTab(), tab.group);
 
             if (tab.rootNode_)
             {

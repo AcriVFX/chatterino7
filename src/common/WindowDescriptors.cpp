@@ -149,7 +149,7 @@ TabDescriptor TabDescriptor::loadFromJSON(const QJsonObject &tabObj)
     tab.highlightsEnabled_ = tabObj.value("highlightsEnabled").toBool(true);
 
     // Load tab group
-    tab.group_ = tabObj.value("group").toString();
+    tab.group = tabObj.value("group").toString();
 
     QJsonObject splitRoot = tabObj.value("splits2").toObject();
 
@@ -223,17 +223,18 @@ WindowLayout WindowLayout::loadFromFile(const QString &path)
         }
 
         // Load tab groups
-        for (const auto &groupVal : windowObj.value("tabGroups").toArray())
+        const auto tabGroups = windowObj.value("tabGroups").toArray();
+        for (const auto &groupVal : tabGroups)
         {
             auto groupObj = groupVal.toObject();
             TabGroupDescriptor group{
-                .name_ = groupObj.value("name").toString(),
-                .collapsed_ = groupObj.value("collapsed").toBool(false),
-                .liveOnly_ = groupObj.value("liveOnly").toBool(false),
+                .name = groupObj.value("name").toString(),
+                .collapsed = groupObj.value("collapsed").toBool(false),
+                .liveOnly = groupObj.value("liveOnly").toBool(false),
             };
-            if (!group.name_.isEmpty())
+            if (!group.name.isEmpty())
             {
-                window.tabGroups_.emplace_back(std::move(group));
+                window.tabGroups.emplace_back(std::move(group));
             }
         }
 
