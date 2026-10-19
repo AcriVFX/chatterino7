@@ -113,6 +113,9 @@ private:
     QTimer *iconTimer_ = nullptr;
     /// Lets the worker thread know the window is still open
     std::shared_ptr<bool> lifetime_ = std::make_shared<bool>(true);
+    /// Keeps the sums of past days between reloads
+    std::shared_ptr<emotestats::LoadCache> loadCache_ =
+        emotestats::makeLoadCache();
 };
 
 }  // namespace chatterino
