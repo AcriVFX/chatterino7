@@ -70,6 +70,9 @@ private:
     void updateFooter();
     /// Reads the chat logs once, the first time the window opens
     void startLogImport();
+    /// Asks Twitch which emotes belong to the channel (its sub, bits and
+    /// follower emotes), once per window
+    void loadTwitchChannelEmotes();
 
     Range currentRange() const;
     std::shared_ptr<TwitchChannel> twitchChannel() const;
@@ -87,6 +90,9 @@ private:
     bool loading_ = false;
     bool reloadAgain_ = false;
     QString topEmote_;
+    /// The channel's own Twitch emotes, name to id
+    QHash<QString, QString> twitchChannelEmotes_;
+    bool twitchEmotesRequested_ = false;
 
     struct {
         QButtonGroup *ranges = nullptr;
@@ -98,6 +104,7 @@ private:
         QFrame *unused = nullptr;
         QLabel *unusedTitle = nullptr;
         QLabel *unusedNames = nullptr;
+        QFrame *removedNote = nullptr;
         QLabel *syncDot = nullptr;
         QLabel *footNote = nullptr;
     } ui_;
