@@ -3,17 +3,23 @@
 #include "Application.hpp"
 #include "common/Channel.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/highlights/HighlightController.hpp"
+#include "controllers/highlights/HighlightResult.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
+#include "providers/colors/ColorProvider.hpp"
 #include "providers/twitch/IrcMessageHandler.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/TwitchIrc.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/Helpers.hpp"
+#include "util/IrcHelpers.hpp"
 #include "util/PostToThread.hpp"
 #include "util/VectorMessageSink.hpp"
 #include "widgets/helper/ChannelView.hpp"
@@ -23,19 +29,24 @@
 #include "widgets/Window.hpp"
 
 #include <IrcMessage>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QtConcurrent>
 #include <QTextStream>
 #include <QTimer>
 
 #include <algorithm>
+#include <map>
+#include <mutex>
 #include <set>
 
 namespace {
@@ -45,17 +56,33 @@ using namespace chatterino;
 /// Newest lines kept per channel file
 constexpr qsizetype MAX_LINES = 1500;
 
+/// An @ to someone counts as an answer to their mention up to this long after
+/// it. Replies always count.
+constexpr qint64 ANSWER_WINDOW_MS = 60LL * 60 * 1000;
+
+/// Saved read state is written this long after the last change
+constexpr int READ_SAVE_DELAY_MS = 3000;
+
+/// After start, saved mentions of channels that are not open come back then
+constexpr int SWEEP_DELAY_MS = 20000;
+
+/// Answer rows use this before the id of the message they show, so they never
+/// clash with a mention of the same message
+const QString ANSWER_PREFIX = QStringLiteral("answer:");
+
 struct Store {
     /// Account whose history is loaded, empty if none yet
     QString account;
     QString dir;
-    /// Ids of every saved mention and answer
-    QSet<QString> savedIds;
+    /// Ids saved per channel, read from its file when first needed
+    std::map<QString, QSet<QString>> savedIds;
     /// msecs of the newest mention that was seen
     qint64 lastRead = 0;
     /// msecs the "New" line goes under
     qint64 lineMark = 0;
-    /// Channels whose saved history was brought back this session
+    /// lastRead changed and is not written yet
+    bool readStatePending = false;
+    /// Channels whose saved history was brought back (or is loading)
     std::set<QString> restored;
 };
 
@@ -63,6 +90,14 @@ Store &store()
 {
     static Store instance;
     return instance;
+}
+
+/// Guards reading, trimming and appending the channel files, which happens
+/// in the GUI thread and in the thread that loads saved history
+std::mutex &fileMutex()
+{
+    static std::mutex mutex;
+    return mutex;
 }
 
 struct Views {
@@ -114,6 +149,11 @@ qint64 msecsOf(const Message &message)
                : 0;
 }
 
+bool isAnswerRow(const Message &message)
+{
+    return message.id.startsWith(ANSWER_PREFIX);
+}
+
 QString escapeField(QString text)
 {
     text.replace(u'\\', QStringLiteral("\\\\"));
@@ -156,8 +196,9 @@ QString unescapeField(const QString &text)
 }
 
 /// One saved line:
-///   M <tab> msecs <tab> id <tab> IRC line            (a mention)
-///   A <tab> msecs <tab> id <tab> color <tab> text    (your answer)
+///   M <tab> msecs <tab> id <tab> IRC line                     (a mention)
+///   A <tab> msecs <tab> id <tab> color <tab> mention id <tab> text
+///                                                     (your answer to it)
 struct Line {
     bool answer = false;
     qint64 msecs = 0;
@@ -165,6 +206,8 @@ struct Line {
     /// mention: the IRC line; answer: the text
     QString payload;
     QColor color;
+    /// answer: id of the mention it answers
+    QString anchor;
 };
 
 bool parseLine(const QString &text, Line &line)
@@ -175,7 +218,7 @@ bool parseLine(const QString &text, Line &line)
         return false;
     }
     const auto parts = text.split(u'\t');
-    if (parts.size() < (answer ? 5 : 4))
+    if (parts.size() < (answer ? 6 : 4))
     {
         return false;
     }
@@ -190,7 +233,8 @@ bool parseLine(const QString &text, Line &line)
     if (answer)
     {
         line.color = parts[3].isEmpty() ? QColor() : QColor(parts[3]);
-        line.payload = unescapeField(parts.mid(4).join(u'\t'));
+        line.anchor = parts[4];
+        line.payload = unescapeField(parts.mid(5).join(u'\t'));
     }
     else
     {
@@ -200,11 +244,22 @@ bool parseLine(const QString &text, Line &line)
     return true;
 }
 
+/// Id of a saved line, empty if it is not one
+QString lineId(const QString &text)
+{
+    if (!text.startsWith(u"M\t") && !text.startsWith(u"A\t"))
+    {
+        return {};
+    }
+    return text.section(u'\t', 2, 2);
+}
+
 QString channelFile(const QString &dir, const QString &channel)
 {
     return QDir(dir).filePath(channel + QStringLiteral(".txt"));
 }
 
+/// Hold fileMutex() while calling this
 QStringList readLines(const QString &path)
 {
     QStringList lines;
@@ -227,21 +282,66 @@ QStringList readLines(const QString &path)
 
 void appendLine(const QString &dir, const QString &channel, const QString &line)
 {
+    std::lock_guard lock(fileMutex());
     if (!QDir().mkpath(dir))
     {
         return;
     }
-    QFile file(channelFile(dir, channel));
+    const auto path = channelFile(dir, channel);
+
+    // a line cut off by a crash must not swallow this one
+    bool startOnNewLine = false;
+    {
+        QFile tail(path);
+        if (tail.size() > 0 && tail.open(QIODevice::ReadOnly) &&
+            tail.seek(tail.size() - 1))
+        {
+            char last = '\n';
+            startOnNewLine = tail.getChar(&last) && last != '\n';
+        }
+    }
+
+    QFile file(path);
     if (file.open(QIODevice::Append | QIODevice::Text))
     {
         QTextStream out(&file);
+        if (startOnNewLine)
+        {
+            out << '\n';
+        }
         out << line << '\n';
     }
 }
 
-void saveReadState()
+/// Ids saved for `channel`. Reads its file the first time.
+QSet<QString> &savedIdsOf(const QString &channel)
 {
-    const auto &st = store();
+    auto &st = store();
+    auto it = st.savedIds.find(channel);
+    if (it != st.savedIds.end())
+    {
+        return it->second;
+    }
+    QSet<QString> ids;
+    if (!st.dir.isEmpty())
+    {
+        std::lock_guard lock(fileMutex());
+        for (const auto &text : readLines(channelFile(st.dir, channel)))
+        {
+            const auto id = lineId(text);
+            if (!id.isEmpty())
+            {
+                ids.insert(id);
+            }
+        }
+    }
+    return st.savedIds.emplace(channel, std::move(ids)).first->second;
+}
+
+void writeReadState()
+{
+    auto &st = store();
+    st.readStatePending = false;
     if (st.dir.isEmpty() || !QDir().mkpath(st.dir))
     {
         return;
@@ -256,6 +356,43 @@ void saveReadState()
     }
 }
 
+/// Writes the read state now if a change is waiting
+void flushReadState()
+{
+    if (store().readStatePending)
+    {
+        writeReadState();
+    }
+}
+
+/// Writes the read state a moment later, so a busy /mentions doesn't write
+/// on every message
+void saveReadStateSoon()
+{
+    store().readStatePending = true;
+    static QTimer *timer = [] {
+        // lives as long as the app
+        auto *t = new QTimer();
+        t->setSingleShot(true);
+        t->setInterval(READ_SAVE_DELAY_MS);
+        QObject::connect(t, &QTimer::timeout, [] {
+            flushReadState();
+        });
+        return t;
+    }();
+    if (!timer->isActive())
+    {
+        timer->start();
+    }
+}
+
+ChannelPtr mentionsChannel()
+{
+    return getApp()->getTwitch()->getMentionsChannel();
+}
+
+void sweep(bool includeOpen);
+
 /// Loads the history of the signed-in account. Returns its folder, empty
 /// when nobody is signed in.
 QString ensureLoaded()
@@ -267,9 +404,21 @@ QString ensureLoaded()
         return st.dir;
     }
 
+    const bool switched = !st.account.isEmpty();
+    flushReadState();
     st = Store{};
     st.account = account;
     st.dir = accountDir(account);
+
+    if (switched)
+    {
+        // the rows of the last account go, the saved ones of this one come
+        QTimer::singleShot(0, [] {
+            mentionsChannel()->clearMessages();
+            sweep(true);
+        });
+    }
+
     if (st.dir.isEmpty())
     {
         return {};
@@ -286,59 +435,26 @@ QString ensureLoaded()
     {
         // first start: what is already in chat counts as read
         st.lastRead = QDateTime::currentMSecsSinceEpoch();
-        saveReadState();
+        writeReadState();
     }
     st.lineMark = st.lastRead;
-
-    const QDir qdir(st.dir);
-    const auto fileNames =
-        qdir.entryList({QStringLiteral("*.txt")}, QDir::Files);
-    for (const auto &fileName : fileNames)
-    {
-        const auto path = qdir.filePath(fileName);
-        auto lines = readLines(path);
-        if (lines.size() > MAX_LINES)
-        {
-            lines = lines.mid(lines.size() - MAX_LINES);
-            QSaveFile file(path);
-            if (file.open(QIODevice::WriteOnly | QIODevice::Text))
-            {
-                file.write((lines.join(u'\n') + u'\n').toUtf8());
-                file.commit();
-            }
-        }
-        for (const auto &text : lines)
-        {
-            Line line;
-            if (parseLine(text, line))
-            {
-                st.savedIds.insert(line.id);
-            }
-        }
-    }
     return st.dir;
-}
-
-ChannelPtr mentionsChannel()
-{
-    return getApp()->getTwitch()->getMentionsChannel();
 }
 
 /// msecs of the newest mention in /mentions that is not your own message
 qint64 newestMention()
 {
     const auto self = store().account;
-    const auto snapshot = mentionsChannel()->getMessageSnapshot();
-    for (auto it = snapshot.rbegin(); it != snapshot.rend(); ++it)
+    qint64 newest = 0;
+    for (const auto &msg : mentionsChannel()->getMessageSnapshot())
     {
-        const auto &msg = **it;
-        if (msg.flags.has(MessageFlag::Highlighted) &&
-            msg.loginName.compare(self, Qt::CaseInsensitive) != 0)
+        if (msg->flags.has(MessageFlag::Highlighted) &&
+            msg->loginName.compare(self, Qt::CaseInsensitive) != 0)
         {
-            return msecsOf(msg);
+            newest = std::max(newest, msecsOf(*msg));
         }
     }
-    return 0;
+    return newest;
 }
 
 void notifyChanged()
@@ -362,7 +478,7 @@ void markSeen()
     if (newest > st.lastRead)
     {
         st.lastRead = newest;
-        saveReadState();
+        saveReadStateSoon();
     }
 }
 
@@ -398,6 +514,7 @@ void updateActive()
     else
     {
         store().lineMark = store().lastRead;
+        flushReadState();
     }
     notifyChanged();
 }
@@ -433,17 +550,32 @@ void ensureHooked()
             ensureLoaded();
             notifyChanged();
         });
+    QObject::connect(QCoreApplication::instance(),
+                     &QCoreApplication::aboutToQuit, [] {
+                         flushReadState();
+                     });
+
+    // open channels bring their saved mentions back once their history is
+    // loaded; the rest come back a little later
+    QTimer::singleShot(SWEEP_DELAY_MS, [] {
+        if (!ensureLoaded().isEmpty())
+        {
+            sweep(false);
+        }
+    });
 }
 
-/// The small indented line that shows your answer under a mention
+/// The small indented line that shows your answer under the mention at
+/// `anchorMsecs`
 MessagePtr buildAnswer(const QString &channel, const QString &id, qint64 msecs,
-                       const QColor &color, const QString &text)
+                       const QColor &color, const QString &text,
+                       qint64 anchorMsecs)
 {
     const auto time = QDateTime::fromMSecsSinceEpoch(msecs);
 
     MessageBuilder b;
     // two em spaces indent the line
-    b.emplace<TextElement>(QStringLiteral("  "), MessageElementFlag::Text,
+    b.emplace<TextElement>(QStringLiteral("  "), MessageElementFlag::Text,
                            MessageColor::System, FontStyle::ChatMediumSmall);
     b.emplace<TextElement>(time.time().toString(getSettings()->timestampFormat),
                            MessageElementFlag::Timestamp, MessageColor::System,
@@ -456,72 +588,92 @@ MessagePtr buildAnswer(const QString &channel, const QString &id, qint64 msecs,
                                      MessageColor::System,
                                      FontStyle::ChatMediumSmall);
 
-    b->id = id;
+    b->id = ANSWER_PREFIX + id;
+    b->flags.set(MessageFlag::DoNotLog, MessageFlag::DoNotTriggerNotification);
     b->channelName = channel;
     b->loginName = store().account;
     b->displayName = store().account;
     b->messageText = text;
     b->searchText = QStringLiteral("You: ") + text;
-    b->serverReceivedTime = time;
+    // sorts right under the mention; the line shows the real time
+    b->serverReceivedTime = QDateTime::fromMSecsSinceEpoch(anchorMsecs + 1);
     b->parseTime = time.time();
     return b.release();
 }
 
-/// The person `message` answers, if it is yours and they are in /mentions
-/// for the same channel. Empty otherwise.
-QString answeredPerson(const Message &message)
+/// The mention in /mentions that `message` answers: the message it replies
+/// to, or else the newest mention of someone it @s from the hour before.
+/// Null if `message` is not yours or answers nobody there.
+MessagePtr answeredMention(const Message &message)
 {
     const auto self = store().account;
     if (self.isEmpty() ||
         message.loginName.compare(self, Qt::CaseInsensitive) != 0 ||
         message.id.isEmpty() || message.flags.has(MessageFlag::System))
     {
-        return {};
+        return nullptr;
     }
 
-    QStringList candidates;
+    const auto snapshot = mentionsChannel()->getMessageSnapshot();
+    const auto isMention = [&](const Message &m) {
+        return m.flags.has(MessageFlag::Highlighted) && !isAnswerRow(m) &&
+               m.channelName == message.channelName &&
+               m.loginName.compare(self, Qt::CaseInsensitive) != 0;
+    };
+
+    if (message.replyParent)
+    {
+        for (auto m = snapshot.rbegin(); m != snapshot.rend(); ++m)
+        {
+            if ((*m)->id == message.replyParent->id && isMention(**m))
+            {
+                return *m;
+            }
+        }
+    }
+
+    QSet<QString> candidates;
     if (!message.replyParentLogin.isEmpty())
     {
-        candidates.append(message.replyParentLogin.toLower());
+        candidates.insert(message.replyParentLogin.toLower());
     }
     static const QRegularExpression atRe(
         QStringLiteral("(?:^|\\s)@([A-Za-z0-9_]{1,25})"));
     auto it = atRe.globalMatch(message.messageText);
     while (it.hasNext())
     {
-        candidates.append(it.next().captured(1).toLower());
+        const auto login = it.next().captured(1).toLower();
+        if (login != self && isLogin(login))
+        {
+            candidates.insert(login);
+        }
     }
     if (candidates.isEmpty())
     {
-        return {};
+        return nullptr;
     }
 
-    const auto snapshot = mentionsChannel()->getMessageSnapshot();
-    for (const auto &candidate : candidates)
+    const auto msecs = msecsOf(message) > 0
+                           ? msecsOf(message)
+                           : QDateTime::currentMSecsSinceEpoch();
+    for (auto m = snapshot.rbegin(); m != snapshot.rend(); ++m)
     {
-        if (candidate == self || !isLogin(candidate))
+        const auto &msg = **m;
+        const auto age = msecs - msecsOf(msg);
+        if (isMention(msg) && age >= 0 && age <= ANSWER_WINDOW_MS &&
+            candidates.contains(msg.loginName.toLower()))
         {
-            continue;
-        }
-        for (auto m = snapshot.rbegin(); m != snapshot.rend(); ++m)
-        {
-            const auto &msg = **m;
-            if (msg.flags.has(MessageFlag::Highlighted) &&
-                msg.channelName == message.channelName &&
-                msg.loginName.compare(candidate, Qt::CaseInsensitive) == 0)
-            {
-                return candidate;
-            }
+            return *m;
         }
     }
-    return {};
+    return nullptr;
 }
 
 /// Builds and saves the answer line for `message`, null if it answers nobody
 MessagePtr makeAnswer(const Message &message)
 {
-    const auto person = answeredPerson(message);
-    if (person.isEmpty())
+    const auto anchor = answeredMention(message);
+    if (!anchor)
     {
         return nullptr;
     }
@@ -537,63 +689,176 @@ MessagePtr makeAnswer(const Message &message)
     const auto msecs = msecsOf(message) > 0
                            ? msecsOf(message)
                            : QDateTime::currentMSecsSinceEpoch();
-    auto &st = store();
-    if (!st.dir.isEmpty() && !st.savedIds.contains(message.id))
+    const auto &st = store();
+    if (!st.dir.isEmpty())
     {
-        st.savedIds.insert(message.id);
-        appendLine(
-            st.dir, message.channelName,
-            QStringLiteral("A\t") + QString::number(msecs) + u'\t' +
-                message.id + u'\t' +
-                (message.usernameColor.isValid() ? message.usernameColor.name()
-                                                 : QString()) +
-                u'\t' + escapeField(text));
+        auto &ids = savedIdsOf(message.channelName);
+        if (!ids.contains(message.id))
+        {
+            ids.insert(message.id);
+            appendLine(st.dir, message.channelName,
+                       QStringLiteral("A\t") + QString::number(msecs) + u'\t' +
+                           message.id + u'\t' +
+                           (message.usernameColor.isValid()
+                                ? message.usernameColor.name()
+                                : QString()) +
+                           u'\t' + anchor->id + u'\t' + escapeField(text));
+        }
     }
     return buildAnswer(message.channelName, message.id, msecs,
-                       message.usernameColor, text);
+                       message.usernameColor, text, msecsOf(*anchor));
 }
 
 void recordMention(const MessagePtr &message, const QByteArray &rawIrc)
 {
     const auto dir = ensureLoaded();
-    auto &st = store();
     const auto raw = QString::fromUtf8(rawIrc).trimmed();
+    // your own messages are never saved: bringing them back would replay
+    // your old badges onto the channel
     if (dir.isEmpty() || message->id.isEmpty() ||
         message->channelName.isEmpty() || raw.isEmpty() ||
         raw.contains(u'\n') || raw.contains(u'\r') ||
-        st.savedIds.contains(message->id))
+        message->loginName.compare(store().account, Qt::CaseInsensitive) == 0)
     {
         return;
     }
-    st.savedIds.insert(message->id);
+    auto &ids = savedIdsOf(message->channelName);
+    if (ids.contains(message->id))
+    {
+        return;
+    }
+    ids.insert(message->id);
     appendLine(dir, message->channelName,
                QStringLiteral("M\t") + QString::number(msecsOf(*message)) +
                    u'\t' + message->id + u'\t' + raw);
 }
 
-/// The saved mentions and answers of `channel`, built like chat history
-std::vector<MessagePtr> loadSaved(TwitchChannel &channel)
+/// A saved mention of a channel that is not open: name and text without the
+/// channel's emotes and badges. Any thread.
+MessagePtr buildPlain(Communi::IrcMessage *irc, const QString &channelName)
 {
-    const auto &st = store();
-    std::vector<MessagePtr> out;
-    const auto lines = readLines(channelFile(st.dir, channel.getName()));
+    auto *priv = dynamic_cast<Communi::IrcPrivateMessage *>(irc);
+    if (priv == nullptr)
+    {
+        return nullptr;
+    }
+    const auto tags = irc->tags();
+    const auto login = irc->nick();
+    auto display = tags.value(QStringLiteral("display-name")).toString();
+    if (display.isEmpty())
+    {
+        display = login;
+    }
+    const auto text = unescapeZeroWidthJoiner(priv->content());
+    const auto time = calculateMessageTime(irc);
+
+    MessageBuilder b;
+    b->id = tags.value(QStringLiteral("id")).toString();
+    b->channelName = channelName;
+    b->loginName = login;
+    b->displayName = display;
+    b->messageText = text;
+    b->searchText = display + QStringLiteral(": ") + text;
+    b->serverReceivedTime = time;
+    b->parseTime = time.time();
+    b->flags.set(MessageFlag::RecentMessage, MessageFlag::Highlighted,
+                 MessageFlag::ShowInMentions);
+
+    b.emplace<TimestampElement>(time.time());
+    b.emplace<TextElement>(u'#' + channelName, MessageElementFlag::ChannelName,
+                           MessageColor::System)
+        ->setLink({Link::JumpToChannel, channelName});
+    const QColor color(tags.value(QStringLiteral("color")).toString());
+    b.emplace<TextElement>(
+         display + u':', MessageElementFlag::Username,
+         color.isValid() ? MessageColor(color) : MessageColor::Text,
+         FontStyle::ChatMediumBold)
+        ->setLink({Link::UserInfo, login});
+    b.emplace<TextElement>(text, MessageElementFlag::Text, MessageColor::Text);
+
+    const auto [highlighted, result] = getApp()->getHighlights()->check(
+        {}, parseBadgeTag(tags), login, text, b->flags);
+    if (highlighted && result.color)
+    {
+        b->highlightColor = result.color;
+        b->highlightLabel = result.label;
+    }
+    else
+    {
+        b->highlightColor =
+            ColorProvider::instance().color(ColorType::SelfHighlight);
+    }
+    return b.release();
+}
+
+/// What was read from a channel's file
+struct Loaded {
+    QSet<QString> ids;
+    std::vector<MessagePtr> mentions;
+    std::vector<Line> answers;
+    /// Kept so the channel is released in the GUI thread
+    std::shared_ptr<TwitchChannel> channel;
+};
+
+/// Reads the saved mentions and answers of a channel, building the newest
+/// `cap` of them like chat history (or plainly when `weak` is gone). Skips
+/// the ids in `present` and your own messages. Runs in a worker thread.
+Loaded loadSaved(const QString &dir, const QString &name,
+                 const std::weak_ptr<TwitchChannel> &weak,
+                 QSet<QString> present, qsizetype cap, const QString &account)
+{
+    Loaded out;
+    out.channel = weak.lock();
+
+    QStringList lines;
+    {
+        std::lock_guard lock(fileMutex());
+        const auto path = channelFile(dir, name);
+        lines = readLines(path);
+        if (lines.size() > MAX_LINES)
+        {
+            lines = lines.mid(lines.size() - MAX_LINES);
+            QSaveFile file(path);
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text))
+            {
+                file.write((lines.join(u'\n') + u'\n').toUtf8());
+                file.commit();
+            }
+        }
+    }
+
     for (const auto &text : lines)
     {
+        const auto id = lineId(text);
+        if (!id.isEmpty())
+        {
+            out.ids.insert(id);
+        }
+    }
+
+    for (auto i = std::max<qsizetype>(0, lines.size() - cap); i < lines.size();
+         i++)
+    {
         Line line;
-        if (!parseLine(text, line))
+        if (!parseLine(lines[i], line))
         {
             continue;
         }
+        const auto rowId = line.answer ? ANSWER_PREFIX + line.id : line.id;
+        if (present.contains(rowId))
+        {
+            continue;
+        }
+        present.insert(rowId);
         if (line.answer)
         {
-            out.push_back(buildAnswer(channel.getName(), line.id, line.msecs,
-                                      line.color, line.payload));
+            out.answers.push_back(std::move(line));
             continue;
         }
 
         std::unique_ptr<Communi::IrcMessage> irc(
             Communi::IrcMessage::fromData(line.payload.toUtf8(), nullptr));
-        if (!irc)
+        if (!irc || irc->nick().compare(account, Qt::CaseInsensitive) == 0)
         {
             continue;
         }
@@ -603,13 +868,21 @@ std::vector<MessagePtr> loadSaved(TwitchChannel &channel)
         tags.insert(QStringLiteral("historical"), QStringLiteral("1"));
         irc->setTags(tags);
 
+        if (!out.channel)
+        {
+            if (auto msg = buildPlain(irc.get(), name))
+            {
+                out.mentions.push_back(std::move(msg));
+            }
+            continue;
+        }
         VectorMessageSink sink({}, MessageFlag::RecentMessage);
-        IrcMessageHandler::parseMessageInto(irc.get(), sink, &channel);
+        IrcMessageHandler::parseMessageInto(irc.get(), sink, out.channel.get());
         for (const auto &msg : sink.messages())
         {
             if (msg->id == line.id)
             {
-                out.push_back(msg);
+                out.mentions.push_back(msg);
             }
         }
     }
@@ -642,6 +915,117 @@ void fillIn(std::vector<MessagePtr> messages)
     mentionsChannel()->fillInMissingMessages(messages);
 }
 
+/// Adds your answers found in `history` to /mentions
+void addAnswers(const std::vector<MessagePtr> &history)
+{
+    std::vector<MessagePtr> answers;
+    for (const auto &msg : history)
+    {
+        if (auto answer = makeAnswer(*msg))
+        {
+            answers.push_back(std::move(answer));
+        }
+    }
+    fillIn(std::move(answers));
+}
+
+/// Puts what was loaded for `name` into /mentions. GUI thread.
+void finishRestore(const QString &name, Loaded loaded,
+                   const std::vector<MessagePtr> &history)
+{
+    savedIdsOf(name).unite(loaded.ids);
+
+    // answers sit right under the mention they answer
+    QHash<QString, qint64> mentionTimes;
+    for (const auto &msg : mentionsChannel()->getMessageSnapshot())
+    {
+        mentionTimes.insert(msg->id, msecsOf(*msg));
+    }
+    for (const auto &msg : loaded.mentions)
+    {
+        mentionTimes.insert(msg->id, msecsOf(*msg));
+    }
+
+    auto batch = std::move(loaded.mentions);
+    for (const auto &line : loaded.answers)
+    {
+        // without its mention an answer means nothing
+        const auto it = mentionTimes.constFind(line.anchor);
+        if (it != mentionTimes.constEnd())
+        {
+            batch.push_back(buildAnswer(name, line.id, line.msecs, line.color,
+                                        line.payload, it.value()));
+        }
+    }
+    fillIn(std::move(batch));
+
+    // answers in the history, now that the mentions they answer are there
+    addAnswers(history);
+}
+
+/// Brings back the saved mentions of `name`, parsed with `channel` or
+/// plainly without it, then adds the answers in `history`. GUI thread.
+void restoreOne(const QString &name,
+                const std::shared_ptr<TwitchChannel> &channel,
+                std::vector<MessagePtr> history)
+{
+    auto &st = store();
+    st.restored.insert(name);
+
+    QSet<QString> present;
+    for (const auto &msg : mentionsChannel()->getMessageSnapshot())
+    {
+        present.insert(msg->id);
+    }
+    const auto cap = static_cast<qsizetype>(
+        std::max(100, getSettings()->scrollbackSplitLimit.getValue()));
+    std::ignore =
+        QtConcurrent::run([dir = st.dir, account = st.account, name,
+                           weak = std::weak_ptr<TwitchChannel>(channel),
+                           present = std::move(present), cap,
+                           history = std::move(history)]() mutable {
+            auto loaded =
+                loadSaved(dir, name, weak, std::move(present), cap, account);
+            postToThread([account, name, loaded = std::move(loaded),
+                          history = std::move(history)]() mutable {
+                if (isAppAboutToQuit() || store().account != account)
+                {
+                    return;
+                }
+                finishRestore(name, std::move(loaded), history);
+            });
+        });
+}
+
+/// Brings back the saved mentions of every channel that has a file and was
+/// not brought back yet. Open channels only with `includeOpen`.
+void sweep(bool includeOpen)
+{
+    const auto &st = store();
+    if (st.dir.isEmpty())
+    {
+        return;
+    }
+    const auto files =
+        QDir(st.dir).entryList({QStringLiteral("*.txt")}, QDir::Files);
+    for (const auto &file : files)
+    {
+        const auto name = file.chopped(4);
+        if (store().restored.contains(name))
+        {
+            continue;
+        }
+        auto channel = std::dynamic_pointer_cast<TwitchChannel>(
+            getApp()->getTwitch()->getChannelOrEmpty(name));
+        if (channel && !includeOpen)
+        {
+            // comes back when its history is loaded
+            continue;
+        }
+        restoreOne(name, channel, {});
+    }
+}
+
 }  // namespace
 
 namespace chatterino::mentionhistory {
@@ -668,7 +1052,7 @@ void onChatMessage(const MessagePtr &message, const QByteArray &rawIrc,
             ensureLoaded();
             if (auto answer = makeAnswer(*message))
             {
-                mentionsChannel()->addMessage(answer, MessageContext::Original);
+                fillIn({std::move(answer)});
             }
         });
     }
@@ -683,22 +1067,16 @@ void restoreChannel(TwitchChannel &channel,
     }
     ensureHooked();
 
-    auto &st = store();
-    if (st.restored.insert(channel.getName()).second)
+    const auto name = channel.getName();
+    if (!store().restored.contains(name))
     {
-        fillIn(loadSaved(channel));
+        restoreOne(
+            name,
+            std::static_pointer_cast<TwitchChannel>(channel.shared_from_this()),
+            messages);
+        return;
     }
-
-    // answers in the history, now that the mentions they answer are there
-    std::vector<MessagePtr> answers;
-    for (const auto &msg : messages)
-    {
-        if (auto answer = makeAnswer(*msg))
-        {
-            answers.push_back(std::move(answer));
-        }
-    }
-    fillIn(std::move(answers));
+    addAnswers(messages);
 }
 
 int unreadCount()
@@ -726,6 +1104,7 @@ void markAllRead()
 {
     markSeen();
     store().lineMark = store().lastRead;
+    flushReadState();
     notifyChanged();
 }
 
@@ -767,6 +1146,12 @@ bool jumpTo(const MessagePtr &message)
     {
         return false;
     }
+    // an answer row jumps to your message
+    auto id = message->id;
+    if (id.startsWith(ANSWER_PREFIX))
+    {
+        id = id.mid(ANSWER_PREFIX.size());
+    }
     auto &notebook = getApp()->getWindows()->getMainWindow().getNotebook();
     // the full chat first, filtered splits (lanes) only if it isn't there
     for (const bool filtered : {false, true})
@@ -787,7 +1172,7 @@ bool jumpTo(const MessagePtr &message)
                 {
                     continue;
                 }
-                if (split->getChannelView().scrollToMessageId(message->id))
+                if (split->getChannelView().scrollToMessageId(id))
                 {
                     return true;
                 }

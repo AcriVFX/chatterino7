@@ -1,9 +1,9 @@
 // Chatterino9: keeps /mentions across restarts and shows the current account's
 // answers in it. Mentions are saved as the IRC lines they came from, so they
 // come back like the history Chatterino loads when joining a channel. Your
-// answers (an @ or a reply to someone in /mentions) show as one small,
-// indented line. Also tracks what you have read: the "New" line and the
-// unread count on the /mentions tab.
+// answers (a reply to a mention, or an @ to its author within the hour) show
+// as one small, indented line under that mention. Also tracks what you have
+// read: the "New" line and the unread count on the /mentions tab.
 // Kept per account in Misc/Mentions/<account>/<channel>.txt.
 
 #pragma once
@@ -32,8 +32,10 @@ void onChatMessage(const MessagePtr &message, const QByteArray &rawIrc,
                    bool isMention, bool live);
 
 /// After `channel` loaded its recent messages: brings back the saved
-/// mentions and answers of that channel once per session, and adds your
-/// answers found in `messages`. GUI thread.
+/// mentions and answers of that channel once per session (built in a worker
+/// thread), and adds your answers found in `messages`. Saved mentions of
+/// channels that are not open come back on their own shortly after start.
+/// GUI thread.
 void restoreChannel(TwitchChannel &channel,
                     const std::vector<MessagePtr> &messages);
 

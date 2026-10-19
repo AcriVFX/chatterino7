@@ -73,6 +73,7 @@
 #include <QPainter>
 #include <QScreen>
 #include <QStringBuilder>
+#include <QToolTip>
 #include <QUrl>
 #include <QVariantAnimation>
 
@@ -2721,14 +2722,21 @@ void ChannelView::handleMouseClick(QMouseEvent *event,
                 this->underlyingChannel_ ==
                     getApp()->getTwitch()->getMentionsChannel())
             {
-                QTimer::singleShot(QApplication::doubleClickInterval(), this,
-                                   [this, message = layout->getMessagePtr()] {
-                                       if (!this->clickTimer_.isActive() &&
-                                           !this->hasSelection())
-                                       {
-                                           mentionhistory::jumpTo(message);
-                                       }
-                                   });
+                QTimer::singleShot(
+                    QApplication::doubleClickInterval(), this,
+                    [this, message = layout->getMessagePtr()] {
+                        if (!this->clickTimer_.isActive() &&
+                            !this->hasSelection() &&
+                            !mentionhistory::jumpTo(message))
+                        {
+                            QToolTip::showText(
+                                QCursor::pos(),
+                                QStringLiteral("#%1 isn't open or no "
+                                               "longer has this message")
+                                    .arg(message->channelName),
+                                this);
+                        }
+                    });
             }
 
             // Invoke to signal from EmotePopup.
