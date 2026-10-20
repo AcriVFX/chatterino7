@@ -70,6 +70,9 @@ private:
     void updateFooter();
     /// Reads the chat logs once, the first time the window opens
     void startLogImport();
+    /// Asks Twitch which emotes belong to the channel (its sub, bits and
+    /// follower emotes), once per window
+    void loadTwitchChannelEmotes();
 
     Range currentRange() const;
     std::shared_ptr<TwitchChannel> twitchChannel() const;
@@ -87,6 +90,13 @@ private:
     bool loading_ = false;
     bool reloadAgain_ = false;
     QString topEmote_;
+    /// The channel's own Twitch emotes, name to id
+    QHash<QString, QString> twitchChannelEmotes_;
+    /// twitchChannelEmotes_ came from Helix at least once; until then (or
+    /// when logged out) Twitch rows are not filtered
+    bool twitchEmotesLoaded_ = false;
+    bool twitchEmotesLoading_ = false;
+    qint64 twitchEmotesRequestedAt_ = 0;
 
     struct {
         QButtonGroup *ranges = nullptr;
@@ -98,6 +108,7 @@ private:
         QFrame *unused = nullptr;
         QLabel *unusedTitle = nullptr;
         QLabel *unusedNames = nullptr;
+        QFrame *removedNote = nullptr;
         QLabel *syncDot = nullptr;
         QLabel *footNote = nullptr;
     } ui_;
@@ -106,6 +117,9 @@ private:
     QTimer *iconTimer_ = nullptr;
     /// Lets the worker thread know the window is still open
     std::shared_ptr<bool> lifetime_ = std::make_shared<bool>(true);
+    /// Keeps the sums of past days between reloads
+    std::shared_ptr<emotestats::LoadCache> loadCache_ =
+        emotestats::makeLoadCache();
 };
 
 }  // namespace chatterino

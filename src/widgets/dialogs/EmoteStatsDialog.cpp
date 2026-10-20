@@ -5,13 +5,16 @@
 #include "Application.hpp"
 #include "common/Channel.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/emotes/EmoteController.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "providers/bttv/BttvEmotes.hpp"
 #include "providers/ffz/FfzEmotes.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
+#include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/TwitchEmotes.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "util/ModActivity.hpp"
@@ -19,12 +22,14 @@
 
 #include <QAbstractItemView>
 #include <QButtonGroup>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
@@ -33,6 +38,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QScrollBar>
 #include <QStyledItemDelegate>
@@ -45,6 +51,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <utility>
 
 namespace chatterino {
@@ -66,6 +73,8 @@ constexpr int MAX_UNUSED_NAMES = 60;
 constexpr int SORT_ROLE = Qt::UserRole;
 constexpr int KEY_ROLE = Qt::UserRole + 1;
 constexpr int SHARE_ROLE = Qt::UserRole + 2;
+/// Set on rows of emotes no longer in the channel: where they came from
+constexpr int REMOVED_ROLE = Qt::UserRole + 3;
 
 // colors of the approved mockup
 constexpr QColor WINDOW_COLOR(0x16, 0x16, 0x16);
@@ -76,6 +85,7 @@ constexpr QColor TEXT_COLOR(0xe4, 0xe4, 0xe4);
 constexpr QColor DIM_COLOR(0x8f, 0x8f, 0x8f);
 constexpr QColor TRACK_COLOR(0x26, 0x26, 0x26);
 constexpr QColor BAR_COLOR(0x3b, 0x6f, 0xa8);
+constexpr QColor REMOVED_BAR_COLOR(0x5a, 0x5a, 0x5a);
 constexpr QColor TILE_COLOR(0x2b, 0x2b, 0x2b);
 constexpr QColor TILE_TEXT_COLOR(0xcf, 0xcf, 0xcf);
 
@@ -86,10 +96,12 @@ constexpr std::array<const char *, 4> RANGE_NAMES{
     "All time",
 };
 
-/// Source buttons, "All" last
-constexpr std::array<const char *, 5> SOURCE_NAMES{
-    "7TV", "Twitch", "BTTV", "FFZ", "All",
+/// Source buttons, then "All" and "Removed"
+constexpr std::array<const char *, 6> SOURCE_NAMES{
+    "7TV", "Twitch", "BTTV", "FFZ", "All", "Removed",
 };
+constexpr int ALL_INDEX = 4;
+constexpr int REMOVED_INDEX = 5;
 constexpr std::array<Source, 4> SOURCE_ORDER{
     Source::SevenTv,
     Source::Twitch,
@@ -136,6 +148,24 @@ QString formatTime(qint64 msecs)
         QStringLiteral("HH:mm"));
 }
 
+/// Counts are kept per hour, so a stream's numbers start at the full hour
+/// before it: ", counted from 18:00" ("18:00 to 23:00" for a finished one)
+QString countedFrom(qint64 from, qint64 to)
+{
+    const auto start = from - (from % HOUR_MS);
+    if (start == from)
+    {
+        return {};
+    }
+    if (to > QDateTime::currentMSecsSinceEpoch())
+    {
+        return ", counted from " + formatTime(start);
+    }
+    const auto stop = to % HOUR_MS == 0 ? to : to - (to % HOUR_MS) + HOUR_MS;
+    return QString(", counted %1 to %2")
+        .arg(formatTime(start), formatTime(stop));
+}
+
 QString rowKey(Source source, const QString &name)
 {
     return emotestats::sourceKey(source) + u'\t' + name;
@@ -147,6 +177,95 @@ QString viewFile()
     return misc.isEmpty()
                ? QString()
                : QDir(misc).filePath(QStringLiteral("EmoteStats/view.json"));
+}
+
+/// Emote names ("7tv\tEZ") saved in a JSON list under Misc/EmoteStats,
+/// read once per file. Only used from the GUI thread.
+QSet<QString> &seenNames(const QString &file)
+{
+    // std::map: references stay valid when another file is added
+    static std::map<QString, QSet<QString>> cache;
+    auto it = cache.find(file);
+    if (it == cache.end())
+    {
+        QSet<QString> names;
+        QFile json(file);
+        if (!file.isEmpty() && json.open(QIODevice::ReadOnly))
+        {
+            const auto list = QJsonDocument::fromJson(json.readAll()).array();
+            for (const auto &name : list)
+            {
+                names.insert(name.toString());
+            }
+        }
+        it = cache.emplace(file, std::move(names)).first;
+    }
+    return it->second;
+}
+
+using EmoteSets =
+    std::vector<std::pair<Source, std::shared_ptr<const EmoteMap>>>;
+
+/// Adds the names in sets to seenNames(file) and saves the file when it grew
+void rememberNames(const QString &file, const EmoteSets &sets)
+{
+    if (file.isEmpty())
+    {
+        return;
+    }
+    auto &seen = seenNames(file);
+    const auto before = seen.size();
+    for (const auto &[source, map] : sets)
+    {
+        if (!map)
+        {
+            continue;
+        }
+        for (const auto &[name, emote] : *map)
+        {
+            seen.insert(rowKey(source, name.string));
+        }
+    }
+    if (seen.size() == before || !QDir().mkpath(QFileInfo(file).path()))
+    {
+        return;
+    }
+    QJsonArray list;
+    for (const auto &name : std::as_const(seen))
+    {
+        list.append(name);
+    }
+    QSaveFile out(file);
+    if (out.open(QIODevice::WriteOnly))
+    {
+        out.write(QJsonDocument(list).toJson(QJsonDocument::Compact));
+        out.commit();
+    }
+}
+
+/// Global 7TV, BTTV and FFZ emotes seen so far. An emote that was once a
+/// global and was later dropped from the global list must not show as
+/// removed from the channel.
+QString globalsFile()
+{
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    return misc.isEmpty()
+               ? QString()
+               : QDir(misc).filePath(QStringLiteral("EmoteStats/globals.json"));
+}
+
+/// 7TV, BTTV and FFZ emotes seen in the channel's own sets. A former global
+/// the channel had and then removed still goes to Removed.
+QString channelEmotesFile(const QString &channel)
+{
+    static const QRegularExpression validName(QStringLiteral("^[a-z0-9_]+$"));
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    if (misc.isEmpty() || !validName.match(channel).hasMatch())
+    {
+        return {};
+    }
+    return QDir(misc).filePath(
+        QStringLiteral("EmoteStats/%1/channel-emotes.json").arg(channel));
 }
 
 class SortItem : public QTableWidgetItem
@@ -208,7 +327,8 @@ public:
             {
                 painter->fillRect(
                     QRect(trackRect.left(), trackRect.top(), fill, 8),
-                    BAR_COLOR);
+                    index.data(REMOVED_ROLE).isValid() ? REMOVED_BAR_COLOR
+                                                       : BAR_COLOR);
             }
         }
         painter->restore();
@@ -301,13 +421,24 @@ public:
             painter->setFont(option.font);
         }
 
-        const QRect textRect(left + iconWidth + 8, option.rect.top(),
-                             option.rect.right() - left - iconWidth - 8,
-                             option.rect.height());
+        QRect textRect(left + iconWidth + 8, option.rect.top(),
+                       option.rect.right() - left - iconWidth - 8,
+                       option.rect.height());
+        // removed emotes: where they came from, after the name
+        const auto from = index.data(REMOVED_ROLE).toString();
+        const int fromWidth =
+            from.isEmpty() ? 0 : option.fontMetrics.horizontalAdvance(from) + 6;
+        const auto shown = option.fontMetrics.elidedText(
+            name, Qt::ElideRight, std::max(textRect.width() - fromWidth, 0));
         painter->setPen(TEXT_COLOR);
-        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
-                          option.fontMetrics.elidedText(name, Qt::ElideRight,
-                                                        textRect.width()));
+        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, shown);
+        if (!from.isEmpty())
+        {
+            textRect.setLeft(textRect.left() +
+                             option.fontMetrics.horizontalAdvance(shown) + 6);
+            painter->setPen(DIM_COLOR);
+            painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, from);
+        }
         painter->restore();
     }
 
@@ -580,6 +711,28 @@ void EmoteStatsDialog::initUi()
         root->addWidget(this->ui_.unused);
     }
 
+    // explains the Removed tab
+    {
+        this->ui_.removedNote = new QFrame;
+        this->ui_.removedNote->setObjectName("unused");
+        auto *layout = new QVBoxLayout(this->ui_.removedNote);
+        layout->setContentsMargins(10, 8, 10, 8);
+        layout->setSpacing(4);
+        auto *title = new QLabel(
+            QString("No longer in %1's channel").arg(this->channel_));
+        title->setObjectName("warn");
+        layout->addWidget(title);
+        auto *text = new QLabel(
+            "Counts are from before they were removed. If one is added back, "
+            "it moves back to its own tab with its history. A 7TV emote that "
+            "was renamed in the channel is listed here under its old name.");
+        text->setObjectName("dim");
+        text->setWordWrap(true);
+        layout->addWidget(text);
+        this->ui_.removedNote->hide();
+        root->addWidget(this->ui_.removedNote);
+    }
+
     // footer
     {
         auto *row = new QHBoxLayout;
@@ -659,7 +812,8 @@ EmoteStatsDialog::Range EmoteStatsDialog::currentRange() const
                 return {
                     .from = stream.start,
                     .to = end,
-                    .label = "Stream started " + formatTime(stream.start),
+                    .label = "Stream started " + formatTime(stream.start) +
+                             countedFrom(stream.start, end),
                     .unusedTitle = "Not used in this stream",
                 };
             }
@@ -669,7 +823,8 @@ EmoteStatsDialog::Range EmoteStatsDialog::currentRange() const
                 .label =
                     QString("Last stream %1, %2 to %3")
                         .arg(formatDay(stream.start), formatTime(stream.start),
-                             formatTime(stream.end)),
+                             formatTime(stream.end)) +
+                    countedFrom(stream.start, stream.end + STREAM_TAIL_MS),
                 .unusedTitle = "Not used in the last stream",
             };
         }
@@ -707,29 +862,30 @@ void EmoteStatsDialog::reload()
 
     emotestats::flush();
     std::weak_ptr<bool> alive = this->lifetime_;
-    QThreadPool::globalInstance()->start([this, alive, channel = this->channel_,
-                                          from = this->range_.from,
-                                          to = this->range_.to] {
-        auto stats = emotestats::load(channel, from, to);
-        postToThread([this, alive, stats = std::move(stats)]() mutable {
-            if (!alive.lock())
-            {
-                return;
-            }
-            this->stats_ = std::move(stats);
-            this->loaded_ = true;
-            this->loading_ = false;
-            this->fillTable();
-            if (!emotestats::logsImported(this->channel_))
-            {
-                this->startLogImport();
-            }
-            if (std::exchange(this->reloadAgain_, false))
-            {
-                this->reload();
-            }
+    QThreadPool::globalInstance()->start(
+        [this, alive, channel = this->channel_, from = this->range_.from,
+         to = this->range_.to, cache = this->loadCache_] {
+            auto stats = emotestats::load(channel, from, to, cache.get());
+            postToThread([this, alive, stats = std::move(stats)]() mutable {
+                if (!alive.lock())
+                {
+                    return;
+                }
+                this->stats_ = std::move(stats);
+                this->loaded_ = true;
+                this->loading_ = false;
+                this->loadTwitchChannelEmotes();
+                this->fillTable();
+                if (!emotestats::logsImported(this->channel_))
+                {
+                    this->startLogImport();
+                }
+                if (std::exchange(this->reloadAgain_, false))
+                {
+                    this->reload();
+                }
+            });
         });
-    });
 }
 
 void EmoteStatsDialog::fillTable()
@@ -738,13 +894,144 @@ void EmoteStatsDialog::fillTable()
     {
         return;
     }
-    const bool all =
-        std::cmp_greater_equal(this->sourceIndex_, SOURCE_ORDER.size());
+    const bool removedTab = this->sourceIndex_ == REMOVED_INDEX;
+    const bool all = this->sourceIndex_ == ALL_INDEX;
     const auto shownSource =
-        all ? Source::SevenTv
+        all || removedTab
+            ? Source::SevenTv
             : SOURCE_ORDER.at(static_cast<size_t>(this->sourceIndex_));
     auto shows = [&](Source source) {
         return all || source == shownSource;
+    };
+
+    // Only the channel's own emotes are listed. Counts of other emotes stay
+    // saved: globals and other channels' Twitch emotes are left out, and
+    // 7TV, BTTV and FFZ emotes the channel no longer has go to "Removed".
+    auto channel = this->twitchChannel();
+    const auto seventvMap =
+        channel ? channel->seventvEmotes() : std::shared_ptr<const EmoteMap>();
+    const auto bttvMap =
+        channel ? channel->bttvEmotes() : std::shared_ptr<const EmoteMap>();
+    const auto ffzMap =
+        channel ? channel->ffzEmotes() : std::shared_ptr<const EmoteMap>();
+    const auto globals = globalsFile();
+    rememberNames(
+        globals,
+        {
+            {Source::SevenTv, getApp()->getSeventvEmotes()->globalEmotes()},
+            {Source::Bttv, getApp()->getBttvEmotes()->emotes()},
+            {Source::Ffz, getApp()->getFfzEmotes()->emotes()},
+        });
+    // An empty set counts as loaded only after the channel loaded it: a
+    // channel whose BTTV set became empty has all its BTTV emotes removed.
+    // EMPTY_EMOTE_MAP means the provider is turned off or failed.
+    auto loadedSet = [](const std::shared_ptr<const EmoteMap> &map,
+                        bool loaded) {
+        return loaded && map && map != EMPTY_EMOTE_MAP;
+    };
+    const bool seventvLoaded =
+        channel && loadedSet(seventvMap, channel->seventvEmotesLoaded());
+    const bool bttvLoaded =
+        channel && loadedSet(bttvMap, channel->bttvEmotesLoaded());
+    const bool ffzLoaded =
+        channel && loadedSet(ffzMap, channel->ffzEmotesLoaded());
+    const auto channelFile = channelEmotesFile(this->channel_);
+    {
+        EmoteSets sets;
+        if (seventvLoaded)
+        {
+            sets.emplace_back(Source::SevenTv, seventvMap);
+        }
+        if (bttvLoaded)
+        {
+            sets.emplace_back(Source::Bttv, bttvMap);
+        }
+        if (ffzLoaded)
+        {
+            sets.emplace_back(Source::Ffz, ffzMap);
+        }
+        rememberNames(channelFile, sets);
+    }
+    const auto &seenGlobals = seenNames(globals);
+    const auto &seenInChannel = seenNames(channelFile);
+    auto notEmpty = [](const std::shared_ptr<const EmoteMap> &map) {
+        return map && !map->empty();
+    };
+    // without the global list an old global could look like a removed emote
+    const bool seventvGlobals =
+        notEmpty(getApp()->getSeventvEmotes()->globalEmotes());
+    const bool bttvGlobals = notEmpty(getApp()->getBttvEmotes()->emotes());
+    const bool ffzGlobals = notEmpty(getApp()->getFfzEmotes()->emotes());
+
+    // Twitch emotes are matched by the channel's Helix list. Modified sub
+    // emotes (papaL_HF) belong to their base emote.
+    static const QRegularExpression modifiedEmote(
+        QStringLiteral("^(.+)_(BW|HF|SG|SQ|TK)$"));
+    auto twitchId = [this](const QString &name) -> QString {
+        auto id = this->twitchChannelEmotes_.constFind(name);
+        if (id != this->twitchChannelEmotes_.constEnd())
+        {
+            return *id;
+        }
+        const auto match = modifiedEmote.match(name);
+        if (match.hasMatch())
+        {
+            id = this->twitchChannelEmotes_.constFind(match.captured(1));
+            if (id != this->twitchChannelEmotes_.constEnd())
+            {
+                return *id + '_' + match.captured(2);
+            }
+        }
+        return {};
+    };
+
+    enum class Kind : std::uint8_t { Channel, Removed, Hidden };
+    auto kindOf = [&](Source source, const QString &name) {
+        const EmoteName emoteName{name};
+        auto check = [&](const std::shared_ptr<const EmoteMap> &map,
+                         bool setLoaded, bool currentGlobal,
+                         bool globalsLoaded) {
+            if (map && map->contains(emoteName))
+            {
+                return Kind::Channel;
+            }
+            const auto key = rowKey(source, name);
+            // still usable as a global: later uses count as global ones
+            const bool global = currentGlobal || (seenGlobals.contains(key) &&
+                                                  !seenInChannel.contains(key));
+            // the channel's set is not loaded (yet): it was counted as a
+            // channel emote unless it is a global
+            if (!setLoaded)
+            {
+                return global ? Kind::Hidden : Kind::Channel;
+            }
+            return (global || !globalsLoaded) ? Kind::Hidden : Kind::Removed;
+        };
+        switch (source)
+        {
+            case Source::Twitch:
+                // logged out or Helix failed: every counted Twitch emote
+                // is listed, like before
+                return !this->twitchEmotesLoaded_ || !twitchId(name).isEmpty()
+                           ? Kind::Channel
+                           : Kind::Hidden;
+            case Source::SevenTv:
+                return check(seventvMap, seventvLoaded,
+                             getApp()->getSeventvEmotes()->globalEmote(
+                                 emoteName) != std::nullopt,
+                             seventvGlobals);
+            case Source::Bttv:
+                return check(
+                    bttvMap, bttvLoaded,
+                    getApp()->getBttvEmotes()->emote(emoteName) != std::nullopt,
+                    bttvGlobals);
+            case Source::Ffz:
+                return check(
+                    ffzMap, ffzLoaded,
+                    getApp()->getFfzEmotes()->emote(emoteName) != std::nullopt,
+                    ffzGlobals);
+        }
+        return Kind::Hidden;
     };
 
     // used emotes, then the channel's emotes nobody used
@@ -752,7 +1039,13 @@ void EmoteStatsDialog::fillTable()
     QSet<QString> used;
     for (const auto &row : this->stats_.rows)
     {
-        if (shows(row.source) && row.messages > 0)
+        if (row.messages <= 0)
+        {
+            continue;
+        }
+        const auto kind = kindOf(row.source, row.name);
+        if (removedTab ? (kind == Kind::Removed)
+                       : (kind == Kind::Channel && shows(row.source)))
         {
             rows.push_back(row);
             used.insert(rowKey(row.source, row.name));
@@ -768,14 +1061,13 @@ void EmoteStatsDialog::fillTable()
 
     QHash<QString, EmotePtr> emotes;
     QStringList unused;
-    auto channel = this->twitchChannel();
-    if (channel)
+    if (channel && !removedTab)
     {
         const std::array<std::pair<Source, std::shared_ptr<const EmoteMap>>, 3>
             channelSets{{
-                {Source::SevenTv, channel->seventvEmotes()},
-                {Source::Bttv, channel->bttvEmotes()},
-                {Source::Ffz, channel->ffzEmotes()},
+                {Source::SevenTv, seventvMap},
+                {Source::Bttv, bttvMap},
+                {Source::Ffz, ffzMap},
             }};
         for (const auto &[source, map] : channelSets)
         {
@@ -787,7 +1079,10 @@ void EmoteStatsDialog::fillTable()
             {
                 const auto key = rowKey(source, name.string);
                 emotes.insert(key, emote);
-                if (!used.contains(key))
+                // chat shows (and counts) a name as the first source that
+                // has it, FFZ then BTTV then 7TV: its uses are on that row
+                if (!used.contains(key) &&
+                    emotestats::classify(*channel, name.string) == source)
                 {
                     used.insert(key);
                     unused.append(name.string);
@@ -798,46 +1093,33 @@ void EmoteStatsDialog::fillTable()
     }
     unused.sort(Qt::CaseInsensitive);
 
-    // pictures of the used emotes that are not channel emotes
+    // pictures of the channel's Twitch emotes, from the Helix list or else
+    // from the emotes the account can use
     {
         auto account = getApp()->getAccounts()->twitch.getCurrent();
-        auto twitchEmotes = account->accessEmotes();
+        auto accountEmotes = account->accessEmotes();
         for (const auto &row : rows)
         {
-            const auto key = rowKey(row.source, row.name);
-            if (emotes.contains(key))
+            if (row.source != Source::Twitch)
             {
                 continue;
             }
-            const EmoteName name{row.name};
-            std::optional<EmotePtr> emote;
-            switch (row.source)
+            const auto key = rowKey(row.source, row.name);
+            const auto id = twitchId(row.name);
+            if (!id.isEmpty())
             {
-                case Source::Twitch: {
-                    const auto &map = *twitchEmotes;
-                    if (map)
-                    {
-                        auto it = map->find(name);
-                        if (it != map->end())
-                        {
-                            emote = it->second;
-                        }
-                    }
-                    break;
-                }
-                case Source::SevenTv:
-                    emote = getApp()->getSeventvEmotes()->globalEmote(name);
-                    break;
-                case Source::Bttv:
-                    emote = getApp()->getBttvEmotes()->emote(name);
-                    break;
-                case Source::Ffz:
-                    emote = getApp()->getFfzEmotes()->emote(name);
-                    break;
+                emotes.insert(
+                    key,
+                    getApp()->getEmotes()->getTwitchEmotes()->getOrCreateEmote(
+                        EmoteId{id}, EmoteName{row.name}));
             }
-            if (emote && *emote)
+            else if (*accountEmotes)
             {
-                emotes.insert(key, *emote);
+                auto emote = (*accountEmotes)->find(EmoteName{row.name});
+                if (emote != (*accountEmotes)->end())
+                {
+                    emotes.insert(key, emote->second);
+                }
             }
         }
     }
@@ -853,21 +1135,35 @@ void EmoteStatsDialog::fillTable()
                     : QString("All time");
     }
     QStringList parts{label.toHtmlEscaped()};
-    if (total > 0)
+    if (removedTab)
     {
-        parts << QString("Chat messages <b>%1</b>").arg(formatCount(total));
-    }
-    if (!rows.empty() && rows.front().messages > 0)
-    {
-        this->topEmote_ = rows.front().name;
-        parts << QString("Top emote <b>%1</b> in <b>%2</b> of messages")
-                     .arg(rows.front().name.toHtmlEscaped(),
-                          formatShare(rows.front().messages, total));
+        parts << QString("Removed emotes <b>%1</b>")
+                     .arg(formatCount(static_cast<qint64>(rows.size())));
+        if (!rows.empty())
+        {
+            parts << QString("Most used <b>%1</b> in <b>%2</b> of messages")
+                         .arg(rows.front().name.toHtmlEscaped(),
+                              formatShare(rows.front().messages, total));
+        }
     }
     else
     {
-        this->topEmote_.clear();
-        parts << QStringLiteral("No emotes counted in this range yet");
+        if (total > 0)
+        {
+            parts << QString("Chat messages <b>%1</b>").arg(formatCount(total));
+        }
+        if (!rows.empty() && rows.front().messages > 0)
+        {
+            this->topEmote_ = rows.front().name;
+            parts << QString("Top emote <b>%1</b> in <b>%2</b> of messages")
+                         .arg(rows.front().name.toHtmlEscaped(),
+                              formatShare(rows.front().messages, total));
+        }
+        else
+        {
+            this->topEmote_.clear();
+            parts << QStringLiteral("No emotes counted in this range yet");
+        }
     }
     this->ui_.summary->setText(
         parts.join(QStringLiteral("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;")));
@@ -900,7 +1196,11 @@ void EmoteStatsDialog::fillTable()
         auto *emote = new SortItem(row.name);
         emote->setData(KEY_ROLE, rowKey(row.source, row.name));
         emote->setToolTip(row.name + " (" + emotestats::sourceName(row.source) +
-                          ")");
+                          (removedTab ? ", removed)" : ")"));
+        if (removedTab)
+        {
+            emote->setData(REMOVED_ROLE, emotestats::sourceName(row.source));
+        }
         table->setItem(r, ColEmote, emote);
         set(ColMessages, formatCount(row.messages),
             static_cast<double>(row.messages), Qt::AlignRight);
@@ -912,6 +1212,10 @@ void EmoteStatsDialog::fillTable()
                                        ? static_cast<double>(row.messages) /
                                              static_cast<double>(maxMessages)
                                        : 0.0);
+        if (removedTab)
+        {
+            share->setData(REMOVED_ROLE, true);
+        }
     }
     table->setSortingEnabled(true);
     table->sortByColumn(sortColumn, sortOrder);
@@ -936,7 +1240,58 @@ void EmoteStatsDialog::fillTable()
         this->ui_.unusedNames->setText(names);
         this->ui_.unused->show();
     }
+    this->ui_.removedNote->setVisible(removedTab);
     this->updateFooter();
+}
+
+void EmoteStatsDialog::loadTwitchChannelEmotes()
+{
+    // the list is refreshed every 10 minutes so emotes added while the
+    // window is open show up; a failed request is tried again after 2
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 wait =
+        this->twitchEmotesLoaded_ ? 10 * 60 * 1000 : 2 * 60 * 1000;
+    if (this->twitchEmotesLoading_ ||
+        (this->twitchEmotesRequestedAt_ > 0 &&
+         now - this->twitchEmotesRequestedAt_ < wait))
+    {
+        return;
+    }
+    auto channel = this->twitchChannel();
+    if (!channel || channel->roomId().isEmpty() ||
+        getApp()->getAccounts()->twitch.getCurrent()->isAnon())
+    {
+        // still joining, or logged out (Helix needs an account): the
+        // Twitch rows stay unfiltered until the list loads
+        return;
+    }
+    this->twitchEmotesLoading_ = true;
+    this->twitchEmotesRequestedAt_ = now;
+    std::weak_ptr<bool> alive = this->lifetime_;
+    getHelix()->getChannelEmotes(
+        channel->roomId(),
+        [this, alive](const std::vector<HelixChannelEmote> &emotes) {
+            if (!alive.lock())
+            {
+                return;
+            }
+            this->twitchEmotesLoading_ = false;
+            this->twitchEmotesLoaded_ = true;
+            this->twitchChannelEmotes_.clear();
+            for (const auto &emote : emotes)
+            {
+                this->twitchChannelEmotes_.insert(emote.name, emote.id);
+            }
+            this->fillTable();
+        },
+        [this, alive] {
+            if (!alive.lock())
+            {
+                return;
+            }
+            // keeps the list from before, if there is one
+            this->twitchEmotesLoading_ = false;
+        });
 }
 
 void EmoteStatsDialog::applySearch() const

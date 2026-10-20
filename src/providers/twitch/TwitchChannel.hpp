@@ -253,6 +253,11 @@ public:
     void setBttvEmotes(std::shared_ptr<const EmoteMap> &&map);
     void setFfzEmotes(std::shared_ptr<const EmoteMap> &&map);
     void setSeventvEmotes(std::shared_ptr<const EmoteMap> &&map);
+    /// Chatterino9 (Emote stats): the channel's BTTV, FFZ or 7TV emotes were
+    /// loaded at least once, so an empty set really is empty
+    bool bttvEmotesLoaded() const;
+    bool ffzEmotesLoaded() const;
+    bool seventvEmotesLoaded() const;
 
     const QString &seventvUserID() const;
     const QString &seventvEmoteSetID() const;
@@ -584,6 +589,9 @@ protected:
     Atomic<std::shared_ptr<const EmoteMap>> bttvEmotes_;
     Atomic<std::shared_ptr<const EmoteMap>> ffzEmotes_;
     Atomic<std::shared_ptr<const EmoteMap>> seventvEmotes_;
+    std::atomic<bool> bttvEmotesLoaded_{false};
+    std::atomic<bool> ffzEmotesLoaded_{false};
+    std::atomic<bool> seventvEmotesLoaded_{false};
     Atomic<std::optional<EmotePtr>> ffzCustomModBadge_;
     Atomic<std::optional<EmotePtr>> ffzCustomVipBadge_;
 

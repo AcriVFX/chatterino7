@@ -121,6 +121,48 @@ TEST(EmoteStats, MergesServerCountsWithLocalOnes)
     EXPECT_EQ(clap->messages, 1);
 }
 
+TEST(EmoteStats, ReusesPastDaysButRereadsToday)
+{
+    MockApplication app;
+
+    const auto dir =
+        QDir(app.paths_.miscDirectory).filePath("EmoteStats/statscache/server");
+    const auto pastFile = QDir(dir).filePath("2026-10-13.tsv");
+    const auto todayFile = QDir(dir).filePath(
+        QDateTime::currentDateTimeUtc().date().toString(Qt::ISODate) + ".tsv");
+    writeFile(pastFile, "18\t7tv\tomE\t5\tuserone\n");
+    writeFile(todayFile, "00\t7tv\tomE\t1\tusertwo\n");
+
+    auto cache = emotestats::makeLoadCache();
+    auto load = [&] {
+        return emotestats::load(
+            "statscache", 0,
+            QDateTime::currentMSecsSinceEpoch() + (24LL * 3600000),
+            cache.get());
+    };
+    auto stats = load();
+    const auto *ome = findRow(stats, Source::SevenTv, "omE");
+    ASSERT_NE(ome, nullptr);
+    EXPECT_EQ(ome->messages, 6);
+    EXPECT_EQ(ome->chatters, 2);
+
+    // today is read again on every load
+    writeFile(todayFile, "00\t7tv\tomE\t3\tusertwo,userthree\n");
+    stats = load();
+    ome = findRow(stats, Source::SevenTv, "omE");
+    ASSERT_NE(ome, nullptr);
+    EXPECT_EQ(ome->messages, 8);
+    EXPECT_EQ(ome->chatters, 3);
+
+    // a past day is read again once its file changed
+    writeFile(pastFile, "18\t7tv\tomE\t7\tuserone,userfour\n");
+    stats = load();
+    ome = findRow(stats, Source::SevenTv, "omE");
+    ASSERT_NE(ome, nullptr);
+    EXPECT_EQ(ome->messages, 10);
+    EXPECT_EQ(ome->chatters, 4);
+}
+
 TEST(EmoteStats, ImportsChatLogs)
 {
     MockApplication app;

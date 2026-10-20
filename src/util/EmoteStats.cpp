@@ -15,6 +15,7 @@
 #include <QDate>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -737,7 +738,81 @@ void flush()
     flushLocked(st);
 }
 
-Stats load(const QString &channel, qint64 from, qint64 to)
+namespace {
+
+struct Total {
+    qint64 messages = 0;
+    QSet<int> users;
+};
+
+/// Sums of a run of days
+struct Sums {
+    QHash<QString, Total> totals;
+    QHash<QString, int> userIds;
+    qint64 totalMessages = 0;
+};
+
+/// Adds the hours of `day` that start in [`fromHour` * HOUR_MS, `to`)
+void addDay(Sums &sums, qint64 day, const std::vector<QString> &files,
+            qint64 fromHour, qint64 to)
+{
+    const auto dayStart = day * 24 * HOUR_MS;
+    if (dayStart + (24 * HOUR_MS) <= fromHour * HOUR_MS || dayStart >= to)
+    {
+        return;
+    }
+    Day merged;
+    for (const auto &file : files)
+    {
+        readDay(file, merged);
+    }
+    for (auto it = merged.cbegin(); it != merged.cend(); ++it)
+    {
+        const auto parts = QStringView(it.key()).split(u'\t');
+        if (parts.size() != 3)
+        {
+            continue;
+        }
+        const auto hourStart = dayStart + (parts[0].toInt() * HOUR_MS);
+        if (hourStart < fromHour * HOUR_MS || hourStart >= to)
+        {
+            continue;
+        }
+        if (parts[1] == TOTAL_KEY)
+        {
+            sums.totalMessages += it.value().count;
+            continue;
+        }
+        auto &total =
+            sums.totals[parts[1].toString() + u'\t' + parts[2].toString()];
+        total.messages += it.value().count;
+        for (const auto &user : it.value().users)
+        {
+            auto id = sums.userIds.find(user);
+            if (id == sums.userIds.end())
+            {
+                id = sums.userIds.insert(user,
+                                         static_cast<int>(sums.userIds.size()));
+            }
+            total.users.insert(*id);
+        }
+    }
+}
+
+}  // namespace
+
+struct LoadCache {
+    /// Which files and hours `sums` was added up from
+    QString key;
+    Sums sums;
+};
+
+std::shared_ptr<LoadCache> makeLoadCache()
+{
+    return std::make_shared<LoadCache>();
+}
+
+Stats load(const QString &channel, qint64 from, qint64 to, LoadCache *cache)
 {
     Stats stats;
     const auto key = channel.toLower();
@@ -771,59 +846,62 @@ Stats load(const QString &channel, qint64 from, qint64 to)
     }
 
     const auto fromHour = from / HOUR_MS;
-    struct Total {
-        qint64 messages = 0;
-        QSet<int> users;
-    };
-    QHash<QString, Total> totals;
-    QHash<QString, int> userIds;
+    const auto today = dayOf(QDateTime::currentMSecsSinceEpoch());
 
-    for (const auto &[day, files] : days)
+    // the days before today rarely change: add them up again only when one
+    // of their files did
+    Sums sums;
     {
-        const auto dayStart = day * 24 * HOUR_MS;
-        if (dayStart + (24 * HOUR_MS) <= fromHour * HOUR_MS || dayStart >= to)
+        // `to` only matters to the past days when it lies before today
+        QString pastKey = QString("%1 %2 %3 %4")
+                              .arg(key)
+                              .arg(fromHour)
+                              .arg(std::min(to, today * 24 * HOUR_MS))
+                              .arg(today);
+        for (const auto &[day, files] : days)
         {
-            continue;
+            if (day >= today)
+            {
+                break;
+            }
+            for (const auto &file : files)
+            {
+                const QFileInfo info(file);
+                pastKey += QString("|%1 %2 %3")
+                               .arg(file)
+                               .arg(info.lastModified().toMSecsSinceEpoch())
+                               .arg(info.size());
+            }
         }
-        Day merged;
-        for (const auto &file : files)
+        if (cache != nullptr && cache->key == pastKey)
         {
-            readDay(file, merged);
+            sums = cache->sums;
         }
-        for (auto it = merged.cbegin(); it != merged.cend(); ++it)
+        else
         {
-            const auto parts = QStringView(it.key()).split(u'\t');
-            if (parts.size() != 3)
+            for (const auto &[day, files] : days)
             {
-                continue;
-            }
-            const auto hourStart = dayStart + (parts[0].toInt() * HOUR_MS);
-            if (hourStart < fromHour * HOUR_MS || hourStart >= to)
-            {
-                continue;
-            }
-            if (parts[1] == TOTAL_KEY)
-            {
-                stats.totalMessages += it.value().count;
-                continue;
-            }
-            auto &total =
-                totals[parts[1].toString() + u'\t' + parts[2].toString()];
-            total.messages += it.value().count;
-            for (const auto &user : it.value().users)
-            {
-                auto id = userIds.find(user);
-                if (id == userIds.end())
+                if (day >= today)
                 {
-                    id = userIds.insert(user, static_cast<int>(userIds.size()));
+                    break;
                 }
-                total.users.insert(*id);
+                addDay(sums, day, files, fromHour, to);
+            }
+            if (cache != nullptr)
+            {
+                cache->key = pastKey;
+                cache->sums = sums;
             }
         }
     }
+    for (auto it = days.lower_bound(today); it != days.end(); ++it)
+    {
+        addDay(sums, it->first, it->second, fromHour, to);
+    }
 
-    stats.rows.reserve(static_cast<size_t>(totals.size()));
-    for (auto it = totals.cbegin(); it != totals.cend(); ++it)
+    stats.totalMessages = sums.totalMessages;
+    stats.rows.reserve(static_cast<size_t>(sums.totals.size()));
+    for (auto it = sums.totals.cbegin(); it != sums.totals.cend(); ++it)
     {
         const auto tab = it.key().indexOf(u'\t');
         auto source = sourceFromKey(QStringView(it.key()).left(tab));

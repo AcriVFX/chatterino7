@@ -21,6 +21,7 @@
 #include <QString>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -82,10 +83,17 @@ struct Stats {
     qint64 firstMsecs = 0;
 };
 
+/// What load() added up for the days before today, so the next load() of
+/// the same range only reads today and the files that changed again. Use one
+/// per caller and only one load() with it at a time.
+struct LoadCache;
+std::shared_ptr<LoadCache> makeLoadCache();
+
 /// Adds up what was counted for `channel` in the hours that start in
 /// [`from`, `to`) (msecs since epoch). Reads files: call flush() first and
 /// run this off the GUI thread.
-Stats load(const QString &channel, qint64 from, qint64 to);
+Stats load(const QString &channel, qint64 from, qint64 to,
+           LoadCache *cache = nullptr);
 
 // ---------------------------------------------------------- log import ---
 
