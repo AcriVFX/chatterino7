@@ -40,6 +40,7 @@
 #include "util/DistanceBetweenPoints.hpp"
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
+#include "util/MentionHistory.hpp"
 #include "util/QMagicEnum.hpp"
 #include "util/Twitch.hpp"
 #include "util/WhisperHistory.hpp"
@@ -72,6 +73,7 @@
 #include <QPainter>
 #include <QScreen>
 #include <QStringBuilder>
+#include <QToolTip>
 #include <QUrl>
 #include <QVariantAnimation>
 
@@ -80,6 +82,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <unordered_map>
 #include <unordered_set>
@@ -1890,6 +1893,34 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     };
     bool showLastMessageIndicator = getSettings()->showLastMessageIndicator;
 
+    // Chatterino9: /mentions draws its own "New" line under the last mention
+    // that was read when it was opened, if a newer mention follows
+    const MessageLayout *mentionsNewLine = nullptr;
+    std::optional<int> mentionsNewLineY;
+    if (ctx.isMentions)
+    {
+        mentionhistory::watchView(this);
+        const auto mark = mentionhistory::newLineMark();
+        bool newer = false;
+        for (size_t i = messagesSnapshot.size(); i-- > 0;)
+        {
+            const auto *msg = messagesSnapshot[i]->getMessage();
+            const auto msecs = msg->serverReceivedTime.isValid()
+                                   ? msg->serverReceivedTime.toMSecsSinceEpoch()
+                                   : 0;
+            if (msecs > mark)
+            {
+                newer = newer || msg->flags.has(MessageFlag::Highlighted);
+                continue;
+            }
+            if (newer)
+            {
+                mentionsNewLine = messagesSnapshot[i].get();
+            }
+            break;
+        }
+    }
+
     // using QRect here, because we can only request updates with a rect
     QRect animationArea;
     auto areaContainsY = [&area](auto y) {
@@ -1900,7 +1931,15 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     {
         MessageLayout *layout = messagesSnapshot[ctx.messageIndex].get();
 
-        if (showLastMessageIndicator)
+        if (ctx.isMentions)
+        {
+            ctx.isLastReadMessage = false;
+            if (layout == mentionsNewLine)
+            {
+                mentionsNewLineY = ctx.y + layout->getHeight();
+            }
+        }
+        else if (showLastMessageIndicator)
         {
             ctx.isLastReadMessage = this->lastReadMessage_.get() == layout;
         }
@@ -1958,6 +1997,32 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         {
             break;
         }
+    }
+
+    if (mentionsNewLineY)
+    {
+        // purple line with "New" in the middle, like the Whispers window
+        static const QColor lineColor(0x91, 0x47, 0xff);
+        static const QColor textColor(0xb4, 0x8c, 0xff);
+        const auto scale = this->scale();
+        const QFont font =
+            getApp()->getFonts()->getFont(FontStyle::ChatSmall, scale);
+        const QFontMetrics metrics(font);
+        const QString text = QStringLiteral("New");
+        const int textWidth = metrics.horizontalAdvance(text);
+        const int gap = static_cast<int>(6 * scale);
+        const int width = this->width() - this->scrollBar_->width();
+        const int y = *mentionsNewLineY;
+        const QRect textRect(((width - textWidth) / 2) - gap,
+                             y - (metrics.height() / 2), textWidth + (2 * gap),
+                             metrics.height());
+
+        painter.fillRect(QRect(0, y - 1, width, std::max(1, int(scale))),
+                         lineColor);
+        painter.fillRect(textRect, this->messageColors_.channelBackground);
+        painter.setFont(font);
+        painter.setPen(textColor);
+        painter.drawText(textRect, Qt::AlignCenter, text);
     }
 
     // Only update on a full repaint as some messages with animated elements
@@ -2723,6 +2788,30 @@ void ChannelView::handleMouseClick(QMouseEvent *event,
                             }
                         });
                 }
+            }
+
+            // Chatterino9: clicking a mention's text in /mentions jumps to it
+            // in its chat. Waits out a double click like whispers do.
+            if (this->split_ != nullptr && link.type == Link::None &&
+                !this->clickTimer_.isActive() &&
+                this->underlyingChannel_ ==
+                    getApp()->getTwitch()->getMentionsChannel())
+            {
+                QTimer::singleShot(
+                    QApplication::doubleClickInterval(), this,
+                    [this, message = layout->getMessagePtr()] {
+                        if (!this->clickTimer_.isActive() &&
+                            !this->hasSelection() &&
+                            !mentionhistory::jumpTo(message))
+                        {
+                            QToolTip::showText(
+                                QCursor::pos(),
+                                QStringLiteral("#%1 isn't open or no "
+                                               "longer has this message")
+                                    .arg(message->channelName),
+                                this);
+                        }
+                    });
             }
 
             // Invoke to signal from EmotePopup.

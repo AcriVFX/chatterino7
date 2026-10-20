@@ -50,6 +50,7 @@
 #include "singletons/WindowManager.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
+#include "util/MentionHistory.hpp"
 #include "util/ModActivity.hpp"
 #include "util/PostToThread.hpp"
 #include "util/QStringHash.hpp"
@@ -1482,6 +1483,7 @@ void TwitchChannel::loadRecentMessages()
 {
     if (!getSettings()->loadTwitchMessageHistoryOnConnect)
     {
+        mentionhistory::restoreChannel(*this, {});
         return;
     }
 
@@ -1525,6 +1527,9 @@ void TwitchChannel::loadRecentMessages()
 
             getApp()->getTwitch()->getMentionsChannel()->fillInMissingMessages(
                 msgs);
+
+            // Chatterino9: saved mentions and your answers in /mentions
+            mentionhistory::restoreChannel(*tc, messages);
         },
         [weak]() {
             auto shared = weak.lock();
@@ -1540,6 +1545,7 @@ void TwitchChannel::loadRecentMessages()
             }
 
             tc->loadingRecentMessages_.clear();
+            mentionhistory::restoreChannel(*tc, {});
         },
         getSettings()->twitchMessageHistoryLimit.getValue(), std::nullopt,
         std::nullopt, false);

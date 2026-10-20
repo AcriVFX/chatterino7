@@ -30,6 +30,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/IrcHelpers.hpp"
+#include "util/MentionHistory.hpp"
 #include "util/ModNameCache.hpp"
 #include "util/WhisperHistory.hpp"
 
@@ -1271,12 +1272,18 @@ void IrcMessageHandler::addMessage(Communi::IrcMessage *message,
         const auto highlighted = msg->flags.has(MessageFlag::Highlighted);
         const auto showInMentions = msg->flags.has(MessageFlag::ShowInMentions);
 
-        if (highlighted && showInMentions &&
-            sink.sinkTraits().has(MessageSinkTrait::AddMentionsToGlobalChannel))
+        const bool live =
+            sink.sinkTraits().has(MessageSinkTrait::AddMentionsToGlobalChannel);
+        if (highlighted && showInMentions && live)
         {
             twitch.getMentionsChannel()->addMessage(msg,
                                                     MessageContext::Original);
         }
+
+        // Chatterino9: keep mentions across restarts, show your answers
+        const bool isMention = highlighted && showInMentions;
+        mentionhistory::onChatMessage(
+            msg, isMention ? message->toData() : QByteArray(), isMention, live);
 
         sink.addMessage(msg, MessageContext::Original);
         chan->addRecentChatter(msg->displayName);

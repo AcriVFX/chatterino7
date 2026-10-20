@@ -35,6 +35,7 @@
 #include <QPainter>
 
 #include <algorithm>
+#include <cmath>
 
 namespace chatterino {
 namespace {
@@ -83,6 +84,33 @@ float getCompactReducer(TabStyle tabStyle)
         default:
             return 0.0;
     }
+}
+
+/// Chatterino9: text of the unread pill after a tab's title
+QString badgeText(int count)
+{
+    return count > 99 ? QStringLiteral("99+") : QString::number(count);
+}
+
+/// Size of the unread pill, empty without unread
+QSize badgeSize(int count, float scale)
+{
+    if (count <= 0)
+    {
+        return {};
+    }
+    auto metrics =
+        getApp()->getFonts()->getFontMetrics(FontStyle::ChatSmall, scale);
+    const auto height = static_cast<int>(std::ceil(metrics.height()));
+    const auto textWidth = static_cast<int>(
+        std::ceil(metrics.horizontalAdvance(badgeText(count))));
+    return {std::max(height, textWidth + static_cast<int>(8 * scale)), height};
+}
+
+/// Space between a tab's title and its unread pill
+int badgeGap(float scale)
+{
+    return static_cast<int>(5 * scale);
 }
 }  // namespace
 
@@ -493,6 +521,11 @@ int NotebookTab::normalTabWidthForHeight(int height) const
                                  (16 / compactDivider * scale));
     }
 
+    if (this->badgeCount_ > 0)
+    {
+        width += badgeSize(this->badgeCount_, scale).width() + badgeGap(scale);
+    }
+
     if (static_cast<float>(height) > 150 * scale)
     {
         width = height;
@@ -736,6 +769,16 @@ void NotebookTab::setTabLocation(NotebookTabLocation location)
     if (this->tabLocation_ != location)
     {
         this->tabLocation_ = location;
+        this->update();
+    }
+}
+
+void NotebookTab::setBadgeCount(int count)
+{
+    if (this->badgeCount_ != count)
+    {
+        this->badgeCount_ = count;
+        this->updateSize();
         this->update();
     }
 }
@@ -1064,13 +1107,47 @@ void NotebookTab::paintEvent(QPaintEvent *)
     }
 
     int width = metrics.horizontalAdvance(this->getTitle());
-    Qt::Alignment alignment = width > textRect.width()
-                                  ? Qt::AlignLeft | Qt::AlignVCenter
-                                  : Qt::AlignHCenter | Qt::AlignVCenter;
+    const auto badge = badgeSize(this->badgeCount_, scale);
+    if (!badge.isEmpty())
+    {
+        // title and unread pill, centered together
+        const int pillSpace = badge.width() + badgeGap(scale);
+        const int titleWidth =
+            std::min(width, std::max(0, textRect.width() - pillSpace));
+        const int left =
+            textRect.left() +
+            std::max(0, (textRect.width() - titleWidth - pillSpace) / 2);
+        const QRect titleRect(left, textRect.top(), titleWidth,
+                              textRect.height());
 
-    QTextOption option(alignment);
-    option.setWrapMode(QTextOption::NoWrap);
-    painter.drawText(textRect, this->getTitle(), option);
+        QTextOption option(Qt::AlignLeft | Qt::AlignVCenter);
+        option.setWrapMode(QTextOption::NoWrap);
+        painter.drawText(titleRect, this->getTitle(), option);
+
+        const QRect pill(titleRect.right() + 1 + badgeGap(scale),
+                         textRect.center().y() - (badge.height() / 2) + 1,
+                         badge.width(), badge.height());
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0x91, 0x47, 0xff));
+        painter.drawRoundedRect(pill, badge.height() / 2.0,
+                                badge.height() / 2.0);
+        painter.setPen(Qt::white);
+        painter.setFont(app->getFonts()->getFont(FontStyle::ChatSmall, scale));
+        painter.drawText(pill, Qt::AlignCenter, badgeText(this->badgeCount_));
+        painter.restore();
+    }
+    else
+    {
+        Qt::Alignment alignment = width > textRect.width()
+                                      ? Qt::AlignLeft | Qt::AlignVCenter
+                                      : Qt::AlignHCenter | Qt::AlignVCenter;
+
+        QTextOption option(alignment);
+        option.setWrapMode(QTextOption::NoWrap);
+        painter.drawText(textRect, this->getTitle(), option);
+    }
 
     // draw close x
     if (this->shouldDrawXButton())

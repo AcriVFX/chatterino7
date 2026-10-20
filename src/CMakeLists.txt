@@ -630,6 +630,8 @@ set(SOURCE_FILES
         util/LayoutHelper.hpp
         util/LoadPixmap.cpp
         util/LoadPixmap.hpp
+        util/MentionHistory.cpp
+        util/MentionHistory.hpp
         util/ModHelpers.cpp
         util/ModHelpers.hpp
         util/ModActivity.cpp
