@@ -790,17 +790,17 @@ void recordMessage(const QString &channel, const QString &messageId,
     }
 }
 
+void flushAndWait()
+{
+    flush();
+    writerPool().waitForDone();
+}
+
 void flush()
 {
     auto &st = store();
     std::scoped_lock lock(st.mutex);
     flushLocked(st);
-}
-
-void flushAndWait()
-{
-    flush();
-    writerPool().waitForDone();
 }
 
 Stats load(const QString &channel, qint64 from, qint64 to)
