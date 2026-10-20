@@ -55,6 +55,10 @@ struct Use {
 std::optional<Source> classify(const TwitchChannel &channel,
                                const QString &name);
 
+/// Whether live chat in `channel` is counted. Only papaplatte is: counting
+/// every joined channel filled the disk for channels nobody looks at.
+bool countsChannel(const QString &channel);
+
 /// Counts one live chat message of `login` in `channel`. `uses` may repeat an
 /// emote, it counts once. History loaded on join must not be passed in; a
 /// message id seen before is ignored.
@@ -62,8 +66,12 @@ void recordMessage(const QString &channel, const QString &messageId,
                    const QString &login, const QDateTime &time,
                    const std::vector<Use> &uses);
 
-/// Writes the counts not saved yet (they are saved every 30 seconds anyway)
+/// Saves the counts not saved yet (they are saved every 30 seconds anyway).
+/// The files are written on a background thread; load() waits for them.
 void flush();
+
+/// flush() and wait until the files are written. For quitting.
+void flushAndWait();
 
 struct Row {
     Source source = Source::Twitch;

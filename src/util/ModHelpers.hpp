@@ -123,8 +123,8 @@ qint64 parseLogDuration(const QString &text);
 
 /// Parses the content of one log file (one day) and appends all timeouts and
 /// bans of `login` to `out`.
-void parseLogTimeouts(const QString &content, const QDate &date,
-                      const QString &login, std::vector<LogTimeout> &out);
+void parseLogTimeouts(const QString &content, QDate date, const QString &login,
+                      std::vector<LogTimeout> &out);
 
 /// Reads the log files of `channelName` in `channelLogDirectory` for the last
 /// `days` days (including today) and returns the timeouts and bans of `login`

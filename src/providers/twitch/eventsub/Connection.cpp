@@ -31,6 +31,10 @@
 #include <twitch-eventsub-ws/session.hpp>
 
 #include <chrono>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <unordered_set>
 
 namespace {
 
@@ -56,6 +60,36 @@ concept CanHandleModMessage =
              const std::remove_cvref_t<Action> &action) {
         handleModerateMessage(channel, time, event, action);
     };
+
+/// Chatterino9: Twitch can deliver an event again with the same message id.
+/// The mod tracker server ignores those, so the app counts each one once too.
+bool firstDelivery(const std::string &messageID)
+{
+    struct Seen {
+        std::mutex mutex;
+        std::unordered_set<std::string> ids;
+        std::deque<std::string> order;
+    };
+    // never destroyed: events can still arrive while the app quits
+    static auto *seen = new Seen;
+
+    if (messageID.empty())
+    {
+        return true;
+    }
+    std::scoped_lock lock(seen->mutex);
+    if (!seen->ids.insert(messageID).second)
+    {
+        return false;
+    }
+    seen->order.push_back(messageID);
+    if (seen->order.size() > 1000)
+    {
+        seen->ids.erase(seen->order.front());
+        seen->order.pop_front();
+    }
+    return true;
+}
 
 /// Chatterino9: counts the action for the Mod activity window. Shared chat
 /// actions come from other channels' mods, so they are not counted.
@@ -224,12 +258,16 @@ void Connection::onChannelModerate(
     }
 
     auto now = chronoToQDateTime(metadata.messageTimestamp);
+    const bool countActivity = firstDelivery(metadata.messageID);
 
     std::visit(
         [&](auto &&action) {
             using Action = std::remove_cvref_t<decltype(action)>;
-            recordModActivity(payload.event, metadata.messageTimestamp, now,
-                              action);
+            if (countActivity)
+            {
+                recordModActivity(payload.event, metadata.messageTimestamp, now,
+                                  action);
+            }
             static_assert(CanMakeModMessage<Action> ||
                               CanHandleModMessage<Action> ||
                               std::is_same_v<Action, std::string>,
@@ -344,7 +382,8 @@ void Connection::onAutomodMessageUpdate(
         automodStatus.compare(u"approved", Qt::CaseInsensitive) == 0;
     const bool denied =
         automodStatus.compare(u"denied", Qt::CaseInsensitive) == 0;
-    if (!payload.event.moderatorUserLogin.empty() && (approved || denied))
+    if (!payload.event.moderatorUserLogin.empty() && (approved || denied) &&
+        firstDelivery(metadata.messageID))
     {
         modactivity::record(
             payload.event.broadcasterUserLogin.qt(),

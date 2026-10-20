@@ -23,6 +23,7 @@
 #include <QSaveFile>
 #include <QStringList>
 #include <QTextStream>
+#include <QThreadPool>
 #include <QTimeZone>
 #include <QUrlQuery>
 
@@ -33,7 +34,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -197,13 +200,29 @@ struct Store {
 
 Store &store()
 {
-    static Store instance;
-    return instance;
+    // never destroyed: the log import thread may still use it at exit
+    static auto *instance = new Store;
+    return *instance;
+}
+
+/// Writes the day files one after the other, off the GUI thread. One thread
+/// keeps them in order, so an older copy never overwrites a newer one.
+QThreadPool &writerPool()
+{
+    static auto *pool = [] {
+        auto *p = new QThreadPool;
+        p->setMaxThreadCount(1);
+        return p;
+    }();
+    return *pool;
 }
 
 void flushLocked(Store &st)
 {
     st.lastFlush = QDateTime::currentMSecsSinceEpoch();
+    // Day is implicitly shared: the copies are cheap, and the next count
+    // only copies the hour bucket it changes
+    std::vector<std::tuple<QString, qint64, QString, Day>> todo;
     for (auto &[channel, live] : st.channels)
     {
         const auto dir = dataDir(channel, QStringLiteral("local"));
@@ -211,22 +230,55 @@ void flushLocked(Store &st)
         {
             continue;
         }
+        std::optional<qint64> oldestQueued;
         for (auto &[day, data] : live.days)
         {
-            if (data.dirty &&
-                writeDay(QDir(dir).filePath(dayName(day) + ".tsv"),
-                         data.buckets))
+            if (data.dirty)
             {
+                todo.emplace_back(channel, day,
+                                  QDir(dir).filePath(dayName(day) + ".tsv"),
+                                  data.buckets);
                 data.dirty = false;
+                if (!oldestQueued)
+                {
+                    oldestQueued = day;
+                }
             }
         }
-        // keep only the newest days in memory, once they are on disk
+        // keep only the newest days in memory, once they are on disk. A day
+        // queued just now stays until the next flush, so a failed write can
+        // still mark it dirty again
         while (live.days.size() > DAYS_IN_MEMORY &&
-               !live.days.begin()->second.dirty)
+               !live.days.begin()->second.dirty &&
+               live.days.begin()->first != oldestQueued)
         {
             live.days.erase(live.days.begin());
         }
     }
+    if (todo.empty())
+    {
+        return;
+    }
+    writerPool().start([todo = std::move(todo)] {
+        for (const auto &[channel, day, path, buckets] : todo)
+        {
+            if (!writeDay(path, buckets))
+            {
+                // try again with the next flush
+                auto &st = store();
+                std::scoped_lock lock(st.mutex);
+                auto ch = st.channels.find(channel);
+                if (ch != st.channels.end())
+                {
+                    auto d = ch->second.days.find(day);
+                    if (d != ch->second.days.end())
+                    {
+                        d->second.dirty = true;
+                    }
+                }
+            }
+        }
+    });
 }
 
 // ------------------------------------------------------------ log import ---
@@ -238,8 +290,9 @@ struct ImportState {
 
 ImportState &importState()
 {
-    static ImportState instance;
-    return instance;
+    // never destroyed: the import thread may still run at exit
+    static auto *instance = new ImportState;
+    return *instance;
 }
 
 std::optional<Source> classifyName(const ImportNames &names,
@@ -307,7 +360,9 @@ void runImport(const QString &channel, const QString &logDirectory,
                const ImportNames &names)
 {
     // "[12:34:56] login: text" or "[12:34:56] Display login: text"
-    static const QRegularExpression lineRegex(QStringLiteral(
+    // not static: a static would be destroyed at exit while this thread
+    // may still run
+    const QRegularExpression lineRegex(QStringLiteral(
         R"(^\[(\d\d):(\d\d):(\d\d)\] (?:[^\s:]+ )?([a-z0-9_]+): (.*)$)"));
     const QRegularExpression fileRegex(
         QStringLiteral("^%1-(\\d{4}-\\d{2}-\\d{2})\\.log$")
@@ -678,6 +733,11 @@ std::optional<Source> classify(const TwitchChannel &channel,
     return std::nullopt;
 }
 
+bool countsChannel(const QString &channel)
+{
+    return channel.compare(u"papaplatte", Qt::CaseInsensitive) == 0;
+}
+
 void recordMessage(const QString &channel, const QString &messageId,
                    const QString &login, const QDateTime &time,
                    const std::vector<Use> &uses)
@@ -729,6 +789,12 @@ void recordMessage(const QString &channel, const QString &messageId,
     {
         flushLocked(st);
     }
+}
+
+void flushAndWait()
+{
+    flush();
+    writerPool().waitForDone();
 }
 
 void flush()
@@ -814,6 +880,9 @@ std::shared_ptr<LoadCache> makeLoadCache()
 
 Stats load(const QString &channel, qint64 from, qint64 to, LoadCache *cache)
 {
+    // the counts flush() handed to the writer are on disk before reading
+    writerPool().waitForDone();
+
     Stats stats;
     const auto key = channel.toLower();
     const std::array<QString, 3> dirs{

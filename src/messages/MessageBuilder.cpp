@@ -2105,8 +2105,10 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
 
     // Chatterino9: emote usage for the Emote stats window, live messages of
     // this channel only (not the history loaded on join or shared chat)
-    if (twitchChannel != nullptr && !args.isReceivedWhisper &&
-        !args.isSentWhisper && !tags.contains("historical") &&
+    if (twitchChannel != nullptr &&
+        emotestats::countsChannel(twitchChannel->getName()) &&
+        !args.isReceivedWhisper && !args.isSentWhisper &&
+        !tags.contains("historical") &&
         !builder->flags.has(MessageFlag::SharedMessage))
     {
         recordEmoteUses(*twitchChannel, builder.message(), splits,

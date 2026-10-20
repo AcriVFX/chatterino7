@@ -143,10 +143,20 @@ void PinnedMessageWidget::tickProgress()
     {
         this->progressTimer_->stop();
         this->countdownLabel_->hide();
-        if (this->channel_)
-        {
-            this->channel_->clearPinnedMessage();
-        }
+        // Clearing re-enters refresh() and frees the pin, which refresh()
+        // may still be reading, so do it once the current call is done.
+        QTimer::singleShot(0, this, [this] {
+            if (this->channel_ == nullptr)
+            {
+                return;
+            }
+            const auto *pin = this->channel_->getPinnedMessage();
+            if (pin != nullptr && pin->endsAt && pin->endsAt->isValid() &&
+                *pin->endsAt <= QDateTime::currentDateTimeUtc())
+            {
+                this->channel_->clearPinnedMessage();
+            }
+        });
         return;
     }
 
@@ -189,8 +199,13 @@ void PinnedMessageWidget::paintEvent(QPaintEvent *event)
 void PinnedMessageWidget::setChannel(TwitchChannel *channel)
 {
     this->signalHolder_.clear();
+    if (channel != this->channel_)
+    {
+        // a pin hidden here stays hidden when the split only changes its
+        // filters or lane style
+        this->hiddenPinID_.clear();
+    }
     this->channel_ = channel;
-    this->hiddenPinID_.clear();
 
     if (channel)
     {
@@ -274,7 +289,6 @@ void PinnedMessageWidget::refresh()
     if (!pin)
     {
         this->progressTimer_->stop();
-        this->hiddenPinID_.clear();
         this->hide();
         return;
     }
@@ -298,6 +312,14 @@ void PinnedMessageWidget::refresh()
     this->countdownLabel_->hide();
     if (pin->endsAt.has_value() && pin->endsAt->isValid())
     {
+        if (*pin->endsAt <= QDateTime::currentDateTimeUtc())
+        {
+            // already over, tickProgress() clears it right after this
+            this->pinEndsAt_ = *pin->endsAt;
+            this->tickProgress();
+            this->hide();
+            return;
+        }
         this->pinEndsAt_ = *pin->endsAt;
         this->tickProgress();  // set initial text immediately
         this->progressTimer_->start();

@@ -131,21 +131,36 @@ async function postForm(url, fields) {
   return { ok: res.ok, status: res.status, body };
 }
 
-async function storeGrant(body) {
+async function storeGrant(body, renewal = false) {
+  const prev = renewal ? state.token : null;
+  const token = {
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token,
+    expiresAt: Date.now() + (body.expires_in ?? 3600) * 1000,
+    login: prev?.login,
+    userId: prev?.userId,
+  };
+  if (renewal) {
+    // Twitch refresh tokens work once: save the new one before anything
+    // else can fail, or a network blip here would force a new sign-in
+    saveToken(token);
+    state.token = token;
+  }
+
   const validate = await fetch(`${ID_URL}/oauth2/validate`, {
     headers: { Authorization: `OAuth ${body.access_token}` },
   });
   if (!validate.ok) {
+    if (renewal && token.userId) {
+      // the account is known, the renewed login is good to use
+      return token;
+    }
     throw new Error(`token validation failed (${validate.status})`);
   }
   const info = await validate.json();
-  const token = {
-    accessToken: body.access_token,
-    refreshToken: body.refresh_token,
-    expiresAt: Date.now() + info.expires_in * 1000,
-    login: info.login,
-    userId: info.user_id,
-  };
+  token.expiresAt = Date.now() + info.expires_in * 1000;
+  token.login = info.login;
+  token.userId = info.user_id;
   saveToken(token);
   state.token = token;
   return token;
@@ -226,7 +241,7 @@ async function renewToken() {
     refresh_token: used,
   });
   if (refresh.ok) {
-    await storeGrant(refresh.body);
+    await storeGrant(refresh.body, true);
     log("Twitch login renewed.");
     return;
   }
@@ -526,12 +541,49 @@ async function subscribe(sessionId) {
   log(`Counting mod actions in ${CHANNEL}.`);
 }
 
+let reconnectTimer = null;
+
+function scheduleReconnect() {
+  if (reconnectTimer) {
+    // one reconnect at a time, or two sessions would count everything twice
+    return;
+  }
+  const wait = backoff;
+  backoff = Math.min(backoff * 2, 60 * 1000);
+  log(`Disconnected from Twitch, reconnecting in ${wait / 1000}s.`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, wait);
+}
+
+/// Closes a connection without waiting for its close event: on a dead link
+/// Node's WebSocket can stay in CLOSING and never fire onclose.
+function dropSocket(ws) {
+  ws.onmessage = null;
+  ws.onclose = null;
+  ws.onerror = null;
+  try {
+    ws.close();
+  } catch {
+    // already closed
+  }
+  if (socket === ws) {
+    socket = null;
+    state.connected = false;
+    clearTimeout(watchdog);
+    scheduleReconnect();
+  }
+}
+
 function armWatchdog(seconds) {
   clearTimeout(watchdog);
   watchdog = setTimeout(
     () => {
       log("Twitch went quiet, reconnecting.");
-      socket?.close();
+      if (socket) {
+        dropSocket(socket);
+      }
     },
     (seconds + 10) * 1000
   );
@@ -566,7 +618,7 @@ function connect(url = EVENTSUB_URL, isReconnect = false) {
         await subscribe(data.payload.session.id);
       } catch (err) {
         log(String(err.message ?? err));
-        ws.close();
+        dropSocket(ws);
       }
     } else if (type === "notification") {
       if (isDuplicate(data.metadata.message_id)) {
@@ -585,22 +637,22 @@ function connect(url = EVENTSUB_URL, isReconnect = false) {
         `Twitch ended the subscription (${data.payload.subscription?.status}).`
       );
       state.connected = false;
-      ws.close();
+      dropSocket(ws);
     }
   };
 
   ws.onclose = () => {
-    if (socket !== ws && socket !== null) {
-      // replaced by a reconnect
+    if (socket !== ws) {
+      // replaced by a reconnect, or a reconnect attempt that failed
+      if (socket === null) {
+        scheduleReconnect();
+      }
       return;
     }
     socket = null;
     state.connected = false;
     clearTimeout(watchdog);
-    const wait = backoff;
-    backoff = Math.min(backoff * 2, 60 * 1000);
-    log(`Disconnected from Twitch, reconnecting in ${wait / 1000}s.`);
-    setTimeout(() => connect(), wait);
+    scheduleReconnect();
   };
 
   ws.onerror = () => {
@@ -957,13 +1009,35 @@ let chatSocket = null;
 let chatBackoff = 1000;
 let chatWatchdog = null;
 
+/// Like dropSocket: don't wait for onclose, it may never come on a dead link
+function dropChatSocket(ws) {
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onclose = null;
+  ws.onerror = null;
+  try {
+    ws.close();
+  } catch {
+    // already closed
+  }
+  if (chatSocket === ws) {
+    chatSocket = null;
+    chat.connected = false;
+    clearTimeout(chatWatchdog);
+    const wait = chatBackoff;
+    chatBackoff = Math.min(chatBackoff * 2, 60 * 1000);
+    log(`Disconnected from chat, reconnecting in ${wait / 1000}s.`);
+    setTimeout(connectChat, wait);
+  }
+}
+
 function armChatWatchdog(ws) {
   clearTimeout(chatWatchdog);
   // Twitch pings about every 5 minutes
   chatWatchdog = setTimeout(
     () => {
       log("Chat went quiet, reconnecting.");
-      ws.close();
+      dropChatSocket(ws);
     },
     7 * 60 * 1000
   );
@@ -994,7 +1068,7 @@ function connectChat() {
           ws.send(`PONG :${message.trailing ?? "tmi.twitch.tv"}`);
           break;
         case "RECONNECT":
-          ws.close();
+          dropChatSocket(ws);
           break;
         case "ROOMSTATE": {
           const roomId = message.tags["room-id"];
@@ -1024,16 +1098,9 @@ function connectChat() {
   };
 
   ws.onclose = () => {
-    if (chatSocket !== ws) {
-      return;
+    if (chatSocket === ws) {
+      dropChatSocket(ws);
     }
-    chatSocket = null;
-    chat.connected = false;
-    clearTimeout(chatWatchdog);
-    const wait = chatBackoff;
-    chatBackoff = Math.min(chatBackoff * 2, 60 * 1000);
-    log(`Disconnected from chat, reconnecting in ${wait / 1000}s.`);
-    setTimeout(connectChat, wait);
   };
 
   ws.onerror = () => {

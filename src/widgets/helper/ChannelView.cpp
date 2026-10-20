@@ -1076,12 +1076,9 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
                                            overridingFlags);
                 this->messageAddedToChannel(message);
 
-                if (folded && this->channel_->removeMessage(folded))
+                if (folded)
                 {
-                    // rebuild the rows without the folded one
-                    this->messagesUpdated();
-                    this->pauseScrollMaximumOffset_ = 0;
-                    this->pauseScrollMinimumOffset_ = 0;
+                    this->removeFoldedRow(folded);
                 }
             }
         });
@@ -1488,6 +1485,84 @@ void ChannelView::messageReplaced(size_t hint, const MessagePtr &prev,
 
     this->messages_.replaceItem(index, newItem);
     this->queueLayout();
+}
+
+void ChannelView::removeFoldedRow(const MessagePtr &folded)
+{
+    // where the row is and what points at rows, before they are rebuilt
+    const auto rows = this->messages_.getSnapshot();
+    std::optional<size_t> row;
+    for (size_t i = 0; i < rows.size(); i++)
+    {
+        if (rows[i]->getMessagePtr() == folded)
+        {
+            row = i;
+            break;
+        }
+    }
+    const bool paused = this->paused();
+    const bool above =
+        row && !paused && !this->scrollBar_->isAtBottom() &&
+        static_cast<qreal>(*row) < this->scrollBar_->getRelativeCurrentValue();
+    auto lastRead = this->lastReadMessage_
+                        ? this->lastReadMessage_->getMessagePtr()
+                        : nullptr;
+    const auto *highlighted = this->highlightedMessage_ != nullptr
+                                  ? this->highlightedMessage_->getMessage()
+                                  : nullptr;
+
+    if (!this->channel_->removeMessage(folded))
+    {
+        return;
+    }
+
+    // rebuild the rows without the folded one
+    this->messagesUpdated();
+    this->pauseScrollMaximumOffset_ = 0;
+    this->pauseScrollMinimumOffset_ = 0;
+
+    // keep the rows on screen where they were when scrolled up
+    if (above)
+    {
+        this->scrollBar_->setDesiredValue(
+            this->scrollBar_->getDesiredValue() - 1, false);
+    }
+
+    // a selection below the removed row moves up with its rows
+    if (row)
+    {
+        for (auto *selection :
+             {&this->selection_, &this->doubleClickSelection_})
+        {
+            if (selection->isEmpty())
+            {
+                continue;
+            }
+            if (selection->selectionMin.messageIndex > *row)
+            {
+                selection->shiftMessageIndex(1);
+            }
+            else if (selection->selectionMax.messageIndex >= *row)
+            {
+                *selection = {};
+            }
+        }
+    }
+
+    // the rebuilt rows are new objects
+    this->lastReadMessage_.reset();
+    this->highlightedMessage_ = nullptr;
+    for (const auto &layout : this->messages_.getSnapshot())
+    {
+        if (lastRead && layout->getMessagePtr() == lastRead)
+        {
+            this->lastReadMessage_ = layout;
+        }
+        if (highlighted != nullptr && layout->getMessage() == highlighted)
+        {
+            this->highlightedMessage_ = layout.get();
+        }
+    }
 }
 
 void ChannelView::messagesUpdated()

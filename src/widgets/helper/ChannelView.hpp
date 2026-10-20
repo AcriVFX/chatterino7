@@ -286,6 +286,8 @@ private:
     void messageReplaced(size_t hint, const MessagePtr &prev,
                          const MessagePtr &replacement);
     void messagesUpdated();
+    /// Chatterino9: removes a repeat row that moved down to a newer one
+    void removeFoldedRow(const MessagePtr &folded);
 
     void performLayout(bool causedByScrollbar = false,
                        bool causedByShow = false);
