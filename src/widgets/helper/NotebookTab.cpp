@@ -16,6 +16,7 @@
 #include "singletons/WindowManager.hpp"
 #include "util/Helpers.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
+#include "widgets/helper/NotebookGroup.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
 #include "widgets/splits/Split.hpp"
@@ -152,6 +153,12 @@ NotebookTab::NotebookTab(Notebook *notebook)
     this->menu_.addAction("Duplicate Tab", [this]() {
         this->notebook_->duplicatePage(this->page);
     });
+
+    this->moveToGroupMenu_ = new QMenu("Move to group", &this->menu_);
+    QObject::connect(this->moveToGroupMenu_, &QMenu::aboutToShow, this, [this] {
+        this->recreateMoveToGroupMenu();
+    });
+    this->menu_.addMenu(this->moveToGroupMenu_);
 
     this->highlightNewMessagesAction_ =
         new QAction("Mark Tab as Unread on New Messages", &this->menu_);
@@ -339,6 +346,57 @@ void NotebookTab::recreateCloseMultipleTabsMenu(
                 this->notebook_->removePage(p);
             }
         });
+}
+
+void NotebookTab::recreateMoveToGroupMenu()
+{
+    this->moveToGroupMenu_->clear();
+
+    if (this->notebook_->isNotebookLayoutLocked())
+    {
+        this->moveToGroupMenu_->addAction("Unlock the tab layout first")
+            ->setEnabled(false);
+        return;
+    }
+
+    auto addGroupAction = [this](const QString &label, const QString &group) {
+        auto *action = this->moveToGroupMenu_->addAction(label);
+        action->setCheckable(true);
+        action->setChecked(this->group_ == group);
+        QObject::connect(action, &QAction::triggered, this, [this, group] {
+            this->notebook_->moveTabToGroup(this, group);
+        });
+    };
+
+    addGroupAction("No group", QString());
+    for (const auto &group : this->notebook_->tabGroups())
+    {
+        addGroupAction(group->name, group->name);
+    }
+
+    this->moveToGroupMenu_->addSeparator();
+    this->moveToGroupMenu_->addAction("New group...", this, [this] {
+        this->notebook_->promptNewTabGroup(this);
+    });
+}
+
+const QString &NotebookTab::getGroup() const
+{
+    return this->group_;
+}
+
+void NotebookTab::setGroup(const QString &group)
+{
+    if (this->group_ != group)
+    {
+        this->group_ = group;
+        this->update();
+    }
+}
+
+void NotebookTab::highlightStateChanged()
+{
+    this->notebook_->tabHighlightChanged(this);
 }
 
 void NotebookTab::showRenameDialog()
@@ -586,6 +644,7 @@ void NotebookTab::updateHighlightStateDueSourcesChange()
         {
             this->highlightState_ = HighlightState::NewMessage;
             this->update();
+            this->highlightStateChanged();
         }
     }
     else
@@ -594,6 +653,7 @@ void NotebookTab::updateHighlightStateDueSourcesChange()
         {
             this->highlightState_ = HighlightState::None;
             this->update();
+            this->highlightStateChanged();
         }
     }
 
@@ -625,6 +685,7 @@ void NotebookTab::copyHighlightStateAndSourcesFrom(const NotebookTab *sourceTab)
 
     this->highlightState_ = sourceTab->highlightState_;
     this->update();
+    this->highlightStateChanged();
 }
 
 void NotebookTab::setSelected(bool value)
@@ -658,6 +719,7 @@ void NotebookTab::setSelected(bool value)
     this->highlightState_ = HighlightState::None;
 
     this->update();
+    this->highlightStateChanged();
 }
 
 void NotebookTab::setInLastRow(bool value)
@@ -737,6 +799,7 @@ void NotebookTab::setHighlightState(HighlightState newHighlightStyle)
 
     this->highlightState_ = newHighlightStyle;
     this->update();
+    this->highlightStateChanged();
 }
 
 void NotebookTab::updateHighlightState(HighlightState newHighlightStyle,
@@ -791,6 +854,7 @@ void NotebookTab::updateHighlightState(HighlightState newHighlightStyle,
 
     this->highlightState_ = newHighlightStyle;
     this->update();
+    this->highlightStateChanged();
 }
 
 bool NotebookTab::shouldMessageHighlight(
@@ -1063,6 +1127,15 @@ void NotebookTab::paintEvent(QPaintEvent *)
                 break;
         }
         painter.fillRect(borderRect, app->getThemes()->window.background);
+    }
+
+    // draw the group marker
+    if (!this->selected_ && !this->group_.isEmpty())
+    {
+        auto thickness = std::max(1, static_cast<int>(2 * scale));
+        painter.fillRect(notebookGroupMarkerRect(this->rect(),
+                                                 this->tabLocation_, thickness),
+                         notebookGroupMarkerColor(this->theme));
     }
 }
 

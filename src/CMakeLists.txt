@@ -840,6 +840,8 @@ set(SOURCE_FILES
         widgets/helper/MessageView.hpp
         widgets/helper/MicroNotebook.cpp
         widgets/helper/MicroNotebook.hpp
+        widgets/helper/NotebookGroup.cpp
+        widgets/helper/NotebookGroup.hpp
         widgets/helper/NotebookTab.cpp
         widgets/helper/NotebookTab.hpp
         widgets/helper/OverlayInteraction.cpp
