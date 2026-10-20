@@ -209,7 +209,7 @@ void showNoTimeoutLogs(Label *label)
         QStringLiteral("Chat logging is off for this channel or uses another "
                        "timestamp format, so timeouts can't be counted"));
     auto palette = label->palette();
-    palette.setColor(QPalette::WindowText, QColor("#aaa"));
+    palette.setColor(QPalette::WindowText, QColor(0xaaaaaa));
     label->setPalette(palette);
 }
 
