@@ -9,21 +9,26 @@
 #include "common/Modes.hpp"
 #include "common/QLogging.hpp"
 #include "debug/AssertInGuiThread.hpp"
+#include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "util/IpcQueue.hpp"
 #include "util/PostToThread.hpp"
+#include "util/WhisperHistory.hpp"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStringBuilder>
+#include <QTimer>
 
 #ifdef Q_OS_WIN
 #    include "widgets/AttachedWindow.hpp"
@@ -36,7 +41,9 @@ using namespace chatterino;
 using namespace chatterino::literals;
 
 const QString EXTENSION_ID = u"glknmaideaikkmemifbfkhnomoknepka"_s;
-constexpr const size_t MESSAGE_SIZE = 1024;
+/// Chatterino9's own extension that copies whispers sent on twitch.tv
+/// (tools/whisper-extension, its ID comes from the key in its manifest)
+const QString WHISPER_EXTENSION_ID = u"bcgnaflbiogmdloflolimldoepjipehp"_s;
 
 struct Config {
 #ifdef Q_OS_WIN
@@ -76,6 +83,12 @@ const Config CHROME{
 #endif
 };
 
+#ifdef Q_OS_WIN
+// Edge reads the same manifest, from its own registry key
+const QString EDGE_REGISTRY_KEY =
+    u"HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.chatterino.chatterino"_s;
+#endif
+
 void registerNmManifest([[maybe_unused]] const Paths &paths,
                         const Config &config, const QJsonDocument &document)
 {
@@ -86,6 +99,13 @@ void registerNmManifest([[maybe_unused]] const Paths &paths,
     QSettings registry(config.registryKey, QSettings::NativeFormat);
     registry.setValue("Default",
                       QString(paths.miscDirectory % u'/' % config.fileName));
+
+    if (&config == &CHROME)
+    {
+        QSettings edge(EDGE_REGISTRY_KEY, QSettings::NativeFormat);
+        edge.setValue("Default",
+                      QString(paths.miscDirectory % u'/' % config.fileName));
+    }
 #else
     std::ignore =
         writeManifestTo(config.browserDirectory, config.nmDirectory,
@@ -159,7 +179,8 @@ void registerNmHost(const Paths &paths)
     {
         auto obj = getBaseDocument();
         QJsonArray allowedOriginsArr = {
-            u"chrome-extension://%1/"_s.arg(EXTENSION_ID)};
+            u"chrome-extension://%1/"_s.arg(EXTENSION_ID),
+            u"chrome-extension://%1/"_s.arg(WHISPER_EXTENSION_ID)};
 
         for (const auto &id : extensionIDs)
         {
@@ -207,9 +228,9 @@ std::string &getNmQueueName(const Paths &paths)
 
 namespace nm::client {
 
-void sendMessage(const QByteArray &array)
+bool sendMessage(const QByteArray &array)
 {
-    ipc::sendMessage("chatterino_gui", array);
+    return ipc::sendMessage("chatterino_gui", array);
 }
 
 void writeToCout(const QByteArray &array)
@@ -267,8 +288,8 @@ NativeMessagingServer::ReceiverThread::ReceiverThread(
 
 void NativeMessagingServer::ReceiverThread::run()
 {
-    auto [messageQueue, error] =
-        ipc::IpcQueue::tryReplaceOrCreate("chatterino_gui", 100, MESSAGE_SIZE);
+    auto [messageQueue, error] = ipc::IpcQueue::tryReplaceOrCreate(
+        "chatterino_gui", 100, nm::MAX_MESSAGE_SIZE);
 
     if (!error.isEmpty())
     {
@@ -310,6 +331,11 @@ void NativeMessagingServer::ReceiverThread::handleMessage(
     if (action == "sync")
     {
         this->handleSync(root);
+        return;
+    }
+    if (action == "chatterino9-whisper-sent")
+    {
+        this->handleWhisperSent(root);
         return;
     }
 
@@ -405,6 +431,69 @@ void NativeMessagingServer::ReceiverThread::handleSync(const QJsonObject &root)
                   twitch = root["twitchChannels"_L1].toArray()] {
         parent.syncChannels(twitch);
     });
+}
+
+void NativeMessagingServer::ReceiverThread::handleWhisperSent(
+    const QJsonObject &root)
+{
+    // Structure (from tools/whisper-extension):
+    // { action: 'chatterino9-whisper-sent', id: string, recipientId: string,
+    //   message: string, sentAt: number (msecs) }
+    static const QRegularExpression idRe(u"^[0-9]{1,20}$"_s);
+    const auto recipientId = root["recipientId"_L1].toString();
+    const auto text = root["message"_L1].toString().trimmed();
+    auto sentAt = static_cast<qint64>(root["sentAt"_L1].toDouble());
+    if (!idRe.match(recipientId).hasMatch() || text.isEmpty() ||
+        text.size() > 1000)
+    {
+        qCDebug(chatterinoNativeMessage) << "NM whisper-sent is malformed";
+        return;
+    }
+    // nothing from before 2020 or from the future
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    if (sentAt < 1577836800000 || sentAt > now + 60000)
+    {
+        sentAt = now;
+    }
+
+    postToThread([recipientId, text, sentAt] {
+        recordWhisperSentElsewhere(recipientId, text, sentAt, 0);
+    });
+}
+
+void NativeMessagingServer::recordWhisperSentElsewhere(
+    const QString &recipientId, const QString &text, qint64 sentAt, int attempt)
+{
+    assertInGuiThread();
+
+    // user id -> login, so each whisper doesn't need a lookup
+    static QHash<QString, QString> logins;
+    auto known = logins.constFind(recipientId);
+    if (known != logins.cend())
+    {
+        whisperhistory::recordOutgoing(*known, text, sentAt);
+        return;
+    }
+
+    getHelix()->getUserById(
+        recipientId,
+        [recipientId, text, sentAt](const HelixUser &user) {
+            logins.insert(recipientId, user.login.toLower());
+            whisperhistory::recordOutgoing(user.login, text, sentAt);
+        },
+        [recipientId, text, sentAt, attempt] {
+            // e.g. offline right after starting: try again a few times
+            if (attempt >= 5)
+            {
+                qCWarning(chatterinoNativeMessage)
+                    << "Couldn't look up whisper recipient" << recipientId;
+                return;
+            }
+            QTimer::singleShot(30000 * (attempt + 1), [=] {
+                recordWhisperSentElsewhere(recipientId, text, sentAt,
+                                           attempt + 1);
+            });
+        });
 }
 
 void NativeMessagingServer::syncChannels(const QJsonArray &twitchChannels)

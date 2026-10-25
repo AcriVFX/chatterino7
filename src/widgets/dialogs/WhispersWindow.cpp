@@ -383,6 +383,15 @@ WhispersPanel::WhispersPanel(QWidget *parent)
             }
         });
 
+    // whispers sent on twitch.tv: may belong anywhere in the conversation
+    this->signalHolder_.managedConnect(
+        whisperhistory::copiedIn(), [this](const QString &partner) {
+            if (partner == this->partner_ && this->viewChannel_)
+            {
+                this->loadConversation();
+            }
+        });
+
     // whispers as they arrive, shown as chat shows them
     this->signalHolder_.managedConnect(
         getApp()->getTwitch()->getWhispersChannel()->messageAppended,

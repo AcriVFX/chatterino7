@@ -58,19 +58,20 @@ void initPaths(const Paths *paths)
     PATHS = paths;
 }
 
-void sendMessage(const char *name, const QByteArray &data)
+bool sendMessage(const char *name, const QByteArray &data)
 {
     try
     {
         boost_ipc::message_queue messageQueue(boost_ipc::open_only, name);
 
-        messageQueue.try_send(data.data(), size_t(data.size()), 1);
+        return messageQueue.try_send(data.data(), size_t(data.size()), 1);
     }
     catch (boost_ipc::interprocess_exception &ex)
     {
         qCDebug(chatterinoNativeMessage)
             << "Failed to send message:" << ex.what();
     }
+    return false;
 }
 
 class IpcQueuePrivate

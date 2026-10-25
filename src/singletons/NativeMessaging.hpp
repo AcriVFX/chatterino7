@@ -40,9 +40,17 @@ std::string &getNmQueueName(const Paths &paths);
 
 Atomic<std::optional<QString>> &nmIpcError();
 
+namespace nm {
+
+/// Largest message the browser host can pass on to the app
+inline constexpr size_t MAX_MESSAGE_SIZE = 4096;
+
+}  // namespace nm
+
 namespace nm::client {
 
-void sendMessage(const QByteArray &array);
+/// Returns false if the app isn't running (or its queue is full)
+bool sendMessage(const QByteArray &array);
 void writeToCout(const QByteArray &array);
 
 }  // namespace nm::client
@@ -72,11 +80,16 @@ private:
         void handleSelect(const QJsonObject &root);
         void handleDetach(const QJsonObject &root);
         void handleSync(const QJsonObject &root);
+        void handleWhisperSent(const QJsonObject &root);
 
         NativeMessagingServer &parent_;
     };
 
     void syncChannels(const QJsonArray &twitchChannels);
+    /// Saves a whisper sent on twitch.tv to the Whispers window history
+    static void recordWhisperSentElsewhere(const QString &recipientId,
+                                           const QString &text, qint64 sentAt,
+                                           int attempt);
 
     ReceiverThread *thread;
 

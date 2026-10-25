@@ -20,7 +20,8 @@ namespace chatterino::ipc {
 
 void initPaths(const Paths *paths);
 
-void sendMessage(const char *name, const QByteArray &data);
+/// Returns false if nobody listens on `name` or its queue is full
+bool sendMessage(const char *name, const QByteArray &data);
 
 class IpcQueuePrivate;
 class IpcQueue

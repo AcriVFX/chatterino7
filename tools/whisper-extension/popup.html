@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        width: 260px;
+        margin: 0;
+        padding: 10px 12px;
+        background: #1e1e1e;
+        color: #e0e0e0;
+        font:
+          13px "Segoe UI",
+          sans-serif;
+      }
+      h1 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 8px;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        padding: 2px 0;
+      }
+      .label {
+        color: #999;
+      }
+      #problem {
+        color: #e8a33d;
+        margin-top: 6px;
+      }
+      button {
+        margin-top: 10px;
+        width: 100%;
+        padding: 5px;
+        background: #333;
+        color: #e0e0e0;
+        border: 1px solid #555;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #3c3c3c;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Chatterino9 Whispers</h1>
+    <div class="row">
+      <span class="label">Whispers caught on twitch.tv</span>
+      <span id="captured">0</span>
+    </div>
+    <div class="row">
+      <span class="label">Copied to Chatterino9</span>
+      <span id="delivered">0</span>
+    </div>
+    <div class="row">
+      <span class="label">Waiting for Chatterino9</span>
+      <span id="pending">0</span>
+    </div>
+    <div class="row">
+      <span class="label">Last whisper caught</span>
+      <span id="last">never</span>
+    </div>
+    <div id="problem"></div>
+    <button id="send">Send waiting whispers now</button>
+    <script src="popup.js"></script>
+  </body>
+</html>

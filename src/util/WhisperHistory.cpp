@@ -379,20 +379,44 @@ QString ensureLoaded()
     return dir;
 }
 
-void add(const QString &partner, Entry entry)
+/// Returns false if nothing was saved
+bool add(const QString &partner, Entry entry)
 {
     const auto dir = ensureLoaded();
     if (dir.isEmpty() || !isLogin(partner) || partner == store().account)
     {
-        return;
+        return false;
+    }
+    auto &list = store().byPartner[partner];
+    // the same whisper again (e.g. sent from twitch.tv and passed on twice)
+    for (auto it = list.crbegin();
+         it != list.crend() && it->msecs >= entry.msecs; ++it)
+    {
+        if (it->msecs == entry.msecs && it->outgoing == entry.outgoing &&
+            it->text == entry.text)
+        {
+            return false;
+        }
     }
     if (!entry.outgoing && !entry.name.isEmpty())
     {
         store().displayNames[partner] = entry.name;
     }
-    writeEntries(dir, partner, {entry}, true);
-    store().byPartner[partner].push_back(std::move(entry));
+    if (list.empty() || list.back().msecs <= entry.msecs)
+    {
+        writeEntries(dir, partner, {entry}, true);
+        list.push_back(std::move(entry));
+    }
+    else
+    {
+        // sent on twitch.tv while the app was closed: keep time order
+        auto pos =
+            std::ranges::upper_bound(list, entry.msecs, {}, &Entry::msecs);
+        list.insert(pos, std::move(entry));
+        writeEntries(dir, partner, list, false);
+    }
     updated().invoke(partner);
+    return true;
 }
 
 }  // namespace
@@ -419,17 +443,20 @@ void recordIncoming(const MessagePtr &message)
     });
 }
 
-void recordOutgoing(const QString &partner, const QString &text)
+void recordOutgoing(const QString &partner, const QString &text, qint64 msecs)
 {
-    runInGuiThread([partner = partner.toLower(), text] {
+    runInGuiThread([partner = partner.toLower(), text, msecs] {
         auto account = getApp()->getAccounts()->twitch.getCurrent();
         Entry entry;
-        entry.msecs = QDateTime::currentMSecsSinceEpoch();
+        entry.msecs = msecs != 0 ? msecs : QDateTime::currentMSecsSinceEpoch();
         entry.outgoing = true;
         entry.name = account ? account->getUserName() : QString();
         entry.color = account ? account->color() : QColor();
         entry.text = text;
-        add(partner, std::move(entry));
+        if (add(partner, std::move(entry)) && msecs != 0)
+        {
+            copiedIn().invoke(partner);
+        }
     });
 }
 
@@ -524,6 +551,12 @@ QString partnerOf(const Message &message)
 }
 
 pajlada::Signals::Signal<QString> &updated()
+{
+    static pajlada::Signals::Signal<QString> signal;
+    return signal;
+}
+
+pajlada::Signals::Signal<QString> &copiedIn()
 {
     static pajlada::Signals::Signal<QString> signal;
     return signal;

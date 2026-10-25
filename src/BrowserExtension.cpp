@@ -7,6 +7,9 @@
 #include "singletons/NativeMessaging.hpp"
 #include "util/RenameThread.hpp"
 
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -38,6 +41,43 @@ void sendToBrowser(QLatin1String str)
     std::cout.write(reinterpret_cast<const char *>(&len), sizeof(len));
     std::cout.write(str.data(), str.size());
     std::cout.flush();
+}
+
+void sendToBrowser(const QByteArray &json)
+{
+    auto len = static_cast<uint32_t>(json.size());
+    std::cout.write(reinterpret_cast<const char *>(&len), sizeof(len));
+    std::cout.write(json.data(), json.size());
+    std::cout.flush();
+}
+
+/// Chatterino9's whisper extension waits for an answer to each whisper it
+/// passes on, so it can keep the ones the app didn't get (app closed).
+void acknowledge(const QByteArray &buffer, bool delivered)
+{
+    if (!buffer.contains("chatterino9-"))
+    {
+        return;
+    }
+    const auto root = QJsonDocument::fromJson(buffer).object();
+    const auto id = root["id"].toString();
+    if (!root["action"].toString().startsWith("chatterino9-") || id.isEmpty())
+    {
+        return;
+    }
+    QJsonObject ack{
+        {"type", "ack"},
+        {"id", id},
+        {"ok", delivered},
+    };
+    if (!delivered)
+    {
+        ack.insert("reason",
+                   static_cast<size_t>(buffer.size()) > nm::MAX_MESSAGE_SIZE
+                       ? "too-long"
+                       : "not-running");
+    }
+    sendToBrowser(QJsonDocument(ack).toJson(QJsonDocument::Compact));
 }
 
 QByteArray receiveFromBrowser()
@@ -86,7 +126,10 @@ void runLoop()
 
         receivedMessage->store(true);
 
-        nm::client::sendMessage(buffer);
+        bool delivered =
+            static_cast<size_t>(buffer.size()) <= nm::MAX_MESSAGE_SIZE &&
+            nm::client::sendMessage(buffer);
+        acknowledge(buffer, delivered);
     }
 
     sendToBrowser(QLatin1String{

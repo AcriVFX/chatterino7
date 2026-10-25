@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Chatterino9 Whispers",
+  "version": "1.0.0",
+  "description": "Copies the whispers you send on twitch.tv into Chatterino9's Whispers window. Nothing leaves this PC.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1SfqlHRSAmdTX7lTbfiq1QRvQ4EsHVjf0+sVnGIveWAazb4M9JxsJTPXLdfYHOYMvsEYgyibDx4p4EasWastTs+n1Hs1bk/AMpBWBY3TpfuQ8oclRnxtZYvvcsYCvpSqCpB216aqt+zNh6fF9TiXR9UMiupXoM1hF1nCdvnaZCp/GGodkZtFj4liO/CQ9FjI7ACW67CIV+23mYD83xoO1bLczWthb4TIucNAGpA2JcQVJ9LleoyYq2Cl5h2rIa7Yl6xS3wMiu8oWbKf9wy+5U3CFXhSFFzq1/JJnUSffyauC8+e1HQaoQWm83KFtojXhJwMauy+JPPN+2eDdZ0EnMQIDAQAB",
+  "minimum_chrome_version": "111",
+  "permissions": ["nativeMessaging", "storage", "alarms"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.twitch.tv/*"],
+      "js": ["page.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://*.twitch.tv/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "Chatterino9 Whispers",
+    "default_popup": "popup.html"
+  }
+}
