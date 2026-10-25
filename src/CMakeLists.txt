@@ -207,6 +207,8 @@ set(SOURCE_FILES
         controllers/highlights/HighlightBadge.hpp
         controllers/highlights/HighlightBlacklistModel.cpp
         controllers/highlights/HighlightBlacklistModel.hpp
+        controllers/highlights/HighlightCategories.cpp
+        controllers/highlights/HighlightCategories.hpp
         controllers/highlights/HighlightCheck.hpp
         controllers/highlights/HighlightController.cpp
         controllers/highlights/HighlightController.hpp
@@ -894,6 +896,8 @@ set(SOURCE_FILES
         widgets/settingspages/GeneralPage.hpp
         widgets/settingspages/GeneralPageView.cpp
         widgets/settingspages/GeneralPageView.hpp
+        widgets/settingspages/HighlightCategoriesTab.cpp
+        widgets/settingspages/HighlightCategoriesTab.hpp
         widgets/settingspages/HighlightingPage.cpp
         widgets/settingspages/HighlightingPage.hpp
         widgets/settingspages/IgnoresPage.cpp
