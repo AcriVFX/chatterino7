@@ -10,6 +10,7 @@
 #include <QString>
 #include <QThread>
 
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -46,6 +47,23 @@ namespace nm {
 inline constexpr size_t MAX_MESSAGE_SIZE = 4096;
 
 }  // namespace nm
+
+/// Chatterino9's extension that copies whispers sent on twitch.tv
+/// (tools/whisper-extension). It has its own native messaging host name, so
+/// other Chatterino builds that rewrite the shared manifest can't lock it out.
+namespace nm::whispers {
+
+/// Its ID comes from the key in its manifest
+inline constexpr const char *EXTENSION_ORIGIN =
+    "chrome-extension://bcgnaflbiogmdloflolimldoepjipehp/";
+
+/// Notes that the app saved (or refused for good) the whisper with `id`
+void addReceipt(const Paths &paths, const QString &id, bool saved);
+
+/// id -> saved, for the receipts of the last month
+std::map<QString, bool> readReceipts(const Paths &paths);
+
+}  // namespace nm::whispers
 
 namespace nm::client {
 
@@ -86,10 +104,6 @@ private:
     };
 
     void syncChannels(const QJsonArray &twitchChannels);
-    /// Saves a whisper sent on twitch.tv to the Whispers window history
-    static void recordWhisperSentElsewhere(const QString &recipientId,
-                                           const QString &text, qint64 sentAt,
-                                           int attempt);
 
     ReceiverThread *thread;
 

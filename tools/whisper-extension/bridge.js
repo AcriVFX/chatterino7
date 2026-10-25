@@ -1,5 +1,6 @@
-// Chatterino9 Whispers: passes what page.js saw on to the extension's
-// background worker (page.js runs in twitch.tv's page and can't reach it).
+// Chatterino9 Whispers: passes Twitch's refusals that page.js saw on to the
+// extension's background worker (page.js runs in twitch.tv's page and can't
+// reach it). Refusals can only keep a whisper out, never add one.
 (() => {
   "use strict";
 
@@ -9,7 +10,7 @@
       event.source !== window ||
       !data ||
       data.source !== "chatterino9-whispers" ||
-      data.type !== "sent"
+      data.type !== "rejected"
     ) {
       return;
     }
@@ -17,19 +18,16 @@
       typeof data.recipientId !== "string" ||
       !/^[0-9]{1,20}$/.test(data.recipientId) ||
       typeof data.message !== "string" ||
-      !data.message.trim() ||
-      data.message.length > 1000 ||
-      typeof data.sentAt !== "number"
+      data.message.length > 1000
     ) {
       return;
     }
     try {
       chrome.runtime
         .sendMessage({
-          type: "whisper-sent",
+          type: "whisper-rejected",
           recipientId: data.recipientId,
           message: data.message,
-          sentAt: data.sentAt,
         })
         .catch(() => {});
     } catch {

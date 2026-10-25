@@ -7,11 +7,14 @@
 #include "singletons/NativeMessaging.hpp"
 #include "util/RenameThread.hpp"
 
+#include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
 
 #include <iostream>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 #ifdef Q_OS_WIN
@@ -26,6 +29,13 @@ namespace {
 
 using namespace chatterino;
 
+/// The ping check and the whisper receipts write from other threads
+std::mutex &outputMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
 void initFileMode()
 {
 #ifdef Q_OS_WIN
@@ -34,50 +44,23 @@ void initFileMode()
 #endif
 }
 
+void writeToBrowser(const char *data, uint32_t len)
+{
+    std::lock_guard lock(outputMutex());
+    std::cout.write(reinterpret_cast<const char *>(&len), sizeof(len));
+    std::cout.write(data, len);
+    std::cout.flush();
+}
+
 // TODO(Qt6): Use QUtf8String
 void sendToBrowser(QLatin1String str)
 {
-    auto len = static_cast<uint32_t>(str.size());
-    std::cout.write(reinterpret_cast<const char *>(&len), sizeof(len));
-    std::cout.write(str.data(), str.size());
-    std::cout.flush();
+    writeToBrowser(str.data(), static_cast<uint32_t>(str.size()));
 }
 
 void sendToBrowser(const QByteArray &json)
 {
-    auto len = static_cast<uint32_t>(json.size());
-    std::cout.write(reinterpret_cast<const char *>(&len), sizeof(len));
-    std::cout.write(json.data(), json.size());
-    std::cout.flush();
-}
-
-/// Chatterino9's whisper extension waits for an answer to each whisper it
-/// passes on, so it can keep the ones the app didn't get (app closed).
-void acknowledge(const QByteArray &buffer, bool delivered)
-{
-    if (!buffer.contains("chatterino9-"))
-    {
-        return;
-    }
-    const auto root = QJsonDocument::fromJson(buffer).object();
-    const auto id = root["id"].toString();
-    if (!root["action"].toString().startsWith("chatterino9-") || id.isEmpty())
-    {
-        return;
-    }
-    QJsonObject ack{
-        {"type", "ack"},
-        {"id", id},
-        {"ok", delivered},
-    };
-    if (!delivered)
-    {
-        ack.insert("reason",
-                   static_cast<size_t>(buffer.size()) > nm::MAX_MESSAGE_SIZE
-                       ? "too-long"
-                       : "not-running");
-    }
-    sendToBrowser(QJsonDocument(ack).toJson(QJsonDocument::Compact));
+    writeToBrowser(json.data(), static_cast<uint32_t>(json.size()));
 }
 
 QByteArray receiveFromBrowser()
@@ -97,7 +80,137 @@ QByteArray receiveFromBrowser()
     return buffer;
 }
 
-void runLoop()
+void sendAck(const QString &id, bool ok, const char *reason = nullptr)
+{
+    QJsonObject ack{
+        {"type", "ack"},
+        {"id", id},
+        {"ok", ok},
+    };
+    if (reason != nullptr)
+    {
+        ack.insert("reason", reason);
+    }
+    sendToBrowser(QJsonDocument(ack).toJson(QJsonDocument::Compact));
+}
+
+/// Chatterino9's whisper extension waits for an answer to each whisper it
+/// passes on, so it keeps every whisper the app hasn't saved yet. The app
+/// notes each saved (or refused) whisper in a receipts file, which this
+/// checks for a few seconds after passing whispers on.
+class WhisperReceipts
+{
+public:
+    explicit WhisperReceipts(const Paths &paths)
+        : paths_(paths)
+    {
+    }
+
+    void wait(const QString &id)
+    {
+        std::lock_guard lock(this->mutex_);
+        this->waiting_.emplace(id, QDateTime::currentMSecsSinceEpoch());
+        if (!this->started_)
+        {
+            this->started_ = true;
+            auto thread = std::thread([this] {
+                this->run();
+            });
+            renameThread(thread, "WhisperReceipts");
+            thread.detach();
+        }
+    }
+
+private:
+    void run()
+    {
+        using namespace std::chrono_literals;
+        while (true)
+        {
+            std::this_thread::sleep_for(150ms);
+            std::map<QString, qint64> waiting;
+            {
+                std::lock_guard lock(this->mutex_);
+                waiting = this->waiting_;
+            }
+            if (waiting.empty())
+            {
+                continue;
+            }
+            const auto receipts = nm::whispers::readReceipts(this->paths_);
+            const auto now = QDateTime::currentMSecsSinceEpoch();
+            for (const auto &[id, since] : waiting)
+            {
+                auto receipt = receipts.find(id);
+                if (receipt != receipts.end())
+                {
+                    if (receipt->second)
+                    {
+                        sendAck(id, true);
+                    }
+                    else
+                    {
+                        sendAck(id, false, "rejected");
+                    }
+                }
+                else if (now - since > 5000)
+                {
+                    // e.g. the app is still looking up who it went to:
+                    // the extension sends it again later
+                    sendAck(id, false, "pending");
+                }
+                else
+                {
+                    continue;
+                }
+                std::lock_guard lock(this->mutex_);
+                this->waiting_.erase(id);
+            }
+        }
+    }
+
+    const Paths &paths_;
+    std::mutex mutex_;
+    std::map<QString, qint64> waiting_;
+    bool started_ = false;
+};
+
+/// Handles a message from Chatterino9's whisper extension. Returns false if
+/// it isn't one.
+bool handleWhisperMessage(const QByteArray &buffer, const QString &origin,
+                          WhisperReceipts &receipts)
+{
+    if (!buffer.contains("chatterino9-"))
+    {
+        return false;
+    }
+    const auto root = QJsonDocument::fromJson(buffer).object();
+    if (!root["action"].toString().startsWith("chatterino9-"))
+    {
+        return false;
+    }
+    const auto id = root["id"].toString();
+    // only the whisper extension itself may add whispers
+    if (origin != nm::whispers::EXTENSION_ORIGIN || id.isEmpty() ||
+        id.size() > 100)
+    {
+        return true;
+    }
+    if (static_cast<size_t>(buffer.size()) > nm::MAX_MESSAGE_SIZE)
+    {
+        sendAck(id, false, "too-long");
+        return true;
+    }
+    if (!nm::client::sendMessage(buffer))
+    {
+        sendAck(id, false, "not-running");
+        return true;
+    }
+    receipts.wait(id);
+    return true;
+}
+
+void runLoop(const Paths &paths, const QString &origin)
 {
     auto receivedMessage = std::make_shared<std::atomic_bool>(true);
 
@@ -116,6 +229,9 @@ void runLoop()
     });
     renameThread(thread, "BrowserPingCheck");
 
+    // lives until _Exit, its thread keeps using it
+    auto *receipts = new WhisperReceipts(paths);
+
     while (true)
     {
         auto buffer = receiveFromBrowser();
@@ -126,10 +242,10 @@ void runLoop()
 
         receivedMessage->store(true);
 
-        bool delivered =
-            static_cast<size_t>(buffer.size()) <= nm::MAX_MESSAGE_SIZE &&
+        if (!handleWhisperMessage(buffer, origin, *receipts))
+        {
             nm::client::sendMessage(buffer);
-        acknowledge(buffer, delivered);
+        }
     }
 
     sendToBrowser(QLatin1String{
@@ -140,11 +256,11 @@ void runLoop()
 
 namespace chatterino {
 
-void runBrowserExtensionHost()
+void runBrowserExtensionHost(const Paths &paths, const QString &origin)
 {
     initFileMode();
 
-    runLoop();
+    runLoop(paths, origin);
 }
 
 }  // namespace chatterino

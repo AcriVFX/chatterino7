@@ -1,10 +1,12 @@
-// Chatterino9 Whispers: runs inside twitch.tv's own page, so it sees the
-// request Twitch makes when you send a whisper (on the site, in mod view, in
-// the stream manager or with /w in web chat).
+// Chatterino9 Whispers: runs inside twitch.tv's own page to see Twitch's
+// answer when you send a whisper. The extension notices the send itself (from
+// outside the page); this only tells it when Twitch refused one, e.g. because
+// the other person blocked you, so that one isn't saved. A page script can
+// only ever keep a whisper out this way, never add one.
 //
 // It only reads the body of a whisper send (who it goes to and the text) and
-// whether Twitch accepted it. It never reads request headers, cookies or
-// storage, so your Twitch login never passes through it.
+// Twitch's answer to it. It never reads request headers, cookies or storage,
+// so your Twitch login never passes through it.
 (() => {
   "use strict";
 
@@ -76,25 +78,24 @@
     return true;
   }
 
-  function report(whispers, sentAt, json) {
+  function report(whispers, json) {
     for (const w of whispers) {
-      if (json !== undefined && !accepted(json, w.index)) {
+      if (json === undefined || accepted(json, w.index)) {
         continue;
       }
       window.postMessage(
         {
           source: SOURCE,
-          type: "sent",
+          type: "rejected",
           recipientId: w.recipientId,
           message: w.message,
-          sentAt,
         },
         location.origin
       );
     }
   }
 
-  function watchResponse(responsePromise, bodyPromise, sentAt) {
+  function watchResponse(responsePromise, bodyPromise) {
     responsePromise.then(
       (response) => {
         if (!response || !response.ok) {
@@ -114,8 +115,8 @@
               return;
             }
             return copy.json().then(
-              (json) => report(whispers, sentAt, json),
-              () => report(whispers, sentAt, undefined)
+              (json) => report(whispers, json),
+              () => {}
             );
           })
           .catch(() => {});
@@ -155,7 +156,7 @@
       }
       const result = originalFetch.apply(this, arguments);
       if (bodyPromise) {
-        watchResponse(result, bodyPromise, Date.now());
+        watchResponse(result, bodyPromise);
       }
       return result;
     };
@@ -180,7 +181,6 @@
       const whispers =
         url && isGql(url) && typeof body === "string" ? findWhispers(body) : [];
       if (whispers.length) {
-        const sentAt = Date.now();
         this.addEventListener("load", () => {
           if (this.status < 200 || this.status >= 300) {
             return;
@@ -198,7 +198,7 @@
           } catch {
             json = undefined;
           }
-          report(whispers, sentAt, json);
+          report(whispers, json);
         });
       }
     } catch {

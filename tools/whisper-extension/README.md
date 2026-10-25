@@ -7,27 +7,33 @@ the app.
 
 ## How it works
 
-- `page.js` runs inside twitch.tv's page and watches for the request Twitch
-  makes when a whisper is sent (`SendWhisper` on gql.twitch.tv). It reads only
-  that request's body (recipient user id and text) and whether Twitch accepted
-  it. It never reads headers, cookies or storage, so the Twitch login never
-  passes through it.
-- `bridge.js` passes the whisper to `background.js`, which keeps it in the
-  extension's storage until Chatterino9 confirms it got it.
-- Delivery uses the browser's native messaging: Edge starts `chatterino.exe`
-  as the `com.chatterino.chatterino` host (the same bridge Chatterino's own
-  browser extension uses), which passes the whisper to the running app. If the
-  app is closed, the whisper waits and is retried every 2 minutes (up to 500
-  whispers, 30 days).
-- The app looks up the recipient's login by id (Helix) and saves the whisper
-  with the time it was sent. The same whisper is never saved twice.
+- `background.js` notices whisper sends with `webRequest`: a POST from
+  www.twitch.tv or dashboard.twitch.tv to gql.twitch.tv whose body is a
+  `SendWhisper` operation. It reads only the request body (recipient user id
+  and text), never headers, cookies or storage, so the Twitch login never
+  passes through it. Scripts in a twitch.tv page can't make up whispers.
+- `page.js` runs inside twitch.tv's page only to see Twitch's answer. When
+  Twitch refuses a whisper (e.g. you're blocked), it tells the extension
+  through `bridge.js`, and that whisper isn't saved. It can only keep a
+  whisper out, never add one.
+- At most 20 whispers a minute and 200 an hour are kept.
+- Delivery uses the browser's native messaging with its own host,
+  `com.chatterino9.whispers` (Chatterino9 registers it for Edge and Chrome on
+  every start). Edge starts `chatterino.exe` as the host, which only accepts
+  these whispers from this extension and passes them to the running app.
+- The app looks up the recipient's login by id (Helix, at most 20 lookups a
+  minute) and saves the whisper with the time it was sent. It notes each saved
+  whisper in `Misc/Whispers/browser-receipts.tsv`; the host answers the
+  extension only once a whisper is in there. Anything not saved yet (app
+  closed or crashed, lookup failed) stays in the extension and is sent again
+  every 2 minutes (up to 500 whispers, 30 days). The same whisper is never
+  saved twice.
 
 Nothing goes over the network except Twitch's own request, which the page makes
 anyway.
 
 The extension's ID is fixed by the `key` in `manifest.json`:
-`bcgnaflbiogmdloflolimldoepjipehp`. Chatterino9 allows that ID in its native
-messaging manifest and also registers the manifest for Edge.
+`bcgnaflbiogmdloflolimldoepjipehp`.
 
 ## Install (Edge)
 

@@ -386,10 +386,23 @@ WhispersPanel::WhispersPanel(QWidget *parent)
     // whispers sent on twitch.tv: may belong anywhere in the conversation
     this->signalHolder_.managedConnect(
         whisperhistory::copiedIn(), [this](const QString &partner) {
-            if (partner == this->partner_ && this->viewChannel_)
+            if (partner != this->partner_ || !this->viewChannel_ ||
+                this->reloadQueued_)
             {
-                this->loadConversation();
+                return;
             }
+            // a batch of them reloads once
+            this->reloadQueued_ = true;
+            QMetaObject::invokeMethod(
+                this,
+                [this] {
+                    this->reloadQueued_ = false;
+                    if (this->viewChannel_)
+                    {
+                        this->loadConversation();
+                    }
+                },
+                Qt::QueuedConnection);
         });
 
     // whispers as they arrive, shown as chat shows them

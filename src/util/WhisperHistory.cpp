@@ -140,24 +140,44 @@ bool fromLine(const QString &line, Entry &entry)
     return true;
 }
 
-void writeEntries(const QString &dir, const QString &partner,
+/// Appends `entries`, or replaces the file with them (all or nothing).
+/// Returns false if they couldn't be written.
+bool writeEntries(const QString &dir, const QString &partner,
                   const std::vector<Entry> &entries, bool append)
 {
     if (!QDir().mkpath(dir))
     {
-        return;
+        return false;
     }
-    QFile file(QDir(dir).filePath(partner + QStringLiteral(".tsv")));
-    if (!file.open((append ? QIODevice::Append : QIODevice::WriteOnly) |
-                   QIODevice::Text))
+    const auto path = QDir(dir).filePath(partner + QStringLiteral(".tsv"));
+    if (append)
     {
-        return;
+        QFile file(path);
+        if (!file.open(QIODevice::Append | QIODevice::Text))
+        {
+            return false;
+        }
+        QTextStream out(&file);
+        for (const auto &entry : entries)
+        {
+            out << toLine(entry) << '\n';
+        }
+        out.flush();
+        return out.status() == QTextStream::Ok;
+    }
+    // a crash or full disk halfway must not cost the old history
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+    {
+        return false;
     }
     QTextStream out(&file);
     for (const auto &entry : entries)
     {
         out << toLine(entry) << '\n';
     }
+    out.flush();
+    return out.status() == QTextStream::Ok && file.commit();
 }
 
 void saveReadState(const QString &dir)
@@ -379,13 +399,19 @@ QString ensureLoaded()
     return dir;
 }
 
-/// Returns false if nothing was saved
-bool add(const QString &partner, Entry entry)
+enum class Added {
+    Saved,
+    /// the same whisper was saved before
+    AlreadyThere,
+    Failed,
+};
+
+Added add(const QString &partner, Entry entry)
 {
     const auto dir = ensureLoaded();
     if (dir.isEmpty() || !isLogin(partner) || partner == store().account)
     {
-        return false;
+        return Added::Failed;
     }
     auto &list = store().byPartner[partner];
     // the same whisper again (e.g. sent from twitch.tv and passed on twice)
@@ -395,7 +421,7 @@ bool add(const QString &partner, Entry entry)
         if (it->msecs == entry.msecs && it->outgoing == entry.outgoing &&
             it->text == entry.text)
         {
-            return false;
+            return Added::AlreadyThere;
         }
     }
     if (!entry.outgoing && !entry.name.isEmpty())
@@ -404,19 +430,27 @@ bool add(const QString &partner, Entry entry)
     }
     if (list.empty() || list.back().msecs <= entry.msecs)
     {
-        writeEntries(dir, partner, {entry}, true);
+        if (!writeEntries(dir, partner, {entry}, true))
+        {
+            return Added::Failed;
+        }
         list.push_back(std::move(entry));
     }
     else
     {
         // sent on twitch.tv while the app was closed: keep time order
-        auto pos =
-            std::ranges::upper_bound(list, entry.msecs, {}, &Entry::msecs);
-        list.insert(pos, std::move(entry));
-        writeEntries(dir, partner, list, false);
+        auto updatedList = list;
+        auto pos = std::ranges::upper_bound(updatedList, entry.msecs, {},
+                                            &Entry::msecs);
+        updatedList.insert(pos, std::move(entry));
+        if (!writeEntries(dir, partner, updatedList, false))
+        {
+            return Added::Failed;
+        }
+        list = std::move(updatedList);
     }
     updated().invoke(partner);
-    return true;
+    return Added::Saved;
 }
 
 }  // namespace
@@ -443,21 +477,44 @@ void recordIncoming(const MessagePtr &message)
     });
 }
 
-void recordOutgoing(const QString &partner, const QString &text, qint64 msecs)
+namespace {
+
+Entry outgoingEntry(const QString &text, qint64 msecs)
 {
-    runInGuiThread([partner = partner.toLower(), text, msecs] {
-        auto account = getApp()->getAccounts()->twitch.getCurrent();
-        Entry entry;
-        entry.msecs = msecs != 0 ? msecs : QDateTime::currentMSecsSinceEpoch();
-        entry.outgoing = true;
-        entry.name = account ? account->getUserName() : QString();
-        entry.color = account ? account->color() : QColor();
-        entry.text = text;
-        if (add(partner, std::move(entry)) && msecs != 0)
-        {
-            copiedIn().invoke(partner);
-        }
+    auto account = getApp()->getAccounts()->twitch.getCurrent();
+    Entry entry;
+    entry.msecs = msecs;
+    entry.outgoing = true;
+    entry.name = account ? account->getUserName() : QString();
+    entry.color = account ? account->color() : QColor();
+    entry.text = text;
+    return entry;
+}
+
+}  // namespace
+
+void recordOutgoing(const QString &partner, const QString &text)
+{
+    runInGuiThread([partner = partner.toLower(), text] {
+        add(partner, outgoingEntry(text, QDateTime::currentMSecsSinceEpoch()));
     });
+}
+
+bool recordSentElsewhere(const QString &partner, const QString &text,
+                         qint64 msecs)
+{
+    const auto key = partner.toLower();
+    switch (add(key, outgoingEntry(text, msecs)))
+    {
+        case Added::Saved:
+            copiedIn().invoke(key);
+            return true;
+        case Added::AlreadyThere:
+            return true;
+        case Added::Failed:
+            return false;
+    }
+    return false;
 }
 
 std::vector<Conversation> conversations()

@@ -48,11 +48,14 @@ struct Conversation {
 /// Saves a whisper the current account received
 void recordIncoming(const MessagePtr &message);
 
-/// Saves a whisper the current account sent to `partner`. `msecs` is when it
-/// was sent, 0 for now. Whispers sent outside the app (twitch.tv) pass their
-/// time; the same whisper saved twice with the same time is kept once.
-void recordOutgoing(const QString &partner, const QString &text,
-                    qint64 msecs = 0);
+/// Saves a whisper the current account sent to `partner`
+void recordOutgoing(const QString &partner, const QString &text);
+
+/// Saves a whisper the current account sent to `partner` outside the app (on
+/// twitch.tv) at `msecs`. The same whisper with the same time is kept once.
+/// Returns true if it's in the history now. GUI thread only.
+bool recordSentElsewhere(const QString &partner, const QString &text,
+                         qint64 msecs);
 
 /// Conversations of the current account, newest first
 std::vector<Conversation> conversations();
