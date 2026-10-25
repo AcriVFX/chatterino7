@@ -47,6 +47,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void scaleChangedEvent(float newScale) override;
     void mousePressEvent(QMouseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void paintEvent(QPaintEvent *event) override;
@@ -63,6 +64,9 @@ private:
     /// resize events for children are delivered after resize events for
     /// ourselves when showing the widget.
     void updateMessageHeightIfNeeded();
+
+    /// True while a deferred updateMessageHeightIfNeeded() is queued.
+    bool heightUpdateQueued_ = false;
 
     TwitchChannel *channel_ = nullptr;
     pajlada::Signals::SignalHolder signalHolder_;
