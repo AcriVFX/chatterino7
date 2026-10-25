@@ -4,12 +4,15 @@
 
 #include "Application.hpp"
 #include "common/Channel.hpp"
+#include "common/network/NetworkRequest.hpp"
+#include "common/network/NetworkResult.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/emotes/EmoteController.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "providers/bttv/BttvEmotes.hpp"
 #include "providers/ffz/FfzEmotes.hpp"
+#include "providers/seventv/SeventvAPI.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
@@ -268,6 +271,59 @@ QString channelEmotesFile(const QString &channel)
         QStringLiteral("EmoteStats/%1/channel-emotes.json").arg(channel));
 }
 
+/// Who added each 7TV emote of the channel, emote name to 7TV user id
+QString addedByFile(const QString &channel)
+{
+    const auto file = channelEmotesFile(channel);
+    return file.isEmpty() ? QString()
+                          : QFileInfo(file).dir().filePath(
+                                QStringLiteral("7tv-added-by.json"));
+}
+
+/// Names of 7TV users, id to name
+QString seventvUsersFile()
+{
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    return misc.isEmpty() ? QString()
+                          : QDir(misc).filePath(
+                                QStringLiteral("EmoteStats/7tv-users.json"));
+}
+
+QHash<QString, QString> readStringMap(const QString &path)
+{
+    QHash<QString, QString> map;
+    QFile file(path);
+    if (path.isEmpty() || !file.open(QIODevice::ReadOnly))
+    {
+        return map;
+    }
+    const auto obj = QJsonDocument::fromJson(file.readAll()).object();
+    for (auto it = obj.begin(); it != obj.end(); ++it)
+    {
+        map.insert(it.key(), it.value().toString());
+    }
+    return map;
+}
+
+void writeStringMap(const QString &path, const QHash<QString, QString> &map)
+{
+    if (path.isEmpty() || !QDir().mkpath(QFileInfo(path).path()))
+    {
+        return;
+    }
+    QJsonObject obj;
+    for (auto it = map.cbegin(); it != map.cend(); ++it)
+    {
+        obj.insert(it.key(), it.value());
+    }
+    QSaveFile file(path);
+    if (file.open(QIODevice::WriteOnly))
+    {
+        file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+        file.commit();
+    }
+}
+
 class SortItem : public QTableWidgetItem
 {
 public:
@@ -457,7 +513,7 @@ private:
 }  // namespace emotestats_ui
 
 EmoteStatsDialog::EmoteStatsDialog(const std::shared_ptr<Channel> &channel,
-                                   QWidget *parent)
+                                   QWidget *parent, const QString &user)
     : BaseWindow(
           {
               BaseWindow::DisableCustomScaling,
@@ -467,15 +523,18 @@ EmoteStatsDialog::EmoteStatsDialog(const std::shared_ptr<Channel> &channel,
           parent)
     , channel_(channel->getName().toLower())
     , weakChannel_(channel)
+    , user_(user.toLower())
     , refreshTimer_(new QTimer(this))
     , iconTimer_(new QTimer(this))
 {
     this->setAttribute(Qt::WA_DeleteOnClose);
-    this->setWindowTitle("Emote stats - " + this->channel_);
-    this->resize(780, 820);
+    this->resize(820, 820);
 
+    this->addedBy_ = readStringMap(addedByFile(this->channel_));
+    this->seventvUsers_ = readStringMap(seventvUsersFile());
     this->loadView();
     this->initUi();
+    this->setUser(this->user_);
     this->themeChangedEvent();
 
     // new numbers from the server or the log import
@@ -518,8 +577,6 @@ EmoteStatsDialog::EmoteStatsDialog(const std::shared_ptr<Channel> &channel,
         }
     });
     this->iconTimer_->start();
-
-    this->reload();
 }
 
 void EmoteStatsDialog::themeChangedEvent()
@@ -567,6 +624,11 @@ void EmoteStatsDialog::initUi()
             border: none; border-bottom: 1px solid #2c2c2c;
             padding: 5px 8px; font-weight: 600; }
         QFrame#unused { border: 1px solid #2c2c2c; }
+        QFrame#userBar { background: #18212b; border: 1px solid #24384f; }
+        QFrame#userBar QLabel { border: none; }
+        QPushButton#everyone { background: transparent; color: #e4e4e4;
+            border: 1px solid #2c2c2c; padding: 2px 8px; }
+        QPushButton#everyone:hover { border-color: #4a8bd6; }
         QFrame#unused QLabel { border: none; }
     )");
 
@@ -637,6 +699,26 @@ void EmoteStatsDialog::initUi()
                          });
     }
 
+    // only one chatter's messages
+    {
+        this->ui_.userBar = new QFrame;
+        this->ui_.userBar->setObjectName("userBar");
+        auto *layout = new QHBoxLayout(this->ui_.userBar);
+        layout->setContentsMargins(10, 6, 10, 6);
+        this->ui_.userLabel = new QLabel;
+        this->ui_.userLabel->setTextFormat(Qt::RichText);
+        layout->addWidget(this->ui_.userLabel, 1);
+        auto *everyone = new QPushButton("Show everyone");
+        everyone->setObjectName("everyone");
+        everyone->setCursor(Qt::PointingHandCursor);
+        layout->addWidget(everyone);
+        QObject::connect(everyone, &QPushButton::clicked, this, [this] {
+            this->setUser({});
+        });
+        this->ui_.userBar->hide();
+        root->addWidget(this->ui_.userBar);
+    }
+
     this->ui_.summary = new QLabel;
     this->ui_.summary->setObjectName("dim");
     this->ui_.summary->setTextFormat(Qt::RichText);
@@ -648,6 +730,7 @@ void EmoteStatsDialog::initUi()
         table->setHorizontalHeaderLabels({
             "#",
             "Emote",
+            "Added by",
             "Messages",
             "Chatters",
             "Share of chat",
@@ -657,6 +740,9 @@ void EmoteStatsDialog::initUi()
                          "once");
         table->horizontalHeaderItem(ColChatters)
             ->setToolTip("Different people who used it");
+        table->horizontalHeaderItem(ColAddedBy)
+            ->setToolTip("Who added the emote to the channel's 7TV set, as "
+                         "7TV records it");
         table->horizontalHeaderItem(ColShare)->setToolTip(
             "Share of all chat messages in this range that used it");
         table->verticalHeader()->hide();
@@ -681,6 +767,8 @@ void EmoteStatsDialog::initUi()
             Qt::AlignLeft | Qt::AlignVCenter);
         table->horizontalHeaderItem(ColEmote)->setTextAlignment(
             Qt::AlignLeft | Qt::AlignVCenter);
+        table->horizontalHeaderItem(ColAddedBy)
+            ->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
         this->ui_.emoteDelegate = new emotestats_ui::EmoteDelegate(table);
         table->setItemDelegateForColumn(ColEmote, this->ui_.emoteDelegate);
@@ -862,30 +950,42 @@ void EmoteStatsDialog::reload()
 
     emotestats::flush();
     std::weak_ptr<bool> alive = this->lifetime_;
-    QThreadPool::globalInstance()->start(
-        [this, alive, channel = this->channel_, from = this->range_.from,
-         to = this->range_.to, cache = this->loadCache_] {
-            auto stats = emotestats::load(channel, from, to, cache.get());
-            postToThread([this, alive, stats = std::move(stats)]() mutable {
-                if (!alive.lock())
-                {
-                    return;
-                }
-                this->stats_ = std::move(stats);
-                this->loaded_ = true;
+    QThreadPool::globalInstance()->start([this, alive, channel = this->channel_,
+                                          user = this->user_,
+                                          from = this->range_.from,
+                                          to = this->range_.to,
+                                          cache = this->loadCache_] {
+        auto stats = user.isEmpty()
+                         ? emotestats::load(channel, from, to, cache.get())
+                         : emotestats::loadUser(channel, user, from, to);
+        postToThread([this, alive, user, stats = std::move(stats)]() mutable {
+            if (!alive.lock())
+            {
+                return;
+            }
+            if (user != this->user_)
+            {
+                // switched to another chatter (or everyone) meanwhile
                 this->loading_ = false;
-                this->loadTwitchChannelEmotes();
-                this->fillTable();
-                if (!emotestats::logsImported(this->channel_))
-                {
-                    this->startLogImport();
-                }
-                if (std::exchange(this->reloadAgain_, false))
-                {
-                    this->reload();
-                }
-            });
+                this->reload();
+                return;
+            }
+            this->stats_ = std::move(stats);
+            this->loaded_ = true;
+            this->loading_ = false;
+            this->loadTwitchChannelEmotes();
+            this->loadSeventvAdders();
+            this->fillTable();
+            if (!emotestats::logsImported(this->channel_))
+            {
+                this->startLogImport();
+            }
+            if (std::exchange(this->reloadAgain_, false))
+            {
+                this->reload();
+            }
         });
+    });
 }
 
 void EmoteStatsDialog::fillTable()
@@ -1061,7 +1161,8 @@ void EmoteStatsDialog::fillTable()
 
     QHash<QString, EmotePtr> emotes;
     QStringList unused;
-    if (channel && !removedTab)
+    const bool userMode = !this->user_.isEmpty();
+    if (channel && !removedTab && !userMode)
     {
         const std::array<std::pair<Source, std::shared_ptr<const EmoteMap>>, 3>
             channelSets{{
@@ -1141,9 +1242,33 @@ void EmoteStatsDialog::fillTable()
                      .arg(formatCount(static_cast<qint64>(rows.size())));
         if (!rows.empty())
         {
-            parts << QString("Most used <b>%1</b> in <b>%2</b> of messages")
+            parts << QString("Most used <b>%1</b> in <b>%2</b> of %3messages")
+                         .arg(rows.front().name.toHtmlEscaped(),
+                              formatShare(rows.front().messages, total),
+                              userMode ? "their " : "");
+        }
+    }
+    else if (userMode)
+    {
+        if (total > 0)
+        {
+            parts << QString("Their messages <b>%1</b>").arg(formatCount(total))
+                  << QString("With emotes <b>%1</b> (%2)")
+                         .arg(formatCount(this->stats_.emoteMessages),
+                              formatShare(this->stats_.emoteMessages, total));
+        }
+        if (!rows.empty() && rows.front().messages > 0)
+        {
+            this->topEmote_ = rows.front().name;
+            parts << QString("Favorite <b>%1</b> in <b>%2</b> of their "
+                             "messages")
                          .arg(rows.front().name.toHtmlEscaped(),
                               formatShare(rows.front().messages, total));
+        }
+        else
+        {
+            this->topEmote_.clear();
+            parts << QStringLiteral("No emotes from them in this range");
         }
     }
     else
@@ -1179,6 +1304,15 @@ void EmoteStatsDialog::fillTable()
     // app on every reload
     table->setRowCount(0);
     table->setRowCount(static_cast<int>(rows.size()));
+    // only 7TV says who added an emote
+    table->setColumnHidden(
+        ColAddedBy, !all && !removedTab && shownSource != Source::SevenTv);
+    table->setColumnHidden(ColChatters, userMode);
+    table->horizontalHeaderItem(ColShare)->setText(
+        userMode ? "Share of their messages" : "Share of chat");
+    table->horizontalHeaderItem(ColShare)->setToolTip(
+        userMode ? "Share of their messages in this range that used it"
+                 : "Share of all chat messages in this range that used it");
     const auto maxMessages = rows.empty() ? 0 : rows.front().messages;
     for (int r = 0; std::cmp_less(r, rows.size()); ++r)
     {
@@ -1202,6 +1336,24 @@ void EmoteStatsDialog::fillTable()
             emote->setData(REMOVED_ROLE, emotestats::sourceName(row.source));
         }
         table->setItem(r, ColEmote, emote);
+        auto *addedBy = new SortItem;
+        addedBy->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        if (row.source == Source::SevenTv)
+        {
+            auto actor = this->addedBy_.constFind(row.name);
+            if (actor != this->addedBy_.constEnd() && actor->isEmpty())
+            {
+                addedBy->setText("unknown");
+                addedBy->setForeground(DIM_COLOR);
+                addedBy->setToolTip("7TV has no record of who added this "
+                                    "emote");
+            }
+            else if (actor != this->addedBy_.constEnd())
+            {
+                addedBy->setText(this->seventvUsers_.value(*actor));
+            }
+        }
+        table->setItem(r, ColAddedBy, addedBy);
         set(ColMessages, formatCount(row.messages),
             static_cast<double>(row.messages), Qt::AlignRight);
         set(ColChatters, formatCount(row.chatters),
@@ -1294,6 +1446,140 @@ void EmoteStatsDialog::loadTwitchChannelEmotes()
         });
 }
 
+void EmoteStatsDialog::setUser(const QString &login)
+{
+    this->user_ = login.toLower();
+    const bool userMode = !this->user_.isEmpty();
+    this->setWindowTitle("Emote stats - " + this->channel_ +
+                         (userMode ? " - " + this->user_ : QString()));
+    this->ui_.userLabel->setText(
+        QString("Only <b>%1</b>'s messages").arg(this->user_.toHtmlEscaped()));
+    this->ui_.userBar->setVisible(userMode);
+    this->reload();
+}
+
+void EmoteStatsDialog::loadSeventvAdders()
+{
+    // refreshed every 10 minutes so emotes added while the window is open
+    // get their name too
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    if (this->addersLoading_ || (this->addersRequestedAt_ > 0 &&
+                                 now - this->addersRequestedAt_ < 10 * 60000))
+    {
+        return;
+    }
+    auto channel = this->twitchChannel();
+    if (!channel || channel->seventvEmoteSetID().isEmpty())
+    {
+        // the channel's 7TV set is not loaded yet, try on the next reload
+        return;
+    }
+    this->addersLoading_ = true;
+    this->addersRequestedAt_ = now;
+    std::weak_ptr<bool> alive = this->lifetime_;
+    getApp()->getSeventvAPI()->getEmoteSet(
+        channel->seventvEmoteSetID(),
+        [this, alive](const QJsonObject &set) {
+            if (!alive.lock())
+            {
+                return;
+            }
+            this->addersLoading_ = false;
+            // emotes removed since keep the name known while they were in
+            // the set
+            QStringList missing;
+            const auto emotes = set.value(u"emotes").toArray();
+            for (const auto &value : emotes)
+            {
+                const auto emote = value.toObject();
+                const auto name = emote.value(u"name").toString();
+                if (name.isEmpty())
+                {
+                    continue;
+                }
+                const auto actor = emote.value(u"actor_id").toString();
+                this->addedBy_.insert(name, actor);
+                if (!actor.isEmpty() && !this->seventvUsers_.contains(actor) &&
+                    !this->seventvUsersRequested_.contains(actor) &&
+                    !missing.contains(actor))
+                {
+                    missing.append(actor);
+                }
+            }
+            writeStringMap(addedByFile(this->channel_), this->addedBy_);
+            this->loadSeventvUserNames(missing);
+            this->fillTable();
+        },
+        [this, alive](const NetworkResult &) {
+            if (!alive.lock())
+            {
+                return;
+            }
+            // keeps the names from before; tried again in 10 minutes
+            this->addersLoading_ = false;
+        });
+}
+
+void EmoteStatsDialog::loadSeventvUserNames(const QStringList &ids)
+{
+    static const QRegularExpression validId(QStringLiteral("^[0-9A-Za-z]+$"));
+    std::weak_ptr<bool> alive = this->lifetime_;
+    for (const auto &id : ids)
+    {
+        if (!validId.match(id).hasMatch())
+        {
+            continue;
+        }
+        this->seventvUsersRequested_.insert(id);
+        NetworkRequest(QStringLiteral("https://7tv.io/v3/users/%1").arg(id),
+                       NetworkRequestType::Get)
+            .timeout(20000)
+            .onSuccess([this, alive, id](const NetworkResult &result) {
+                if (!alive.lock())
+                {
+                    return;
+                }
+                const auto user = result.parseJson();
+                // the Twitch name when the 7TV account is linked to Twitch
+                QString name;
+                const auto connections = user.value(u"connections").toArray();
+                for (const auto &value : connections)
+                {
+                    const auto connection = value.toObject();
+                    if (connection.value(u"platform").toString() == "TWITCH")
+                    {
+                        name = connection.value(u"display_name").toString();
+                        break;
+                    }
+                }
+                if (name.isEmpty())
+                {
+                    name = user.value(u"display_name").toString();
+                }
+                if (name.isEmpty())
+                {
+                    name = user.value(u"username").toString();
+                }
+                if (name.isEmpty())
+                {
+                    return;
+                }
+                this->seventvUsers_.insert(id, name);
+                writeStringMap(seventvUsersFile(), this->seventvUsers_);
+                this->fillTable();
+            })
+            .onError([this, alive, id](const NetworkResult &) {
+                if (!alive.lock())
+                {
+                    return;
+                }
+                // asked again with the next refresh of the set
+                this->seventvUsersRequested_.remove(id);
+            })
+            .execute();
+    }
+}
+
 void EmoteStatsDialog::applySearch() const
 {
     const auto text = this->ui_.search->text().trimmed();
@@ -1315,6 +1601,11 @@ void EmoteStatsDialog::updateFooter()
     auto text = QString("Each message counts once per emote, so \"%1 %1 %1 "
                         "%1\" is 1. ")
                     .arg(example);
+    if (!this->user_.isEmpty())
+    {
+        text += "Counted per chatter from the update that added this view, "
+                "plus your chat logs. ";
+    }
 
     QString dotColor;
     if (!status.configured)

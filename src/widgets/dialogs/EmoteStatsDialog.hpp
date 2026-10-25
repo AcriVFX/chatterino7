@@ -1,6 +1,7 @@
 // Chatterino9: Emote stats window. Ranks the emotes of a channel by how many
 // chat messages used them in this stream, the last 7 or 30 days or all time,
-// and lists the channel's emotes nobody used.
+// and lists the channel's emotes nobody used. Opened from a usercard it shows
+// only that chatter's messages.
 
 #pragma once
 
@@ -8,6 +9,7 @@
 #include "widgets/BaseWindow.hpp"
 
 #include <QHash>
+#include <QSet>
 #include <QString>
 
 #include <cstdint>
@@ -32,13 +34,15 @@ class EmoteDelegate;
 class EmoteStatsDialog : public BaseWindow
 {
 public:
+    /// `user`: only this chatter's messages (empty: everyone's)
     EmoteStatsDialog(const std::shared_ptr<Channel> &channel,
-                     QWidget *parent = nullptr);
+                     QWidget *parent = nullptr, const QString &user = {});
 
     // NOLINTNEXTLINE(cppcoreguidelines-use-enum-class): used as column index
     enum Column : std::uint8_t {
         ColRank,
         ColEmote,
+        ColAddedBy,
         ColMessages,
         ColChatters,
         ColShare,
@@ -73,12 +77,20 @@ private:
     /// Asks Twitch which emotes belong to the channel (its sub, bits and
     /// follower emotes), once per window
     void loadTwitchChannelEmotes();
+    /// Asks 7TV who added each emote of the channel's set, now and then
+    void loadSeventvAdders();
+    /// Asks 7TV for the names of the 7TV users `ids`
+    void loadSeventvUserNames(const QStringList &ids);
+    /// Shows only `login`'s messages, or everyone's when it is empty
+    void setUser(const QString &login);
 
     Range currentRange() const;
     std::shared_ptr<TwitchChannel> twitchChannel() const;
 
     QString channel_;
     std::weak_ptr<Channel> weakChannel_;
+    /// Only this chatter's messages, empty for everyone's
+    QString user_;
 
     // view state (saved to Misc/EmoteStats/view.json)
     int rangeIndex_ = 1;
@@ -97,11 +109,22 @@ private:
     bool twitchEmotesLoaded_ = false;
     bool twitchEmotesLoading_ = false;
     qint64 twitchEmotesRequestedAt_ = 0;
+    /// 7TV emote name to the 7TV user who added it ("" when 7TV doesn't
+    /// know), kept for emotes removed since (Misc/EmoteStats/<ch>/
+    /// 7tv-added-by.json)
+    QHash<QString, QString> addedBy_;
+    /// 7TV user id to name (Misc/EmoteStats/7tv-users.json)
+    QHash<QString, QString> seventvUsers_;
+    QSet<QString> seventvUsersRequested_;
+    bool addersLoading_ = false;
+    qint64 addersRequestedAt_ = 0;
 
     struct {
         QButtonGroup *ranges = nullptr;
         QButtonGroup *sources = nullptr;
         QLineEdit *search = nullptr;
+        QFrame *userBar = nullptr;
+        QLabel *userLabel = nullptr;
         QLabel *summary = nullptr;
         QTableWidget *table = nullptr;
         emotestats_ui::EmoteDelegate *emoteDelegate = nullptr;

@@ -702,8 +702,9 @@ async function pollStream() {
 // Every chat message counts once per emote in it, with who sent it, in one
 // bucket per UTC hour. Files: emotes/YYYY-MM-DD.tsv with lines
 // "HH, source, name, messages, chatters" (tab separated, chatters comma
-// separated); source "*" with name "*" counts every chat message. Same
-// format and same emote lookup as the app (src/util/EmoteStats.cpp).
+// separated as "login:messages"); source "*" with name "*" counts every chat
+// message, with name "+" every message with an emote. Same format and same
+// emote lookup as the app (src/util/EmoteStats.cpp).
 
 const chat = {
   connected: false,
@@ -884,7 +885,9 @@ export function emoteUses(text, emotesTag, lists = emoteLists) {
   return uses;
 }
 
-/// day name -> { buckets: Map(key -> {count, users}), dirty }
+/// day name -> { buckets: Map(key -> {count, users: Map(login -> count)}),
+/// dirty }. A count of 0 is "at least one" (files from before chatters were
+/// counted).
 const emoteDays = new Map();
 const seenChatIds = new Set();
 
@@ -909,10 +912,14 @@ function readEmoteDay(day) {
     if (!Number.isFinite(count)) {
       continue;
     }
-    buckets.set(parts.slice(0, 3).join("\t"), {
-      count,
-      users: new Set(parts[4] ? parts[4].split(",") : []),
-    });
+    const users = new Map();
+    for (const entry of parts[4] ? parts[4].split(",") : []) {
+      const [user, n] = entry.split(":");
+      if (user) {
+        users.set(user, Math.max(users.get(user) ?? 0, Number(n) || 0));
+      }
+    }
+    buckets.set(parts.slice(0, 3).join("\t"), { count, users });
   }
   return buckets;
 }
@@ -929,15 +936,15 @@ export function countMessage(msecs, login, uses) {
   const add = (key, user) => {
     let bucket = data.buckets.get(key);
     if (!bucket) {
-      bucket = { count: 0, users: new Set() };
+      bucket = { count: 0, users: new Map() };
       data.buckets.set(key, bucket);
     }
     bucket.count++;
     if (user) {
-      bucket.users.add(user);
+      bucket.users.set(user, (bucket.users.get(user) ?? 0) + 1);
     }
   };
-  add(`${hour}\t*\t*`, null);
+  add(`${hour}\t*\t*`, login);
   const seen = new Set();
   for (const [source, name] of uses) {
     const key = `${hour}\t${source}\t${name}`;
@@ -945,6 +952,10 @@ export function countMessage(msecs, login, uses) {
       seen.add(key);
       add(key, login);
     }
+  }
+  // messages with at least one emote
+  if (seen.size > 0) {
+    add(`${hour}\t*\t+`, login);
   }
   data.dirty = true;
 }
@@ -957,7 +968,10 @@ export function flushEmotes() {
     }
     let out = "";
     for (const [key, bucket] of data.buckets) {
-      out += `${key}\t${bucket.count}\t${[...bucket.users].join(",")}\n`;
+      const users = [...bucket.users].map(([user, n]) =>
+        n > 0 ? `${user}:${n}` : user,
+      );
+      out += `${key}\t${bucket.count}\t${users.join(",")}\n`;
     }
     const file = join(EMOTE_DIR, `${day}.tsv`);
     writeFileSync(`${file}.tmp`, out);

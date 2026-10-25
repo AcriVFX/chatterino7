@@ -146,6 +146,7 @@ private:
 
         LabelButton *usercardLabel = nullptr;
         LabelButton *whisperLabel = nullptr;
+        LabelButton *emoteStatsLabel = nullptr;
         LabelButton *switchAvatars = nullptr;
 
         TimeoutWidget *timeoutWidget = nullptr;
