@@ -7,7 +7,8 @@ the app.
 
 ## How it works
 
-- `background.js` notices whisper sends with `webRequest`: a POST from
+- `background.js` notices whisper sends with `webRequest` (host access to
+  gql.twitch.tv and the two sites below, which webRequest needs): a POST from
   www.twitch.tv or dashboard.twitch.tv to gql.twitch.tv whose body is a
   `SendWhisper` operation. It reads only the request body (recipient user id
   and text), never headers, cookies or storage, so the Twitch login never
