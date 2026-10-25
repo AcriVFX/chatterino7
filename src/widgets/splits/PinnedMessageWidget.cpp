@@ -94,6 +94,12 @@ PinnedMessageWidget::PinnedMessageWidget(QWidget *parent)
     this->messageScrollArea_->setSizePolicy(QSizePolicy::Expanding,
                                             QSizePolicy::Fixed);
     this->messageScrollArea_->setWidget(this->messageLabel_);
+    // Chatterino9: the viewport only gets its real width once our layout
+    // runs, which can be after our own resize/show (first show, a tab that
+    // was never opened). Measuring before that wraps the text at the default
+    // ~100px width and leaves the banner at the max height with empty space,
+    // so measure again whenever the viewport width changes.
+    this->messageScrollArea_->viewport()->installEventFilter(this);
     contentBox->addWidget(this->messageScrollArea_);
 
     // Footer: [sender · time] ... [countdown]
@@ -424,6 +430,24 @@ void PinnedMessageWidget::scaleChangedEvent(float newScale)
 void PinnedMessageWidget::mousePressEvent(QMouseEvent *event)
 {
     // ignore to disable the parent's right click menu
+}
+
+bool PinnedMessageWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == this->messageScrollArea_->viewport() &&
+        event->type() == QEvent::Resize && !this->heightUpdateQueued_ &&
+        this->messageScrollArea_->viewport()->width() !=
+            this->lastViewportWidth_)
+    {
+        // Resizing the scroll area from inside its own viewport resize
+        // re-enters its layout, so do it right after this event instead.
+        this->heightUpdateQueued_ = true;
+        QTimer::singleShot(0, this, [this] {
+            this->heightUpdateQueued_ = false;
+            this->updateMessageHeightIfNeeded();
+        });
+    }
+    return BaseWidget::eventFilter(watched, event);
 }
 
 }  // namespace chatterino
