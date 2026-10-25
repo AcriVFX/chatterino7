@@ -6,8 +6,10 @@
 
 #include "Application.hpp"
 #include "common/QLogging.hpp"
+#include "controllers/accounts/AccountController.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageThread.hpp"
+#include "providers/twitch/TwitchAccount.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 
@@ -216,7 +218,18 @@ void LoggingChannel::addMessage(const MessagePtr &message,
     }
 
     QString messageText;
-    if (message->loginName.isEmpty())
+    if (message->loginName.isEmpty() &&
+        message->flags.has(MessageFlag::Whisper) &&
+        !message->whisperPartner.isEmpty())
+    {
+        // Chatterino9: a whisper the current account sent, as
+        // "me -> them: text" (the form WhisperHistory imports)
+        const auto account = getApp()->getAccounts()->twitch.getCurrent();
+        messageText = (account ? account->getUserName().toLower() : QString()) +
+                      " -> " + message->whisperPartner + ": " +
+                      message->messageText;
+    }
+    else if (message->loginName.isEmpty())
     {
         // This accounts for any messages not explicitly sent by a user, like
         // system messages, parts of announcements, subs etc.

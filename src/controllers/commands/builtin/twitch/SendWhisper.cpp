@@ -175,10 +175,20 @@ bool appendWhisperMessageWordsLocally(const QStringList &words,
     b->flags.set(MessageFlag::DoNotTriggerNotification);
     b->flags.set(MessageFlag::Whisper);
     b->whisperPartner = targetLogin.toLower();
+    const auto text = words.mid(2).join(' ');
+    // Chatterino9: like received whispers, messageText is just the text, so
+    // the chat log keeps it (LoggingChannel adds "me -> them:")
+    b->messageText = text;
+    b->searchText = QString("%1 -> %2: %3")
+                        .arg(app->getAccounts()
+                                 ->twitch.getCurrent()
+                                 ->getUserName()
+                                 .toLower(),
+                             b->whisperPartner, text);
     auto messagexD = b.release();
 
     // Chatterino9: keep it for the Whispers window
-    whisperhistory::recordOutgoing(targetLogin, words.mid(2).join(' '));
+    whisperhistory::recordOutgoing(targetLogin, text);
 
     getApp()->getTwitch()->getWhispersChannel()->addMessage(
         messagexD, MessageContext::Original);
