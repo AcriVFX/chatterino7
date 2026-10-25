@@ -460,6 +460,31 @@ TEST_F(HighlightControllerTest, LoggedInAndConfigured)
     this->runTests(tests);
 }
 
+TEST_F(HighlightControllerTest, ThreadReplyBeatsMessageRules)
+{
+    configure(SETTINGS_DEFAULT, false);
+
+    // a reply in a subscribed thread that also hits a message rule keeps the
+    // thread highlight, tagged ME (Urgent lane)
+    auto [isMatch, result] = this->mockApplication->getHighlights()->check(
+        {}, {}, "forsen", "!testmanxd",
+        MessageFlags{MessageFlag::SubscribedThread});
+
+    EXPECT_TRUE(isMatch);
+    ASSERT_NE(result.color, nullptr);
+    EXPECT_EQ(*result.color, HighlightPhrase::FALLBACK_THREAD_HIGHLIGHT_COLOR);
+    EXPECT_EQ(highlightTagFromLabel(result.label), QStringLiteral("ME"));
+    EXPECT_TRUE(result.showInMentions);
+
+    // the user's own replies are not highlighted as thread replies
+    auto [selfMatch, selfResult] =
+        this->mockApplication->getHighlights()->check(
+            {}, {}, "testaccount_420", "hello",
+            MessageFlags{MessageFlag::SubscribedThread});
+    EXPECT_TRUE(selfMatch);  // user highlight for testaccount_420
+    EXPECT_NE(highlightTagFromLabel(selfResult.label), QStringLiteral("ME"));
+}
+
 TEST_F(HighlightControllerTest, AnonEmpty)
 {
     configure(SETTINGS_ANON_EMPTY, true);

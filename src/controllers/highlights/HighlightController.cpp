@@ -177,7 +177,7 @@ void rebuildReplyThreadHighlight(Settings &settings,
                 const auto self) -> std::optional<HighlightResult> {
                 if (flags.has(MessageFlag::SubscribedThread) && !self)
                 {
-                    return HighlightResult{
+                    HighlightResult result{
                         highlightAlert,
                         highlightSound,
                         highlightSoundUrl,
@@ -185,6 +185,10 @@ void rebuildReplyThreadHighlight(Settings &settings,
                             ColorType::ThreadMessageHighlight),
                         highlightInMentions,
                     };
+                    // tag ME, so replies in the user's threads land in the
+                    // Urgent lane like mentions do
+                    result.label = QStringLiteral("ME: Thread reply");
+                    return result;
                 }
 
                 return std::nullopt;
@@ -485,17 +489,20 @@ void HighlightController::rebuildChecks(Settings &settings)
     checks->clear();
 
     // CURRENT ORDER:
-    // Subscription -> Whisper -> Message -> User -> Reply Threads -> Badge
+    // Subscription -> Whisper -> Reply Threads -> Message -> User -> Badge
+    // Reply threads come before the message rules, so a reply in the user's
+    // thread keeps its ME tag (Urgent lane) even when it also hits a category
+    // rule like streamer names.
 
     rebuildSubscriptionHighlights(settings, *checks);
 
     rebuildWhisperHighlights(settings, *checks);
 
+    rebuildReplyThreadHighlight(settings, *checks);
+
     rebuildMessageHighlights(settings, *checks);
 
     rebuildUserHighlights(settings, *checks);
-
-    rebuildReplyThreadHighlight(settings, *checks);
 
     rebuildBadgeHighlights(settings, *checks);
 }
