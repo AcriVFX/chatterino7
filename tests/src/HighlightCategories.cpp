@@ -66,6 +66,8 @@ TEST(HighlightCategories, WithTag)
               "SCAM [FAKE]: Fake giveaways");
     EXPECT_EQ(withTag("LINKS [LINK]: Links", "URL"), "LINKS [URL]: Links");
     EXPECT_EQ(withTag("LINKS [LINK]: Links", ""), "LINKS [LINK]: Links");
+    EXPECT_EQ(withTag("SCAM: Fake", "q\"z"), "SCAM [QZ]: Fake");
+    EXPECT_EQ(withTag("SCAM: Fake", "\"\""), "SCAM: Fake");
 }
 
 TEST(HighlightCategories, WordListRoundTrip)
@@ -85,6 +87,23 @@ TEST(HighlightCategories, WordListRoundTrip)
     EXPECT_FALSE(parseWordList(R"((?:\b|\s|^)(?:a.b|c)(?:\b|\s|$))"));
     EXPECT_FALSE(parseWordList(R"((?:\b|\s|^)(?:)(?:\b|\s|$))"));
     EXPECT_FALSE(parseWordList(R"(\bbastard\w*)"));
+    EXPECT_EQ(buildWordList({" ", ""}), PLACEHOLDER_BODY);
+}
+
+TEST(HighlightCategories, CaseSensitiveIsNotAWordList)
+{
+    auto r = rule(R"((?#SPAM: Caps)(?:\b|\s|^)(?:LOL|W)(?:\b|\s|$))");
+    r.caseSensitive = true;
+    auto cats = categories({r});
+    EXPECT_EQ(cats[0].wordRule, -1);
+    EXPECT_EQ(cats[0].advancedCount, 1);
+    // so adding a word makes a separate word list and leaves LOL|W alone
+    auto rules = addWord({r}, "SPAM: Caps", "xd");
+    ASSERT_EQ(rules.size(), 2U);
+    EXPECT_EQ(rules[1].pattern,
+              R"((?#SPAM: Caps 2)(?:\b|\s|^)(?:LOL|W)(?:\b|\s|$))");
+    EXPECT_TRUE(rules[1].caseSensitive);
+    EXPECT_FALSE(rules[0].caseSensitive);
 }
 
 TEST(HighlightCategories, Categories)
@@ -172,9 +191,15 @@ TEST(HighlightCategories, ColorAndFlags)
     EXPECT_EQ(rules[5].color, blue);
     EXPECT_NE(rules[3].color, blue);
 
-    rules = setCategoryFlags(sample(), "INSULT: Insults", true, true, false);
-    EXPECT_TRUE(rules[1].showInMentions && rules[2].alert);
-    EXPECT_FALSE(rules[2].sound || rules[0].alert);
+    // one flag changes, the others stay per rule
+    rules = sample();
+    rules[2].alert = true;
+    rules =
+        setCategoryFlag(rules, "INSULT: Insults", Flag::ShowInMentions, true);
+    EXPECT_TRUE(rules[1].showInMentions && rules[2].showInMentions);
+    EXPECT_FALSE(rules[1].alert);
+    EXPECT_TRUE(rules[2].alert);
+    EXPECT_FALSE(rules[0].showInMentions);
 }
 
 TEST(HighlightCategories, Move)
@@ -184,12 +209,25 @@ TEST(HighlightCategories, Move)
     auto moved = moveCategory(rules, "SPAM: Spam", -1);
     // SPAM jumps over the unsorted "egg", which stays in place
     EXPECT_EQ(patterns(moved).mid(3, 4),
-              QStringList({rules[5].pattern, rules[6].pattern, "egg",
-                           rules[3].pattern}));
+              QStringList({rules[5].pattern, rules[6].pattern, rules[3].pattern,
+                           "egg"}));
     EXPECT_EQ(moveCategory(rules, "ME: Mention", -1), rules);
     EXPECT_EQ(moveCategory(moveCategory(rules, "INSULT: Insults", 1),
                            "INSULT: Insults", -1),
               rules);
+}
+
+TEST(HighlightCategories, MoveKeepsOtherCategoriesInOrder)
+{
+    std::vector<Rule> rules{rule("(?#BAN 1)a"), rule("(?#INSULT)b"),
+                            rule("(?#BAN 2)c"), rule("(?#SPAM)d")};
+    // SPAM goes above INSULT; BAN 2 stays below INSULT
+    EXPECT_EQ(
+        patterns(moveCategory(rules, "SPAM", -1)),
+        QStringList({"(?#BAN 1)a", "(?#SPAM)d", "(?#INSULT)b", "(?#BAN 2)c"}));
+    EXPECT_EQ(
+        patterns(moveCategory(rules, "INSULT", 1)),
+        QStringList({"(?#BAN 1)a", "(?#BAN 2)c", "(?#SPAM)d", "(?#INSULT)b"}));
 }
 
 TEST(HighlightCategories, Create)
@@ -239,6 +277,11 @@ TEST(HighlightCategories, LaneFilters)
     ASSERT_TRUE(tags.has_value());
     EXPECT_EQ(*tags, QStringList({"LINK", "REQUEST", "NAME"}));
     EXPECT_FALSE(laneTags(R"(author.name == "fossabot")"));
+    // only filters that start with the tag set are lanes
+    EXPECT_FALSE(
+        laneTags(R"(!({"BAN", "INSULT"} contains message.highlight_tag))"));
+    EXPECT_FALSE(laneTags(
+        R"(flags.highlighted && {"BAN"} contains message.highlight_tag)"));
 
     auto added = withLaneTag(fyi, "SCAM", true);
     EXPECT_EQ(*laneTags(added),

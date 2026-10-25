@@ -68,7 +68,8 @@ QString cleanName(const QString &name);
 QString normalizeWord(const QString &word);
 /// Escapes like Python's re.escape so the generator script reads it back
 QString escapeWord(const QString &word);
-/// The words of a word list body, nullopt if body is anything else
+/// The words of a word list body, nullopt if body is anything else. Only
+/// case-insensitive regex rules count as word lists (categories()).
 std::optional<QStringList> parseWordList(const QString &body);
 QString buildWordList(QStringList words);
 
@@ -85,9 +86,12 @@ std::vector<Rule> renameCategory(std::vector<Rule> rules, const QString &name,
                                  const QString &newName);
 std::vector<Rule> setCategoryColor(std::vector<Rule> rules, const QString &name,
                                    const QColor &color);
-std::vector<Rule> setCategoryFlags(std::vector<Rule> rules, const QString &name,
-                                   bool showInMentions, bool alert, bool sound);
-/// Swaps the category with the previous (-1) or next (+1) category
+enum class Flag { ShowInMentions, Alert, Sound };
+/// Sets one flag on every rule of the category, the others stay as they are
+std::vector<Rule> setCategoryFlag(std::vector<Rule> rules, const QString &name,
+                                  Flag flag, bool value);
+/// Moves the category above the previous (-1) or below the next (+1)
+/// category; other categories' rules keep their order
 std::vector<Rule> moveCategory(std::vector<Rule> rules, const QString &name,
                                int direction);
 /// Adds an empty category above the category named before (at the bottom
@@ -99,8 +103,8 @@ std::vector<Rule> createCategory(std::vector<Rule> rules, const QString &name,
 std::vector<Rule> moveUnsortedRule(std::vector<Rule> rules, int index,
                                    const QString &name);
 
-/// Tags of a lane filter (`{"A", "B"} contains message.highlight_tag`),
-/// nullopt if the filter isn't one
+/// Tags of a lane filter (one that starts with
+/// `{"A", "B"} contains message.highlight_tag`), nullopt if it isn't one
 std::optional<QStringList> laneTags(const QString &filter);
 /// The filter with tag added to (present) or removed from its tag set
 QString withLaneTag(const QString &filter, const QString &tag, bool present);

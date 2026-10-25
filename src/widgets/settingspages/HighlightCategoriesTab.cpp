@@ -30,6 +30,8 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include <utility>
+
 namespace chatterino {
 
 namespace hc = highlightcategories;
@@ -340,13 +342,16 @@ HighlightCategoriesTab::HighlightCategoriesTab(
                                                        .arg(shared)
                                                  : QString()));
         });
-    for (auto *box : {this->mentions_, this->alert_, this->sound_})
+    for (auto [box, flag] :
+         {std::pair{this->mentions_, hc::Flag::ShowInMentions},
+          std::pair{this->alert_, hc::Flag::Alert},
+          std::pair{this->sound_, hc::Flag::Sound}})
     {
-        QObject::connect(box, &QCheckBox::clicked, this, [this] {
-            this->apply(hc::setCategoryFlags(
-                rules(), this->selected_, this->mentions_->isChecked(),
-                this->alert_->isChecked(), this->sound_->isChecked()));
-        });
+        QObject::connect(box, &QCheckBox::clicked, this,
+                         [this, flag](bool checked) {
+                             this->apply(hc::setCategoryFlag(
+                                 rules(), this->selected_, flag, checked));
+                         });
     }
     QObject::connect(this->wordInput_, &QLineEdit::returnPressed, this, [this] {
         this->addWord();
@@ -374,7 +379,7 @@ HighlightCategoriesTab::HighlightCategoriesTab(
         }
     });
 
-    // Rules or filters changed elsewhere (Messages tab, Filters page, Cancel)
+    // Rules or filters changed elsewhere (Messages tab, Filters page)
     this->connections_.managedConnect(
         getSettings()->highlightedMessages.delayedItemsChanged, [this] {
             this->refresh();
@@ -788,6 +793,10 @@ void HighlightCategoriesTab::renameTo(const QString &newName)
     else if (hc::categoryName(clean) != clean)
     {
         this->showStatus("A name can't end in a number.");
+    }
+    else if (hc::tagOf(clean).isEmpty())
+    {
+        this->showStatus("The name needs a word with letters or numbers.");
     }
     else if (std::any_of(cats.begin(), cats.end(), [&](const auto &c) {
                  return c.name == clean;

@@ -137,7 +137,9 @@ QString withTag(const QString &name, const QString &tag)
     static const QRegularExpression firstWord(R"([A-Za-z0-9]+)");
 
     auto cleanTag = tag.trimmed().toUpper();
-    cleanTag.remove(QRegularExpression(R"([\[\]\)])"));
+    // tags end up quoted in the lane filters, keep them simple
+    static const QRegularExpression notTag(R"([^A-Z0-9_])");
+    cleanTag.remove(notTag);
     if (cleanTag.isEmpty() || tagOf(name) == cleanTag)
     {
         return name;
@@ -267,6 +269,11 @@ QString buildWordList(QStringList words)
         }
         return a < b;
     });
+    if (words.isEmpty())
+    {
+        // an empty alternation would match every message
+        return PLACEHOLDER_BODY;
+    }
     QStringList escaped;
     for (const auto &w : words)
     {
@@ -301,7 +308,9 @@ std::vector<Category> categories(const std::vector<Rule> &rules)
         {
             continue;
         }
-        auto words = rules[i].regex ? parseWordList(body) : std::nullopt;
+        auto words = rules[i].regex && !rules[i].caseSensitive
+                         ? parseWordList(body)
+                         : std::nullopt;
         if (words && it->wordRule < 0)
         {
             it->wordRule = i;
@@ -430,17 +439,26 @@ std::vector<Rule> setCategoryColor(std::vector<Rule> rules, const QString &name,
     return rules;
 }
 
-std::vector<Rule> setCategoryFlags(std::vector<Rule> rules, const QString &name,
-                                   bool showInMentions, bool alert, bool sound)
+std::vector<Rule> setCategoryFlag(std::vector<Rule> rules, const QString &name,
+                                  Flag flag, bool value)
 {
     auto cats = categories(rules);
     if (const auto *cat = find(cats, name))
     {
         for (auto i : cat->rules)
         {
-            rules[i].showInMentions = showInMentions;
-            rules[i].alert = alert;
-            rules[i].sound = sound;
+            switch (flag)
+            {
+                case Flag::ShowInMentions:
+                    rules[i].showInMentions = value;
+                    break;
+                case Flag::Alert:
+                    rules[i].alert = value;
+                    break;
+                case Flag::Sound:
+                    rules[i].sound = value;
+                    break;
+            }
         }
     }
     return rules;
@@ -449,57 +467,40 @@ std::vector<Rule> setCategoryFlags(std::vector<Rule> rules, const QString &name,
 std::vector<Rule> moveCategory(std::vector<Rule> rules, const QString &name,
                                int direction)
 {
-    // Units in list order: each category (its rules gathered where it first
-    // appears) or a single unsorted rule. Unsorted rules keep their place.
-    struct Unit {
-        QString name;
-        std::vector<int> rules;
-    };
-    std::vector<Unit> units;
-    for (int i = 0; i < static_cast<int>(rules.size()); i++)
-    {
-        auto label = labelOf(rules[i].pattern);
-        auto cat = label.isEmpty() ? QString() : categoryName(label);
-        auto it = cat.isEmpty() ? units.end()
-                                : std::find_if(units.begin(), units.end(),
-                                               [&](const auto &u) {
-                                                   return u.name == cat;
-                                               });
-        if (it == units.end())
-        {
-            units.push_back(Unit{cat, {i}});
-        }
-        else
-        {
-            it->rules.push_back(i);
-        }
-    }
-
-    auto self = std::find_if(units.begin(), units.end(), [&](const auto &u) {
-        return u.name == name;
+    auto cats = categories(rules);
+    auto self = std::find_if(cats.begin(), cats.end(), [&](const auto &c) {
+        return c.name == name;
     });
-    if (self == units.end() || name.isEmpty())
+    if (self == cats.end())
     {
         return rules;
     }
-    auto pos = static_cast<int>(self - units.begin());
+    auto pos = static_cast<int>(self - cats.begin());
     auto other = pos + direction;
-    while (other >= 0 && other < static_cast<int>(units.size()) &&
-           units[other].name.isEmpty())
-    {
-        other += direction;
-    }
-    if (other < 0 || other >= static_cast<int>(units.size()))
+    if (other < 0 || other >= static_cast<int>(cats.size()))
     {
         return rules;
     }
-    std::swap(units[pos], units[other]);
 
+    // Only the moved category's rules change place: they go right before the
+    // previous category's first rule, or right after the next one's last
+    // rule. Every other rule keeps its order.
+    const auto &moved = self->rules;
+    auto anchor = direction < 0 ? cats[other].rules.front()
+                                : cats[other].rules.back() + 1;
     std::vector<Rule> out;
     out.reserve(rules.size());
-    for (const auto &u : units)
+    for (int i = 0; i <= static_cast<int>(rules.size()); i++)
     {
-        for (auto i : u.rules)
+        if (i == anchor)
+        {
+            for (auto m : moved)
+            {
+                out.push_back(rules[m]);
+            }
+        }
+        if (i < static_cast<int>(rules.size()) &&
+            std::find(moved.begin(), moved.end(), i) == moved.end())
         {
             out.push_back(rules[i]);
         }
@@ -565,7 +566,7 @@ namespace {
 const QRegularExpression &laneRegex()
 {
     static const QRegularExpression re(
-        R"((\{[^{}]*\})(\s*contains\s+message\.highlight_tag\b))");
+        R"(^\s*(\{[^{}]*\})(\s*contains\s+message\.highlight_tag\b))");
     return re;
 }
 
