@@ -11,7 +11,9 @@
 // All three count the same messages, so per hour and emote the highest count
 // and all chatters seen win. Files are one per UTC day, YYYY-MM-DD.tsv, with
 // lines "HH, source, name, messages, chatters" (tab separated, chatters
-// comma separated, source "*" with name "*" is every chat message).
+// comma separated as "login:messages"; a bare "login" is from before chatters
+// were counted). Source "*" with name "*" is every chat message, source "any"
+// with name "+" every message with at least one emote.
 
 #pragma once
 
@@ -87,6 +89,9 @@ struct Stats {
     std::vector<Row> rows;
     /// Every chat message in the range
     qint64 totalMessages = 0;
+    /// Chat messages in the range with at least one emote (only counted from
+    /// the version that counts per chatter on)
+    qint64 emoteMessages = 0;
     /// Start (UTC midnight) of the oldest day with data, 0 if there is none
     qint64 firstMsecs = 0;
 };
@@ -102,6 +107,15 @@ std::shared_ptr<LoadCache> makeLoadCache();
 /// run this off the GUI thread.
 Stats load(const QString &channel, qint64 from, qint64 to,
            LoadCache *cache = nullptr);
+
+/// What `login` sent in `channel` in the hours that start in [`from`, `to`):
+/// rows are their messages per emote, totalMessages and emoteMessages their
+/// messages and their messages with an emote. Only hours counted per chatter
+/// add up (live counts from this version on and chat logs read again).
+/// Reads files: call flush() first and run it off the GUI thread. `cache`
+/// works like for load().
+Stats loadUser(const QString &channel, const QString &login, qint64 from,
+               qint64 to, LoadCache *cache = nullptr);
 
 // ---------------------------------------------------------- log import ---
 

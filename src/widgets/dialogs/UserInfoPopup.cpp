@@ -32,6 +32,7 @@
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/Clipboard.hpp"
+#include "util/EmoteStats.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
@@ -40,6 +41,7 @@
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/dialogs/EditUserNotesDialog.hpp"
+#include "widgets/dialogs/EmoteStatsDialog.hpp"
 #include "widgets/dialogs/WhispersWindow.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/InvisibleSizeGrip.hpp"
@@ -547,6 +549,9 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
         // Chatterino9: opens the conversation in the Whispers window
         user.emplace<LabelButton>("Whisper", this)
             .assign(&this->ui_.whisperLabel);
+        // Chatterino9: the Emote stats window with only their messages
+        user.emplace<LabelButton>("Emote stats", this)
+            .assign(&this->ui_.emoteStatsLabel);
         auto mod = user.emplace<PixmapButton>(this);
         mod->setPixmap(getResources().buttons.mod);
         mod->setScaleIndependentSize(30, 30);
@@ -568,6 +573,20 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                 {
                     WhispersWindow::showConversation(this->userName_);
                 }
+            });
+
+        QObject::connect(
+            this->ui_.emoteStatsLabel, &Button::leftClicked, this, [this] {
+                if (this->userName_.isEmpty())
+                {
+                    return;
+                }
+                auto *dialog =
+                    new EmoteStatsDialog(this->underlyingChannel_,
+                                         this->parentWidget(), this->userName_);
+                dialog->show();
+                dialog->raise();
+                dialog->activateWindow();
             });
 
         QObject::connect(usercard.getElement(), &Button::leftClicked, [this] {
@@ -1039,6 +1058,11 @@ void UserInfoPopup::setData(const QString &name,
             this->userName_, Qt::CaseInsensitive) == 0;
     this->ui_.whisperLabel->setVisible(type != Channel::Type::Kick &&
                                        !isMyself);
+    // only the channels whose emotes are counted
+    this->ui_.emoteStatsLabel->setVisible(
+        dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get()) !=
+            nullptr &&
+        emotestats::countsChannel(this->underlyingChannel_->getName()));
 }
 
 void UserInfoPopup::updateAccountAgeWarning()
