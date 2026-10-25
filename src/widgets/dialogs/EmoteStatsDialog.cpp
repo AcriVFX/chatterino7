@@ -86,13 +86,24 @@ constexpr QColor ROW_ALT_COLOR(0x1f, 0x1f, 0x1f);
 constexpr QColor HOVER_COLOR(0x26, 0x2a, 0x30);
 constexpr QColor TEXT_COLOR(0xe4, 0xe4, 0xe4);
 constexpr QColor DIM_COLOR(0x8f, 0x8f, 0x8f);
-/// Shown in Added by for 7TV emotes 7TV has no adder for
-constexpr QStringView UNKNOWN_ADDER = u"AcriVFX";
 constexpr QColor TRACK_COLOR(0x26, 0x26, 0x26);
 constexpr QColor BAR_COLOR(0x3b, 0x6f, 0xa8);
 constexpr QColor REMOVED_BAR_COLOR(0x5a, 0x5a, 0x5a);
 constexpr QColor TILE_COLOR(0x2b, 0x2b, 0x2b);
 constexpr QColor TILE_TEXT_COLOR(0xcf, 0xcf, 0xcf);
+
+/// Shown in Added by for 7TV emotes 7TV has no adder for (Phil added them)
+constexpr QStringView UNKNOWN_ADDER = u"AcriVFX";
+
+/// 7TV emotes Phil added himself, whatever 7TV says (lowercase)
+bool addedByAcri(const QString &name)
+{
+    static const QSet<QString> names{
+        "scheisstag", "gueldisch", "nueschtisch", "omeohh",  "sus",
+        "deadass",    "reicht",    "muga",        "thegoat",
+    };
+    return names.contains(name.toLower());
+}
 
 constexpr std::array<const char *, 4> RANGE_NAMES{
     "This stream",
@@ -1369,7 +1380,11 @@ void EmoteStatsDialog::fillTable()
             // Phil added the emotes 7TV has no adder for: the old ones it
             // never recorded and the ones of a deleted 7TV account
             auto actor = this->addedBy_.constFind(row.name);
-            if (actor != this->addedBy_.constEnd() && actor->isEmpty())
+            if (addedByAcri(row.name))
+            {
+                addedBy->setText(UNKNOWN_ADDER.toString());
+            }
+            else if (actor != this->addedBy_.constEnd() && actor->isEmpty())
             {
                 addedBy->setText(UNKNOWN_ADDER.toString());
                 addedBy->setToolTip("7TV has no record of who added this "
