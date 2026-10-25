@@ -969,7 +969,7 @@ export function flushEmotes() {
     let out = "";
     for (const [key, bucket] of data.buckets) {
       const users = [...bucket.users].map(([user, n]) =>
-        n > 0 ? `${user}:${n}` : user,
+        n > 0 ? `${user}:${n}` : user
       );
       out += `${key}\t${bucket.count}\t${users.join(",")}\n`;
     }
