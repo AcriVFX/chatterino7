@@ -2630,6 +2630,21 @@ HighlightAlert MessageBuilder::parseHighlights(const QVariantMap &tags,
     this->message().highlightTag = highlightTagFromLabel(highlightResult.label);
     this->message().highlightMatch = highlightResult.matchedText;
 
+    // replies to the user (or in a thread they started) go to the Urgent lane
+    if (this->message().platform == MessagePlatform::AnyOrTwitch &&
+        isReplyHighlight(
+            this->message().highlightTag, highlightResult.color.get(),
+            this->message().replyParentLogin,
+            tags.value(QStringLiteral("reply-thread-parent-user-login"))
+                .toString(),
+            this->message().loginName,
+            getApp()->getAccounts()->twitch.getCurrent()->getUserName()))
+    {
+        this->message().highlightLabel = QStringLiteral("ME: Thread reply");
+        this->message().highlightTag = QStringLiteral("ME");
+        this->message().highlightMatch.clear();
+    }
+
     if (highlightResult.showInMentions)
     {
         this->message().flags.set(MessageFlag::ShowInMentions);
