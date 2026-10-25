@@ -460,6 +460,33 @@ TEST_F(HighlightControllerTest, LoggedInAndConfigured)
     this->runTests(tests);
 }
 
+TEST(HighlightResult, ReplyHighlight)
+{
+    const QColor faint(0, 200, 90, 0x33);  // streamer names
+    const QColor strong(230, 0, 0, 0x9e);  // BAN
+    const QString me = "acrivfx";
+
+    // a reply to one of the user's messages
+    EXPECT_TRUE(
+        isReplyHighlight({}, &faint, "AcriVFX", "someone", "forsen", me));
+    // a reply in a thread the user started
+    EXPECT_TRUE(
+        isReplyHighlight({}, &faint, "someone", "acrivfx", "forsen", me));
+    // a faint category rule (streamer names) gives way
+    EXPECT_TRUE(
+        isReplyHighlight("NAME", &faint, "acrivfx", "acrivfx", "forsen", me));
+    // a strong category rule keeps its tag
+    EXPECT_FALSE(
+        isReplyHighlight("BAN", &strong, "acrivfx", "acrivfx", "forsen", me));
+    // two other chatters replying to each other in a thread the user joined
+    EXPECT_FALSE(isReplyHighlight({}, &faint, "nymn", "pajlada", "forsen", me));
+    // the user's own replies
+    EXPECT_FALSE(
+        isReplyHighlight({}, &faint, "forsen", "forsen", "AcriVFX", me));
+    // not logged in
+    EXPECT_FALSE(isReplyHighlight({}, &faint, "", "", "forsen", ""));
+}
+
 TEST_F(HighlightControllerTest, AnonEmpty)
 {
     configure(SETTINGS_ANON_EMPTY, true);

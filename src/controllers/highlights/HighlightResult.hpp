@@ -86,4 +86,14 @@ QString highlightLabelFromPattern(const QString &pattern);
 /// "🔴 BAN: N-word 2", "TO" for "🟠 TIMEOUT [TO]: Insults")
 QString highlightTagFromLabel(const QString &label);
 
+/// Whether a highlighted message should be tagged as a reply to `login` (ME,
+/// Urgent lane like mentions): it answers one of their messages or sits in a
+/// thread they started, isn't their own, and no rule labeled it, or only a
+/// faint one did (streamer names, spam, requests). Strong category rules keep
+/// their tag.
+bool isReplyHighlight(const QString &tag, const QColor *color,
+                      const QString &replyParentLogin,
+                      const QString &threadParentLogin, const QString &sender,
+                      const QString &login);
+
 }  // namespace chatterino

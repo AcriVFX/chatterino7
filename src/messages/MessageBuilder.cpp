@@ -2147,11 +2147,13 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     }
 
     // repeated messages and variant spam from one user (see countRepeats).
-    // Faint highlights (spam, streamer names) are replaced by the repeat color.
+    // Faint highlights (spam, streamer names) are replaced by the repeat color,
+    // ME highlights (faint thread replies too) stay in the Urgent lane.
     // Users on the "Ignore highlights" list (bots like Fossabot) never get it.
     if ((!builder->flags.has(MessageFlag::Highlighted) ||
          (builder->highlightColor != nullptr &&
-          builder->highlightColor->alpha() < 0x40)) &&
+          builder->highlightColor->alpha() < 0x40 &&
+          builder->highlightTag != u"ME")) &&
         twitchChannel != nullptr && !args.isReceivedWhisper &&
         !args.isSentWhisper && builder->loginName != channel->getName() &&
         builder->loginName !=
@@ -2627,6 +2629,21 @@ HighlightAlert MessageBuilder::parseHighlights(const QVariantMap &tags,
     this->message().highlightLabel = highlightResult.label;
     this->message().highlightTag = highlightTagFromLabel(highlightResult.label);
     this->message().highlightMatch = highlightResult.matchedText;
+
+    // replies to the user (or in a thread they started) go to the Urgent lane
+    if (this->message().platform == MessagePlatform::AnyOrTwitch &&
+        isReplyHighlight(
+            this->message().highlightTag, highlightResult.color.get(),
+            this->message().replyParentLogin,
+            tags.value(QStringLiteral("reply-thread-parent-user-login"))
+                .toString(),
+            this->message().loginName,
+            getApp()->getAccounts()->twitch.getCurrent()->getUserName()))
+    {
+        this->message().highlightLabel = QStringLiteral("ME: Thread reply");
+        this->message().highlightTag = QStringLiteral("ME");
+        this->message().highlightMatch.clear();
+    }
 
     if (highlightResult.showInMentions)
     {

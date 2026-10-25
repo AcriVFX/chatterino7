@@ -122,4 +122,21 @@ QString highlightTagFromLabel(const QString &label)
     return {};
 }
 
+bool isReplyHighlight(const QString &tag, const QColor *color,
+                      const QString &replyParentLogin,
+                      const QString &threadParentLogin, const QString &sender,
+                      const QString &login)
+{
+    if (login.isEmpty() || sender.compare(login, Qt::CaseInsensitive) == 0)
+    {
+        return false;
+    }
+    if (replyParentLogin.compare(login, Qt::CaseInsensitive) != 0 &&
+        threadParentLogin.compare(login, Qt::CaseInsensitive) != 0)
+    {
+        return false;
+    }
+    return tag.isEmpty() || (color != nullptr && color->alpha() < 0x40);
+}
+
 }  // namespace chatterino
