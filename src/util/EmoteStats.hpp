@@ -12,8 +12,8 @@
 // and all chatters seen win. Files are one per UTC day, YYYY-MM-DD.tsv, with
 // lines "HH, source, name, messages, chatters" (tab separated, chatters
 // comma separated as "login:messages"; a bare "login" is from before chatters
-// were counted). Source "*" with name "*" is every chat message, with name
-// "+" every message with at least one emote.
+// were counted). Source "*" with name "*" is every chat message, source "any"
+// with name "+" every message with at least one emote.
 
 #pragma once
 
@@ -112,9 +112,10 @@ Stats load(const QString &channel, qint64 from, qint64 to,
 /// rows are their messages per emote, totalMessages and emoteMessages their
 /// messages and their messages with an emote. Only hours counted per chatter
 /// add up (live counts from this version on and chat logs read again).
-/// Reads files: run it off the GUI thread.
+/// Reads files: call flush() first and run it off the GUI thread. `cache`
+/// works like for load().
 Stats loadUser(const QString &channel, const QString &login, qint64 from,
-               qint64 to);
+               qint64 to, LoadCache *cache = nullptr);
 
 // ---------------------------------------------------------- log import ---
 

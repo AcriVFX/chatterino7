@@ -53,8 +53,14 @@ constexpr size_t RECENT_IDS = 5000;
 constexpr size_t DAYS_IN_MEMORY = 2;
 
 constexpr QStringView TOTAL_KEY = u"*";
-/// Name of the "*" line that counts messages with at least one emote
+/// Source and name of the line that counts messages with at least one emote.
+/// Not "*": apps from before it was counted add every "*" line to the chat
+/// messages, and they skip a source they don't know.
+constexpr QStringView ANY_EMOTE_SOURCE = u"any";
 constexpr QStringView ANY_EMOTE_KEY = u"+";
+/// Version of the day files the server sends: 2 sends chatters with their
+/// counts and the "any" line
+constexpr int SYNC_FORMAT = 2;
 /// Version of the log import. 2 counts per chatter; an import of an older
 /// version is done again.
 constexpr int IMPORT_VERSION = 2;
@@ -140,8 +146,10 @@ void addUser(QHash<QString, qint64> &users, QStringView entry)
 
 using Day = QHash<QString, Bucket>;
 
-/// Reads one day file into `day`, adding to what is there
-void readDay(const QString &path, Day &day)
+/// Reads one day file into `day`, adding to what is there. Without
+/// `totalUsers` the chatters of the "*" and "any" lines are skipped (they
+/// list almost everyone).
+void readDay(const QString &path, Day &day, bool totalUsers = true)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -166,6 +174,11 @@ void readDay(const QString &path, Day &day)
         auto &bucket = day[parts[0].toString() + u'\t' + parts[1].toString() +
                            u'\t' + parts[2].toString()];
         bucket.count = std::max(bucket.count, count);
+        if (!totalUsers &&
+            (parts[1] == TOTAL_KEY || parts[1] == ANY_EMOTE_SOURCE))
+        {
+            continue;
+        }
         if (!parts[4].isEmpty())
         {
             const auto users = parts[4].split(u',');
@@ -386,7 +399,8 @@ void countInto(Day &day, int hour, const QString &login,
     }
     if (!seen.isEmpty())
     {
-        add(bucketKey(hour, TOTAL_KEY.toString(), ANY_EMOTE_KEY.toString()));
+        add(bucketKey(hour, ANY_EMOTE_SOURCE.toString(),
+                      ANY_EMOTE_KEY.toString()));
     }
 }
 
@@ -538,6 +552,8 @@ struct SyncState {
     bool notCounting = false;
     bool connected = false;
     qint64 lastSync = 0;
+    /// SYNC_FORMAT of the days downloaded
+    int format = 0;
     /// Server modification time of each day downloaded
     QHash<QString, qint64> days;
 };
@@ -563,11 +579,18 @@ SyncState &syncState(const QString &channel)
             const auto obj = QJsonDocument::fromJson(file.readAll()).object();
             state.lastSync = obj.value(u"lastSync").toInteger();
             state.ok = state.lastSync > 0;
+            state.format = obj.value(u"format").toInt();
             const auto days = obj.value(u"days").toObject();
             for (auto it = days.begin(); it != days.end(); ++it)
             {
                 state.days.insert(it.key(), it.value().toInteger());
             }
+        }
+        if (state.format < SYNC_FORMAT)
+        {
+            // days from before were sent without the chatters' counts
+            state.days.clear();
+            state.format = SYNC_FORMAT;
         }
     }
     return state;
@@ -590,6 +613,7 @@ void saveSyncState(const QString &channel, const SyncState &state)
     {
         file.write(QJsonDocument(QJsonObject{
                                      {"lastSync", state.lastSync},
+                                     {"format", state.format},
                                      {"days", days},
                                  })
                        .toJson(QJsonDocument::Compact));
@@ -622,6 +646,7 @@ void fetchDays(const QString &channel, QStringList todo,
     const auto day = todo.takeFirst();
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("d"), day);
+    query.addQueryItem(QStringLiteral("v"), QString::number(SYNC_FORMAT));
     auto request = modactivity::remoteRequest(
         QStringLiteral("/v1/%1/emotes/day").arg(channel), query);
     if (!request)
@@ -901,7 +926,7 @@ void addDay(Sums &sums, qint64 day, const std::vector<QString> &files,
     Day merged;
     for (const auto &file : files)
     {
-        readDay(file, merged);
+        readDay(file, merged, false);
     }
     for (auto it = merged.cbegin(); it != merged.cend(); ++it)
     {
@@ -917,14 +942,12 @@ void addDay(Sums &sums, qint64 day, const std::vector<QString> &files,
         }
         if (parts[1] == TOTAL_KEY)
         {
-            if (parts[2] == TOTAL_KEY)
-            {
-                sums.totalMessages += it.value().count;
-            }
-            else if (parts[2] == ANY_EMOTE_KEY)
-            {
-                sums.emoteMessages += it.value().count;
-            }
+            sums.totalMessages += it.value().count;
+            continue;
+        }
+        if (parts[1] == ANY_EMOTE_SOURCE)
+        {
+            sums.emoteMessages += it.value().count;
             continue;
         }
         auto &total =
@@ -1001,10 +1024,137 @@ qint64 userCount(QByteArrayView users, QByteArrayView login)
 
 }  // namespace
 
+namespace {
+
+/// What one chatter sent in a run of days
+struct UserSums {
+    /// "source\tname" to messages
+    QHash<QString, qint64> totals;
+    qint64 totalMessages = 0;
+    qint64 emoteMessages = 0;
+};
+
+/// Adds what `user` sent in the hours of `day` that start in
+/// [`fromHour` * HOUR_MS, `to`)
+void addUserDay(UserSums &sums, qint64 day, const std::vector<QString> &files,
+                QByteArrayView user, qint64 fromHour, qint64 to)
+{
+    const auto dayStart = day * 24 * HOUR_MS;
+    if (dayStart + (24 * HOUR_MS) <= fromHour * HOUR_MS || dayStart >= to)
+    {
+        return;
+    }
+    // the sources count the same messages: per hour and emote the highest
+    // count wins
+    QHash<QByteArray, qint64> best;
+    for (const auto &path : files)
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+        {
+            continue;
+        }
+        const auto data = file.readAll();
+        qsizetype start = 0;
+        while (start < data.size())
+        {
+            auto end = data.indexOf('\n', start);
+            if (end < 0)
+            {
+                end = data.size();
+            }
+            auto line = QByteArrayView(data).sliced(start, end - start);
+            start = end + 1;
+            // files written on Windows end their lines with \r\n
+            if (line.endsWith('\r'))
+            {
+                line.chop(1);
+            }
+            if (!line.contains(user))
+            {
+                continue;
+            }
+            // "HH source name messages chatters"
+            const auto usersAt = line.lastIndexOf('\t');
+            const auto countAt =
+                line.first(std::max<qsizetype>(usersAt, 0)).lastIndexOf('\t');
+            if (usersAt < 0 || countAt < 0)
+            {
+                continue;
+            }
+            const auto count = userCount(line.sliced(usersAt + 1), user);
+            if (count <= 0)
+            {
+                continue;
+            }
+            const auto hourStart = dayStart + (line.first(2).toInt() * HOUR_MS);
+            if (hourStart < fromHour * HOUR_MS || hourStart >= to)
+            {
+                continue;
+            }
+            auto &known = best[line.first(countAt).toByteArray()];
+            known = std::max(known, count);
+        }
+    }
+    for (auto it = best.cbegin(); it != best.cend(); ++it)
+    {
+        const auto parts = QString::fromUtf8(it.key()).split(u'\t');
+        if (parts.size() != 3)
+        {
+            continue;
+        }
+        if (parts[1] == TOTAL_KEY)
+        {
+            sums.totalMessages += it.value();
+            continue;
+        }
+        if (parts[1] == ANY_EMOTE_SOURCE)
+        {
+            sums.emoteMessages += it.value();
+            continue;
+        }
+        sums.totals[parts[1] + u'\t' + parts[2]] += it.value();
+    }
+}
+
+/// Names the files and hours the days before today were added up from
+QString pastKey(const QString &what,
+                const std::map<qint64, std::vector<QString>> &days,
+                qint64 fromHour, qint64 to, qint64 today)
+{
+    // `to` only matters to the past days when it lies before today
+    QString key = QString("%1 %2 %3 %4")
+                      .arg(what)
+                      .arg(fromHour)
+                      .arg(std::min(to, today * 24 * HOUR_MS))
+                      .arg(today);
+    for (const auto &[day, files] : days)
+    {
+        if (day >= today)
+        {
+            break;
+        }
+        for (const auto &file : files)
+        {
+            const QFileInfo info(file);
+            key += QString("|%1 %2 %3")
+                       .arg(file)
+                       .arg(info.lastModified().toMSecsSinceEpoch())
+                       .arg(info.size());
+        }
+    }
+    return key;
+}
+
+}  // namespace
+
 struct LoadCache {
     /// Which files and hours `sums` was added up from
     QString key;
     Sums sums;
+    /// The same for loadUser()
+    QString userKey;
+    UserSums userSums;
 };
 
 std::shared_ptr<LoadCache> makeLoadCache()
@@ -1032,28 +1182,8 @@ Stats load(const QString &channel, qint64 from, qint64 to, LoadCache *cache)
     // of their files did
     Sums sums;
     {
-        // `to` only matters to the past days when it lies before today
-        QString pastKey = QString("%1 %2 %3 %4")
-                              .arg(key)
-                              .arg(fromHour)
-                              .arg(std::min(to, today * 24 * HOUR_MS))
-                              .arg(today);
-        for (const auto &[day, files] : days)
-        {
-            if (day >= today)
-            {
-                break;
-            }
-            for (const auto &file : files)
-            {
-                const QFileInfo info(file);
-                pastKey += QString("|%1 %2 %3")
-                               .arg(file)
-                               .arg(info.lastModified().toMSecsSinceEpoch())
-                               .arg(info.size());
-            }
-        }
-        if (cache != nullptr && cache->key == pastKey)
+        const auto past = pastKey(key, days, fromHour, to, today);
+        if (cache != nullptr && cache->key == past)
         {
             sums = cache->sums;
         }
@@ -1069,7 +1199,7 @@ Stats load(const QString &channel, qint64 from, qint64 to, LoadCache *cache)
             }
             if (cache != nullptr)
             {
-                cache->key = pastKey;
+                cache->key = past;
                 cache->sums = sums;
             }
         }
@@ -1101,7 +1231,7 @@ Stats load(const QString &channel, qint64 from, qint64 to, LoadCache *cache)
 }
 
 Stats loadUser(const QString &channel, const QString &login, qint64 from,
-               qint64 to)
+               qint64 to, LoadCache *cache)
 {
     writerPool().waitForDone();
 
@@ -1118,92 +1248,43 @@ Stats loadUser(const QString &channel, const QString &login, qint64 from,
         stats.firstMsecs = days.begin()->first * 24 * HOUR_MS;
     }
     const auto fromHour = from / HOUR_MS;
+    const auto today = dayOf(QDateTime::currentMSecsSinceEpoch());
 
-    QHash<QString, qint64> totals;
-    for (const auto &[day, files] : days)
+    // like load(), the days before today are read again only when one of
+    // their files changed
+    UserSums sums;
     {
-        const auto dayStart = day * 24 * HOUR_MS;
-        if (dayStart + (24 * HOUR_MS) <= fromHour * HOUR_MS || dayStart >= to)
+        const auto past = pastKey(key + u' ' + QString::fromUtf8(user), days,
+                                  fromHour, to, today);
+        if (cache != nullptr && cache->userKey == past)
         {
-            continue;
+            sums = cache->userSums;
         }
-        // the sources count the same messages: per hour and emote the
-        // highest count wins
-        QHash<QByteArray, qint64> best;
-        for (const auto &path : files)
+        else
         {
-            QFile file(path);
-            if (!file.open(QIODevice::ReadOnly))
+            for (const auto &[day, files] : days)
             {
-                continue;
+                if (day >= today)
+                {
+                    break;
+                }
+                addUserDay(sums, day, files, user, fromHour, to);
             }
-            const auto data = file.readAll();
-            qsizetype start = 0;
-            while (start < data.size())
+            if (cache != nullptr)
             {
-                auto end = data.indexOf('\n', start);
-                if (end < 0)
-                {
-                    end = data.size();
-                }
-                auto line = QByteArrayView(data).sliced(start, end - start);
-                start = end + 1;
-                // files written on Windows end their lines with \r\n
-                if (line.endsWith('\r'))
-                {
-                    line.chop(1);
-                }
-                if (!line.contains(user))
-                {
-                    continue;
-                }
-                // "HH source name messages chatters"
-                const auto usersAt = line.lastIndexOf('\t');
-                const auto countAt = line.first(std::max<qsizetype>(usersAt, 0))
-                                         .lastIndexOf('\t');
-                if (usersAt < 0 || countAt < 0)
-                {
-                    continue;
-                }
-                const auto count = userCount(line.sliced(usersAt + 1), user);
-                if (count <= 0)
-                {
-                    continue;
-                }
-                const auto hourStart =
-                    dayStart + (line.first(2).toInt() * HOUR_MS);
-                if (hourStart < fromHour * HOUR_MS || hourStart >= to)
-                {
-                    continue;
-                }
-                auto &known = best[line.first(countAt).toByteArray()];
-                known = std::max(known, count);
+                cache->userKey = past;
+                cache->userSums = sums;
             }
-        }
-        for (auto it = best.cbegin(); it != best.cend(); ++it)
-        {
-            const auto parts = QString::fromUtf8(it.key()).split(u'\t');
-            if (parts.size() != 3)
-            {
-                continue;
-            }
-            if (parts[1] == TOTAL_KEY)
-            {
-                if (parts[2] == TOTAL_KEY)
-                {
-                    stats.totalMessages += it.value();
-                }
-                else if (parts[2] == ANY_EMOTE_KEY)
-                {
-                    stats.emoteMessages += it.value();
-                }
-                continue;
-            }
-            totals[parts[1] + u'\t' + parts[2]] += it.value();
         }
     }
+    for (auto it = days.lower_bound(today); it != days.end(); ++it)
+    {
+        addUserDay(sums, it->first, it->second, user, fromHour, to);
+    }
 
-    for (auto it = totals.cbegin(); it != totals.cend(); ++it)
+    stats.totalMessages = sums.totalMessages;
+    stats.emoteMessages = sums.emoteMessages;
+    for (auto it = sums.totals.cbegin(); it != sums.totals.cend(); ++it)
     {
         const auto tab = it.key().indexOf(u'\t');
         auto source = sourceFromKey(QStringView(it.key()).left(tab));

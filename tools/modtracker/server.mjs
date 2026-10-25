@@ -703,8 +703,8 @@ async function pollStream() {
 // bucket per UTC hour. Files: emotes/YYYY-MM-DD.tsv with lines
 // "HH, source, name, messages, chatters" (tab separated, chatters comma
 // separated as "login:messages"); source "*" with name "*" counts every chat
-// message, with name "+" every message with an emote. Same format and same
-// emote lookup as the app (src/util/EmoteStats.cpp).
+// message, source "any" with name "+" every message with an emote. Same
+// format and same emote lookup as the app (src/util/EmoteStats.cpp).
 
 const chat = {
   connected: false,
@@ -953,11 +953,31 @@ export function countMessage(msecs, login, uses) {
       add(key, login);
     }
   }
-  // messages with at least one emote
+  // messages with at least one emote. Not source "*": apps from before it
+  // was counted add every "*" line to the chat messages.
   if (seen.size > 0) {
-    add(`${hour}\t*\t+`, login);
+    add(`${hour}\tany\t+`, login);
   }
   data.dirty = true;
+}
+
+/// A day file as apps from before chatters were counted read it
+export function stripEmoteCounts(text) {
+  let out = "";
+  for (const line of text.split("\n")) {
+    const parts = line.split("\t");
+    if (parts.length !== 5 || parts[1] === "any") {
+      continue;
+    }
+    parts[4] = parts[4]
+      ? parts[4]
+          .split(",")
+          .map((entry) => entry.split(":")[0])
+          .join(",")
+      : "";
+    out += `${parts.join("\t")}\n`;
+  }
+  return out;
 }
 
 export function flushEmotes() {
@@ -1245,11 +1265,18 @@ const server = createServer((req, res) => {
       return send(res, 404, "Not found\n");
     }
     flushEmotes();
+    let text;
     try {
-      return send(res, 200, readFileSync(join(EMOTE_DIR, `${day}.tsv`)));
+      text = readFileSync(join(EMOTE_DIR, `${day}.tsv`), "utf8");
     } catch {
       return send(res, 404, "Not found\n");
     }
+    // apps from before chatters were counted (they don't send v=2) read
+    // "login:3" as a name: send them only the logins
+    if (url.searchParams.get("v") !== "2") {
+      text = stripEmoteCounts(text);
+    }
+    return send(res, 200, text);
   }
   return send(res, 404, "Not found\n");
 });

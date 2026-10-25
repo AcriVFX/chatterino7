@@ -229,7 +229,7 @@ TEST(EmoteStats, CountsPerChatter)
                   .filePath("EmoteStats/statsuser/server/2026-10-13.tsv"),
               "18\t*\t*\t20\tuserone:4,useronetwo:1\n"
               // a line written on Windows
-              "18\t*\t+\t10\tuseronetwo:1,userone:2\r\n"
+              "18\tany\t+\t10\tuseronetwo:1,userone:2\r\n"
               "18\t7tv\tomE\t9\tuseronetwo:1,userone:2\n"
               "19\tbttv\tClap\t3\tuserone\n");
 
@@ -245,10 +245,24 @@ TEST(EmoteStats, CountsPerChatter)
     ASSERT_NE(kappa, nullptr);
     EXPECT_EQ(kappa->messages, 1);
 
-    // everyone: the "+" line is not a chat message of its own
+    // everyone: the "any" line is not a chat message of its own
     auto all = emotestats::load("statsuser", at(0, 0), at(23, 0));
     EXPECT_EQ(all.totalMessages, 20);
     EXPECT_EQ(all.emoteMessages, 10);
+    EXPECT_EQ(findRow(all, Source::SevenTv, "omE")->chatters, 2);
+
+    // a cache shared by both views gives the same numbers
+    auto cache = emotestats::makeLoadCache();
+    for (int i = 0; i < 2; i++)
+    {
+        auto cached = emotestats::loadUser("statsuser", "userone", at(0, 0),
+                                           at(23, 0), cache.get());
+        EXPECT_EQ(cached.totalMessages, 4);
+        EXPECT_EQ(cached.emoteMessages, 2);
+        EXPECT_EQ(cached.rows.size(), 2);
+        all = emotestats::load("statsuser", at(0, 0), at(23, 0), cache.get());
+        EXPECT_EQ(all.totalMessages, 20);
+    }
 
     // outside the range
     stats = emotestats::loadUser("statsuser", "userone", at(19, 0), at(23, 0));

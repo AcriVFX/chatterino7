@@ -113,7 +113,8 @@ private:
     /// know), kept for emotes removed since (Misc/EmoteStats/<ch>/
     /// 7tv-added-by.json)
     QHash<QString, QString> addedBy_;
-    /// 7TV user id to name (Misc/EmoteStats/7tv-users.json)
+    /// 7TV user id to name, "" for deleted accounts
+    /// (Misc/EmoteStats/7tv-users.json)
     QHash<QString, QString> seventvUsers_;
     QSet<QString> seventvUsersRequested_;
     bool addersLoading_ = false;
@@ -138,6 +139,8 @@ private:
 
     QTimer *refreshTimer_ = nullptr;
     QTimer *iconTimer_ = nullptr;
+    /// Saves and shows the 7TV names that arrived
+    QTimer *namesTimer_ = nullptr;
     /// Lets the worker thread know the window is still open
     std::shared_ptr<bool> lifetime_ = std::make_shared<bool>(true);
     /// Keeps the sums of past days between reloads

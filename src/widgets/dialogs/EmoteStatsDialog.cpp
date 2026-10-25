@@ -305,6 +305,8 @@ QHash<QString, QString> readStringMap(const QString &path)
     return map;
 }
 
+/// Writes `map` over what the file has, so two open windows don't drop each
+/// other's entries
 void writeStringMap(const QString &path, const QHash<QString, QString> &map)
 {
     if (path.isEmpty() || !QDir().mkpath(QFileInfo(path).path()))
@@ -312,6 +314,13 @@ void writeStringMap(const QString &path, const QHash<QString, QString> &map)
         return;
     }
     QJsonObject obj;
+    {
+        const auto known = readStringMap(path);
+        for (auto it = known.cbegin(); it != known.cend(); ++it)
+        {
+            obj.insert(it.key(), it.value());
+        }
+    }
     for (auto it = map.cbegin(); it != map.cend(); ++it)
     {
         obj.insert(it.key(), it.value());
@@ -526,6 +535,7 @@ EmoteStatsDialog::EmoteStatsDialog(const std::shared_ptr<Channel> &channel,
     , user_(user.toLower())
     , refreshTimer_(new QTimer(this))
     , iconTimer_(new QTimer(this))
+    , namesTimer_(new QTimer(this))
 {
     this->setAttribute(Qt::WA_DeleteOnClose);
     this->resize(820, 820);
@@ -577,6 +587,14 @@ EmoteStatsDialog::EmoteStatsDialog(const std::shared_ptr<Channel> &channel,
         }
     });
     this->iconTimer_->start();
+
+    // 7TV names arrive one by one: saved and shown once they stop coming
+    this->namesTimer_->setSingleShot(true);
+    this->namesTimer_->setInterval(std::chrono::milliseconds(500));
+    QObject::connect(this->namesTimer_, &QTimer::timeout, this, [this] {
+        writeStringMap(seventvUsersFile(), this->seventvUsers_);
+        this->fillTable();
+    });
 }
 
 void EmoteStatsDialog::themeChangedEvent()
@@ -955,9 +973,10 @@ void EmoteStatsDialog::reload()
                                           from = this->range_.from,
                                           to = this->range_.to,
                                           cache = this->loadCache_] {
-        auto stats = user.isEmpty()
-                         ? emotestats::load(channel, from, to, cache.get())
-                         : emotestats::loadUser(channel, user, from, to);
+        auto stats =
+            user.isEmpty()
+                ? emotestats::load(channel, from, to, cache.get())
+                : emotestats::loadUser(channel, user, from, to, cache.get());
         postToThread([this, alive, user, stats = std::move(stats)]() mutable {
             if (!alive.lock())
             {
@@ -1162,7 +1181,7 @@ void EmoteStatsDialog::fillTable()
     QHash<QString, EmotePtr> emotes;
     QStringList unused;
     const bool userMode = !this->user_.isEmpty();
-    if (channel && !removedTab && !userMode)
+    if (channel && !removedTab)
     {
         const std::array<std::pair<Source, std::shared_ptr<const EmoteMap>>, 3>
             channelSets{{
@@ -1181,8 +1200,9 @@ void EmoteStatsDialog::fillTable()
                 const auto key = rowKey(source, name.string);
                 emotes.insert(key, emote);
                 // chat shows (and counts) a name as the first source that
-                // has it, FFZ then BTTV then 7TV: its uses are on that row
-                if (!used.contains(key) &&
+                // has it, FFZ then BTTV then 7TV: its uses are on that row.
+                // One chatter not using an emote says nothing.
+                if (!userMode && !used.contains(key) &&
                     emotestats::classify(*channel, name.string) == source)
                 {
                     used.insert(key);
@@ -1350,7 +1370,18 @@ void EmoteStatsDialog::fillTable()
             }
             else if (actor != this->addedBy_.constEnd())
             {
-                addedBy->setText(this->seventvUsers_.value(*actor));
+                auto name = this->seventvUsers_.constFind(*actor);
+                if (name != this->seventvUsers_.constEnd() && name->isEmpty())
+                {
+                    addedBy->setText("unknown");
+                    addedBy->setForeground(DIM_COLOR);
+                    addedBy->setToolTip("The 7TV account that added this "
+                                        "emote no longer exists");
+                }
+                else if (name != this->seventvUsers_.constEnd())
+                {
+                    addedBy->setText(*name);
+                }
             }
         }
         table->setItem(r, ColAddedBy, addedBy);
@@ -1560,17 +1591,20 @@ void EmoteStatsDialog::loadSeventvUserNames(const QStringList &ids)
                 {
                     name = user.value(u"username").toString();
                 }
-                if (name.isEmpty())
+                // "" shows "unknown" and is not asked for again
+                this->seventvUsers_.insert(id, name);
+                this->namesTimer_->start();
+            })
+            .onError([this, alive, id](const NetworkResult &result) {
+                if (!alive.lock())
                 {
                     return;
                 }
-                this->seventvUsers_.insert(id, name);
-                writeStringMap(seventvUsersFile(), this->seventvUsers_);
-                this->fillTable();
-            })
-            .onError([this, alive, id](const NetworkResult &) {
-                if (!alive.lock())
+                if (result.status() == 404)
                 {
+                    // the account was deleted
+                    this->seventvUsers_.insert(id, QString());
+                    this->namesTimer_->start();
                     return;
                 }
                 // asked again with the next refresh of the set
