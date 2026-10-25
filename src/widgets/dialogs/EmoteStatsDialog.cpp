@@ -86,6 +86,8 @@ constexpr QColor ROW_ALT_COLOR(0x1f, 0x1f, 0x1f);
 constexpr QColor HOVER_COLOR(0x26, 0x2a, 0x30);
 constexpr QColor TEXT_COLOR(0xe4, 0xe4, 0xe4);
 constexpr QColor DIM_COLOR(0x8f, 0x8f, 0x8f);
+/// Shown in Added by for 7TV emotes 7TV has no adder for
+constexpr QStringView UNKNOWN_ADDER = u"AcriVFX";
 constexpr QColor TRACK_COLOR(0x26, 0x26, 0x26);
 constexpr QColor BAR_COLOR(0x3b, 0x6f, 0xa8);
 constexpr QColor REMOVED_BAR_COLOR(0x5a, 0x5a, 0x5a);
@@ -760,7 +762,8 @@ void EmoteStatsDialog::initUi()
             ->setToolTip("Different people who used it");
         table->horizontalHeaderItem(ColAddedBy)
             ->setToolTip("Who added the emote to the channel's 7TV set, as "
-                         "7TV records it");
+                         "7TV records it. The channel's own Twitch emotes "
+                         "are the streamer's.");
         table->horizontalHeaderItem(ColShare)->setToolTip(
             "Share of all chat messages in this range that used it");
         table->verticalHeader()->hide();
@@ -1324,9 +1327,12 @@ void EmoteStatsDialog::fillTable()
     // app on every reload
     table->setRowCount(0);
     table->setRowCount(static_cast<int>(rows.size()));
-    // only 7TV says who added an emote
-    table->setColumnHidden(
-        ColAddedBy, !all && !removedTab && shownSource != Source::SevenTv);
+    // 7TV says who added an emote, the channel's Twitch emotes are the
+    // streamer's
+    table->setColumnHidden(ColAddedBy, !all && !removedTab &&
+                                           shownSource != Source::SevenTv &&
+                                           shownSource != Source::Twitch);
+    const auto streamer = channel ? channel->getDisplayName() : this->channel_;
     table->setColumnHidden(ColChatters, userMode);
     table->horizontalHeaderItem(ColShare)->setText(
         userMode ? "Share of their messages" : "Share of chat");
@@ -1360,11 +1366,12 @@ void EmoteStatsDialog::fillTable()
         addedBy->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         if (row.source == Source::SevenTv)
         {
+            // Phil added the emotes 7TV has no adder for: the old ones it
+            // never recorded and the ones of a deleted 7TV account
             auto actor = this->addedBy_.constFind(row.name);
             if (actor != this->addedBy_.constEnd() && actor->isEmpty())
             {
-                addedBy->setText("unknown");
-                addedBy->setForeground(DIM_COLOR);
+                addedBy->setText(UNKNOWN_ADDER.toString());
                 addedBy->setToolTip("7TV has no record of who added this "
                                     "emote");
             }
@@ -1373,8 +1380,7 @@ void EmoteStatsDialog::fillTable()
                 auto name = this->seventvUsers_.constFind(*actor);
                 if (name != this->seventvUsers_.constEnd() && name->isEmpty())
                 {
-                    addedBy->setText("unknown");
-                    addedBy->setForeground(DIM_COLOR);
+                    addedBy->setText(UNKNOWN_ADDER.toString());
                     addedBy->setToolTip("The 7TV account that added this "
                                         "emote no longer exists");
                 }
@@ -1383,6 +1389,11 @@ void EmoteStatsDialog::fillTable()
                     addedBy->setText(*name);
                 }
             }
+        }
+        else if (row.source == Source::Twitch && !twitchId(row.name).isEmpty())
+        {
+            // the channel's own sub, follower and bits emotes
+            addedBy->setText(streamer);
         }
         table->setItem(r, ColAddedBy, addedBy);
         set(ColMessages, formatCount(row.messages),
