@@ -99,8 +99,8 @@ void PredictionStripWidget::refresh()
 
 void PredictionStripWidget::openPredictions(const QString &channelName)
 {
-    QDesktopServices::openUrl(
-        QUrl(u"https://www.twitch.tv/popout/%1/chat"_s.arg(channelName)));
+    QDesktopServices::openUrl(QUrl(
+        u"https://www.twitch.tv/popout/%1/predictions"_s.arg(channelName)));
 }
 
 QSize PredictionStripWidget::sizeHint() const

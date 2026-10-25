@@ -1069,9 +1069,8 @@ void SplitHeader::updateFeatureButtons()
     this->predictionButton_->setColor(
         running ? std::optional<QColor>(this->theme->accent) : std::nullopt);
     this->predictionButton_->setToolTip(
-        running ? QStringLiteral("Prediction running, open predictions "
-                                 "(Twitch popout chat)")
-                : QStringLiteral("Open predictions (Twitch popout chat)"));
+        running ? QStringLiteral("Prediction running, manage it on Twitch")
+                : QStringLiteral("Open predictions on Twitch"));
 }
 
 void SplitHeader::openModActivity()

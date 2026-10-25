@@ -21,7 +21,7 @@ class TwitchChannel;
  * that is running, as seen from the prediction badges in chat.
  *
  * Moderators can't read or control predictions through the Twitch API, so
- * "Manage" opens the channel's Twitch popout chat in the browser.
+ * "Manage" opens the channel's Twitch predictions popout in the browser.
  */
 class PredictionStripWidget final : public BaseWidget
 {
@@ -35,7 +35,8 @@ public:
 
     QSize sizeHint() const override;
 
-    /// Opens the channel's Twitch popout chat, where mods run predictions
+    /// Opens the channel's Twitch predictions popout, where mods start,
+    /// lock and resolve predictions
     static void openPredictions(const QString &channelName);
 
     /// Invoked when the strip shows up or goes away
