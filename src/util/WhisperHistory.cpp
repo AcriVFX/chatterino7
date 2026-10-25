@@ -19,6 +19,7 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 
 namespace {
@@ -399,7 +400,7 @@ QString ensureLoaded()
     return dir;
 }
 
-enum class Added {
+enum class Added : std::uint8_t {
     Saved,
     /// the same whisper was saved before
     AlreadyThere,

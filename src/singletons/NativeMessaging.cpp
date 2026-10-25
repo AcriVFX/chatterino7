@@ -33,6 +33,7 @@
 #include <QTextStream>
 
 #include <deque>
+#include <unordered_map>
 
 #ifdef Q_OS_WIN
 #    include "widgets/AttachedWindow.hpp"
@@ -136,7 +137,7 @@ struct RecipientLookups {
     /// user id -> login
     QHash<QString, QString> logins;
     /// user id -> whispers waiting for its lookup
-    QHash<QString, std::vector<BrowserWhisper>> waiting;
+    std::unordered_map<QString, std::vector<BrowserWhisper>> waiting;
     /// user id -> when its last lookup failed
     QHash<QString, qint64> failedAt;
     QHash<QString, int> failures;
@@ -148,6 +149,17 @@ RecipientLookups &lookups()
 {
     static RecipientLookups instance;
     return instance;
+}
+
+std::vector<BrowserWhisper> takeWaiting(RecipientLookups &st,
+                                        const QString &recipientId)
+{
+    auto node = st.waiting.extract(recipientId);
+    if (node.empty())
+    {
+        return {};
+    }
+    return std::move(node.mapped());
 }
 
 void saveBrowserWhisper(const BrowserWhisper &whisper, const QString &login)
@@ -177,9 +189,9 @@ void handleBrowserWhisper(const BrowserWhisper &whisper)
     auto pending = st.waiting.find(recipientId);
     if (pending != st.waiting.end())
     {
-        if (pending->size() < 100)
+        if (pending->second.size() < 100)
         {
-            pending->push_back(whisper);
+            pending->second.push_back(whisper);
         }
         return;
     }
@@ -187,11 +199,11 @@ void handleBrowserWhisper(const BrowserWhisper &whisper)
     // Lookups use the account's Helix budget, which bans and timeouts need
     // too: don't retry a failing id for 10 minutes, at most 20 per minute.
     const auto now = QDateTime::currentMSecsSinceEpoch();
-    if (st.failedAt.value(recipientId, 0) > now - 10 * 60 * 1000)
+    if (st.failedAt.value(recipientId, 0) > now - (10LL * 60 * 1000))
     {
         return;
     }
-    while (!st.recent.empty() && st.recent.front() < now - 60 * 1000)
+    while (!st.recent.empty() && st.recent.front() < now - (60LL * 1000))
     {
         st.recent.pop_front();
     }
@@ -207,7 +219,7 @@ void handleBrowserWhisper(const BrowserWhisper &whisper)
         [recipientId](const HelixUser &user) {
             auto &st = lookups();
             const auto login = user.login.toLower();
-            const auto whispers = st.waiting.take(recipientId);
+            const auto whispers = takeWaiting(st, recipientId);
             st.logins.insert(recipientId, login);
             st.failures.remove(recipientId);
             for (const auto &w : whispers)
@@ -217,7 +229,7 @@ void handleBrowserWhisper(const BrowserWhisper &whisper)
         },
         [recipientId] {
             auto &st = lookups();
-            const auto whispers = st.waiting.take(recipientId);
+            const auto whispers = takeWaiting(st, recipientId);
             st.failedAt[recipientId] = QDateTime::currentMSecsSinceEpoch();
             // failing for an hour: no such user (or never will be)
             if (++st.failures[recipientId] < 6)
@@ -371,7 +383,7 @@ void addReceipt(const Paths &paths, const QString &id, bool saved)
     const auto now = QDateTime::currentMSecsSinceEpoch();
 
     // drop receipts older than a month now and then
-    if (QFileInfo(path).size() > 64 * 1024)
+    if (QFileInfo(path).size() > 64LL * 1024)
     {
         QStringList kept;
         QFile old(path);
@@ -644,6 +656,7 @@ void NativeMessagingServer::ReceiverThread::handleSync(const QJsonObject &root)
     });
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void NativeMessagingServer::ReceiverThread::handleWhisperSent(
     const QJsonObject &root)
 {

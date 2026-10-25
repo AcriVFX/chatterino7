@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 #ifdef Q_OS_WIN
 #    include <fcntl.h>
@@ -46,7 +47,7 @@ void initFileMode()
 
 void writeToBrowser(const char *data, uint32_t len)
 {
-    std::lock_guard lock(outputMutex());
+    std::scoped_lock lock(outputMutex());
     std::cout.write(reinterpret_cast<const char *>(&len), sizeof(len));
     std::cout.write(data, len);
     std::cout.flush();
@@ -108,7 +109,7 @@ public:
 
     void wait(const QString &id)
     {
-        std::lock_guard lock(this->mutex_);
+        std::scoped_lock lock(this->mutex_);
         this->waiting_.emplace(id, QDateTime::currentMSecsSinceEpoch());
         if (!this->started_)
         {
@@ -130,7 +131,7 @@ private:
             std::this_thread::sleep_for(150ms);
             std::map<QString, qint64> waiting;
             {
-                std::lock_guard lock(this->mutex_);
+                std::scoped_lock lock(this->mutex_);
                 waiting = this->waiting_;
             }
             if (waiting.empty())
@@ -163,7 +164,7 @@ private:
                 {
                     continue;
                 }
-                std::lock_guard lock(this->mutex_);
+                std::scoped_lock lock(this->mutex_);
                 this->waiting_.erase(id);
             }
         }
@@ -196,7 +197,7 @@ bool handleWhisperMessage(const QByteArray &buffer, const QString &origin,
     {
         return true;
     }
-    if (static_cast<size_t>(buffer.size()) > nm::MAX_MESSAGE_SIZE)
+    if (std::cmp_greater(buffer.size(), nm::MAX_MESSAGE_SIZE))
     {
         sendAck(id, false, "too-long");
         return true;
