@@ -79,6 +79,9 @@ private:
     void loadTwitchChannelEmotes();
     /// Asks 7TV who added each emote of the channel's set, now and then
     void loadSeventvAdders();
+    /// Reads Misc/EmoteStats/added-by.json, made with Phil's corrections
+    /// when missing
+    void loadAddedByEdits();
     /// Asks 7TV for the names of the 7TV users `ids`
     void loadSeventvUserNames(const QStringList &ids);
     /// Shows only `login`'s messages, or everyone's when it is empty
@@ -117,6 +120,10 @@ private:
     /// (Misc/EmoteStats/7tv-users.json)
     QHash<QString, QString> seventvUsers_;
     QSet<QString> seventvUsersRequested_;
+    /// From added-by.json: shown for 7TV emotes without an adder, and
+    /// lowercase emote name to who added it
+    QString unknownAdder_;
+    QHash<QString, QString> adderEdits_;
     bool addersLoading_ = false;
     qint64 addersRequestedAt_ = 0;
 

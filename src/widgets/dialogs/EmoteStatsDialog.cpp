@@ -92,19 +92,6 @@ constexpr QColor REMOVED_BAR_COLOR(0x5a, 0x5a, 0x5a);
 constexpr QColor TILE_COLOR(0x2b, 0x2b, 0x2b);
 constexpr QColor TILE_TEXT_COLOR(0xcf, 0xcf, 0xcf);
 
-/// Shown in Added by for 7TV emotes 7TV has no adder for (Phil added them)
-constexpr QStringView UNKNOWN_ADDER = u"AcriVFX";
-
-/// 7TV emotes Phil added himself, whatever 7TV says (lowercase)
-bool addedByAcri(const QString &name)
-{
-    static const QSet<QString> names{
-        "scheisstag", "gueldisch", "nueschtisch", "omeohh",  "sus",
-        "deadass",    "reicht",    "muga",        "thegoat",
-    };
-    return names.contains(name.toLower());
-}
-
 constexpr std::array<const char *, 4> RANGE_NAMES{
     "This stream",
     "7 days",
@@ -300,6 +287,33 @@ QString seventvUsersFile()
     return misc.isEmpty() ? QString()
                           : QDir(misc).filePath(
                                 QStringLiteral("EmoteStats/7tv-users.json"));
+}
+
+/// Phil's corrections to the Added by column, edited by hand while the app
+/// runs: {"unknown": shown for 7TV emotes 7TV has no adder for,
+/// "emotes": {emote name: who added it, over what 7TV says}}
+QString addedByEditsFile()
+{
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    return misc.isEmpty() ? QString()
+                          : QDir(misc).filePath(
+                                QStringLiteral("EmoteStats/added-by.json"));
+}
+
+/// What added-by.json starts with: Phil added the emotes 7TV has no adder
+/// for and these
+QJsonObject defaultAddedByEdits()
+{
+    QJsonObject emotes;
+    for (const auto *name : {"scheisstag", "gueldisch", "nueschtisch", "omeOhh",
+                             "sus", "deadass", "reicht", "muga", "thegoat"})
+    {
+        emotes.insert(QString::fromUtf8(name), "AcriVFX");
+    }
+    return {
+        {"unknown", "AcriVFX"},
+        {"emotes", emotes},
+    };
 }
 
 QHash<QString, QString> readStringMap(const QString &path)
@@ -774,7 +788,8 @@ void EmoteStatsDialog::initUi()
         table->horizontalHeaderItem(ColAddedBy)
             ->setToolTip("Who added the emote to the channel's 7TV set, as "
                          "7TV records it. The channel's own Twitch emotes "
-                         "are the streamer's.");
+                         "are the streamer's. Corrections go in "
+                         "Misc/EmoteStats/added-by.json.");
         table->horizontalHeaderItem(ColShare)->setToolTip(
             "Share of all chat messages in this range that used it");
         table->verticalHeader()->hide();
@@ -970,6 +985,50 @@ EmoteStatsDialog::Range EmoteStatsDialog::currentRange() const
     }
 }
 
+void EmoteStatsDialog::loadAddedByEdits()
+{
+    const auto path = addedByEditsFile();
+    if (path.isEmpty())
+    {
+        return;
+    }
+    QJsonObject obj;
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly))
+    {
+        QJsonParseError error{};
+        const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
+        if (error.error != QJsonParseError::NoError || !doc.isObject())
+        {
+            // a typo while editing: keep what was read before
+            return;
+        }
+        obj = doc.object();
+    }
+    else if (!file.exists())
+    {
+        obj = defaultAddedByEdits();
+        QDir().mkpath(QFileInfo(path).path());
+        QSaveFile out(path);
+        if (out.open(QIODevice::WriteOnly))
+        {
+            out.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+            out.commit();
+        }
+    }
+    else
+    {
+        return;
+    }
+    this->unknownAdder_ = obj.value(u"unknown").toString();
+    this->adderEdits_.clear();
+    const auto emotes = obj.value(u"emotes").toObject();
+    for (auto it = emotes.begin(); it != emotes.end(); ++it)
+    {
+        this->adderEdits_.insert(it.key().toLower(), it.value().toString());
+    }
+}
+
 void EmoteStatsDialog::reload()
 {
     if (this->loading_)
@@ -977,6 +1036,8 @@ void EmoteStatsDialog::reload()
         this->reloadAgain_ = true;
         return;
     }
+    // added-by.json may have been edited since
+    this->loadAddedByEdits();
     this->loading_ = true;
     this->range_ = this->currentRange();
 
@@ -1375,18 +1436,19 @@ void EmoteStatsDialog::fillTable()
         table->setItem(r, ColEmote, emote);
         auto *addedBy = new SortItem;
         addedBy->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        if (row.source == Source::SevenTv)
+        auto edited = this->adderEdits_.constFind(row.name.toLower());
+        if (edited != this->adderEdits_.constEnd())
         {
-            // Phil added the emotes 7TV has no adder for: the old ones it
-            // never recorded and the ones of a deleted 7TV account
+            addedBy->setText(*edited);
+        }
+        else if (row.source == Source::SevenTv)
+        {
+            // 7TV has no adder for the old emotes it never recorded and for
+            // the ones of a deleted 7TV account
             auto actor = this->addedBy_.constFind(row.name);
-            if (addedByAcri(row.name))
+            if (actor != this->addedBy_.constEnd() && actor->isEmpty())
             {
-                addedBy->setText(UNKNOWN_ADDER.toString());
-            }
-            else if (actor != this->addedBy_.constEnd() && actor->isEmpty())
-            {
-                addedBy->setText(UNKNOWN_ADDER.toString());
+                addedBy->setText(this->unknownAdder_);
                 addedBy->setToolTip("7TV has no record of who added this "
                                     "emote");
             }
@@ -1395,7 +1457,7 @@ void EmoteStatsDialog::fillTable()
                 auto name = this->seventvUsers_.constFind(*actor);
                 if (name != this->seventvUsers_.constEnd() && name->isEmpty())
                 {
-                    addedBy->setText(UNKNOWN_ADDER.toString());
+                    addedBy->setText(this->unknownAdder_);
                     addedBy->setToolTip("The 7TV account that added this "
                                         "emote no longer exists");
                 }
