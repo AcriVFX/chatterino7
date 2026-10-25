@@ -176,16 +176,15 @@ bool appendWhisperMessageWordsLocally(const QStringList &words,
     b->flags.set(MessageFlag::Whisper);
     b->whisperPartner = targetLogin.toLower();
     const auto text = words.mid(2).join(' ');
-    // Chatterino9: the chat log writes messageText for lines without a
-    // loginName, so sent whispers keep their text there ("me -> them: text",
-    // the form WhisperHistory imports) instead of an empty line
-    b->messageText = QString("%1 -> %2: %3")
-                         .arg(app->getAccounts()
-                                  ->twitch.getCurrent()
-                                  ->getUserName()
-                                  .toLower(),
-                              b->whisperPartner, text);
-    b->searchText = b->messageText;
+    // Chatterino9: like received whispers, messageText is just the text, so
+    // the chat log keeps it (LoggingChannel adds "me -> them:")
+    b->messageText = text;
+    b->searchText = QString("%1 -> %2: %3")
+                        .arg(app->getAccounts()
+                                 ->twitch.getCurrent()
+                                 ->getUserName()
+                                 .toLower(),
+                             b->whisperPartner, text);
     auto messagexD = b.release();
 
     // Chatterino9: keep it for the Whispers window
