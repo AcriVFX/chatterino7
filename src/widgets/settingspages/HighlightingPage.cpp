@@ -20,6 +20,7 @@
 #include "widgets/dialogs/ColorPickerDialog.hpp"
 #include "widgets/helper/color/ColorItemDelegate.hpp"
 #include "widgets/helper/EditableModelView.hpp"
+#include "widgets/settingspages/HighlightCategoriesTab.hpp"
 
 #include <QFileDialog>
 #include <QHeaderView>
@@ -60,6 +61,13 @@ HighlightingPage::HighlightingPage()
         // TABS
         auto tabs = layout.emplace<QTabWidget>();
         {
+            // CATEGORIES: word lists, color and lane of labeled rules
+            auto *tabWidget = tabs.getElement();
+            tabWidget->addTab(new HighlightCategoriesTab([tabWidget] {
+                                  tabWidget->setCurrentIndex(1);
+                              }),
+                              "Categories");
+
             // HIGHLIGHTS
             auto highlights = tabs.appendTab(new QVBoxLayout, "Messages");
             {
