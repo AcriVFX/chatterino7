@@ -86,7 +86,7 @@ inline constexpr int COUNTING_PREVIOUS_NEEDED = 3;
 inline constexpr qint64 COUNTING_WINDOW_SECONDS = 10;
 inline constexpr qint64 COUNTING_GAP_SECONDS = 20;
 /// How far back a counting run is followed
-inline constexpr qint64 COUNTING_RUN_SECONDS = 5 * 60;
+inline constexpr qint64 COUNTING_RUN_SECONDS = 5 * 60LL;
 
 /// The number of a message that is just a number ("7", "12.", "#3"), or
 /// nullopt.
