@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFontMetrics>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -272,7 +273,8 @@ public:
     }
 };
 
-/// Draws the share bar in front of the moderator's name
+/// Draws the share bar in front of the moderator's name. Every row gets the
+/// same bar slot, so the names line up.
 class NameDelegate : public QStyledItemDelegate
 {
 public:
@@ -280,6 +282,12 @@ public:
         : QStyledItemDelegate(parent)
         , color_(color)
     {
+    }
+
+    /// Width of the widest name in the table, set whenever it is filled
+    void setNameWidth(int width)
+    {
+        this->nameWidth_ = width;
     }
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
@@ -293,9 +301,8 @@ public:
             painter->fillRect(option.rect, option.palette.highlight());
         }
         // the name always wins: in a narrow window the bar shrinks first and
-        // disappears before the name gets cut off
-        const auto textWidth =
-            option.fontMetrics.horizontalAdvance(index.data().toString()) + 12;
+        // disappears before the widest name gets cut off
+        const auto textWidth = this->nameWidth_ + 12;
         const int barMax =
             std::clamp(option.rect.width() - textWidth - 14, 0, barMaxWidth);
         const int barSlot = barMax >= minBarWidth ? barMax + 8 : 0;
@@ -324,6 +331,7 @@ public:
 
 private:
     QColor color_;
+    int nameWidth_ = 0;
 };
 
 }  // namespace
@@ -1924,6 +1932,20 @@ void ModActivityDialog::fillTable(QTableWidget *table,
     for (const auto &row : rows)
     {
         maxTotal = std::max(maxTotal, row.total);
+    }
+
+    if (auto *delegate =
+            dynamic_cast<NameDelegate *>(table->itemDelegateForColumn(ColName)))
+    {
+        auto bold = table->font();
+        bold.setBold(true);
+        const QFontMetrics metrics(bold);
+        int widest = 0;
+        for (const auto &row : rows)
+        {
+            widest = std::max(widest, metrics.horizontalAdvance(row.name));
+        }
+        delegate->setNameWidth(widest);
     }
 
     auto sortColumn = table->horizontalHeader()->sortIndicatorSection();
