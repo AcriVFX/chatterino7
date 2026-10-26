@@ -165,15 +165,19 @@ bool pingsUser(const Message &message, const QString &login)
 ///   "Frag nooreax ..."): the same user sent REQUEST_PREVIOUS_NEEDED
 ///   variants of a message aimed at the streamer in the last
 ///   REQUEST_WINDOW_SECONDS, request words ignored
+/// - counting spam ("1", "2", "3", "4" ...): the same user counted up or down
+///   COUNTING_PREVIOUS_NEEDED numbers before this one, 4 in a row within
+///   COUNTING_WINDOW_SECONDS. `countingFrom` is set to the first number.
 /// Returns how many of these messages the user sent (this one included),
 /// or 0 if it is not a repeat. `spanSeconds` is set to the time between
 /// the oldest counted message and this one.
 /// `pending` are messages built before this one that are not in the
 /// channel yet (the recent messages loaded on join), or null.
 int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
-                 const Message &message, qint64 &spanSeconds)
+                 const Message &message, qint64 &spanSeconds, int &countingFrom)
 {
     spanSeconds = 0;
+    countingFrom = -1;
     if (!message.serverReceivedTime.isValid() ||
         message.messageText.startsWith('!'))
     {
@@ -188,7 +192,9 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     {
         shortKey = modhelpers::shortSpamKey(words);
     }
-    if (key.isEmpty() && shortKey.isEmpty() && variantTokens.isEmpty())
+    const auto number = modhelpers::countingNumber(message.messageText);
+    if (key.isEmpty() && shortKey.isEmpty() && variantTokens.isEmpty() &&
+        !number)
     {
         return 0;
     }
@@ -212,6 +218,10 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     {
         window = std::max(window, modhelpers::REQUEST_WINDOW_SECONDS);
     }
+    if (number)
+    {
+        window = std::max(window, modhelpers::COUNTING_RUN_SECONDS);
+    }
     if (!shortKey.isEmpty())
     {
         window = std::max({window, modhelpers::SHORT_SPAM_WINDOW_SECONDS,
@@ -231,6 +241,12 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     qint64 previousTotalSpan = 0;
     int others = 0;
     bool othersRecently = false;
+    // counting run, newest first: ages of its numbers, the last number found
+    // and the step between two numbers (+1 counting up, -1 counting down)
+    std::vector<qint64> countingAges{0};
+    int countingLast = number.value_or(0);
+    int countingStep = 0;
+    bool countingOpen = number.has_value();
     // returns false once `prev` is too old to matter
     auto visit = [&](const MessagePtr &prev) -> bool {
         auto age =
@@ -252,6 +268,25 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
             return true;
         }
         const bool sameUser = prev->loginName == message.loginName;
+        if (sameUser && countingOpen)
+        {
+            const auto prevNumber =
+                modhelpers::countingNumber(prev->messageText);
+            const auto step = prevNumber ? countingLast - *prevNumber : 0;
+            if (prevNumber && (step == 1 || step == -1) &&
+                (countingStep == 0 || step == countingStep) &&
+                age - countingAges.back() <= modhelpers::COUNTING_GAP_SECONDS)
+            {
+                countingAges.push_back(age);
+                countingLast = *prevNumber;
+                countingStep = step;
+            }
+            else
+            {
+                // anything else from them ends the run
+                countingOpen = false;
+            }
+        }
         if ((sameUser && prev->messageText.startsWith('!')) ||
             (!sameUser && shortKey.isEmpty()))
         {
@@ -374,6 +409,28 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     if (repeats >= modhelpers::REPEAT_PREVIOUS_NEEDED)
     {
         take(repeats, repeatsSpan);
+    }
+    // counting: 4 numbers in a row of the run within COUNTING_WINDOW_SECONDS
+    // (once a run got that fast, the rest of it counts too)
+    const auto counted = static_cast<int>(countingAges.size()) - 1;
+    if (counted >= modhelpers::COUNTING_PREVIOUS_NEEDED)
+    {
+        const auto need =
+            static_cast<size_t>(modhelpers::COUNTING_PREVIOUS_NEEDED);
+        for (size_t i = 0; i + need < countingAges.size(); i++)
+        {
+            if (countingAges[i + need] - countingAges[i] <=
+                modhelpers::COUNTING_WINDOW_SECONDS)
+            {
+                const auto before = count;
+                take(counted, countingAges.back());
+                if (count != before)
+                {
+                    countingFrom = countingLast;
+                }
+                break;
+            }
+        }
     }
     if (!shortKey.isEmpty())
     {
@@ -2161,9 +2218,12 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         !getSettings()->isBlacklistedUser(builder->loginName))
     {
         qint64 span = 0;
-        builder->repeatCount = countRepeats(channel, args.pendingMessages,
-                                            builder.message(), span);
+        int countingFrom = -1;
+        builder->repeatCount =
+            countRepeats(channel, args.pendingMessages, builder.message(), span,
+                         countingFrom);
         builder->repeatSeconds = span;
+        builder->repeatCountingFrom = countingFrom;
     }
     if (builder->repeatCount > 0)
     {

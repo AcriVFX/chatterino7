@@ -1295,8 +1295,19 @@ void UserInfoPopup::updateSpamNow()
                modhelpers::formatAgo(latest->serverReceivedTime, now) + u": "_s;
     }
 
-    label->setText(when % QString::number(latest->repeatCount) %
-                   u" variants of “" % quote % u"” in " % span);
+    const auto countedTo = modhelpers::countingNumber(latest->messageText);
+    if (latest->repeatCountingFrom >= 0 && countedTo)
+    {
+        // counting spam: "counted 1 to 14 in 36s"
+        label->setText(when % u"counted " %
+                       QString::number(latest->repeatCountingFrom) % u" to " %
+                       QString::number(*countedTo) % u" in " % span);
+    }
+    else
+    {
+        label->setText(when % QString::number(latest->repeatCount) %
+                       u" variants of “" % quote % u"” in " % span);
+    }
     label->setToolTip(u"Similar messages this user sent in a row "
                       u"(same rule as the teal REPEAT highlight)"_s);
     label->setMouseTracking(true);

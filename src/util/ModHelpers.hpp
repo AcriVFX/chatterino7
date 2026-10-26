@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
 #include <vector>
 
 /// Small helpers for moderators: repeated message detection and a
@@ -74,6 +75,22 @@ bool startsWithRequest(const QString &text);
 /// variantTokens without the request words ("sag", "frag", "mach", "mal",
 /// ...), so "Sag nooreax ..." and "Frag nooreax ..." compare by what is asked.
 QStringList requestTokens(const QStringList &variantTokens);
+
+/// Counting spam ("1", "2", "3", "4" ... or "10", "9", "8", "7" ...): the same
+/// user sent COUNTING_PREVIOUS_NEEDED numbers before this one, each 1 up (or
+/// each 1 down) from the one before, and 4 of them in a row came within
+/// COUNTING_WINDOW_SECONDS. Anything else from that user, or a pause of more
+/// than COUNTING_GAP_SECONDS, ends the run. Counting along with the streamer's
+/// tries every 10 to 20 seconds stays plain.
+inline constexpr int COUNTING_PREVIOUS_NEEDED = 3;
+inline constexpr qint64 COUNTING_WINDOW_SECONDS = 10;
+inline constexpr qint64 COUNTING_GAP_SECONDS = 20;
+/// How far back a counting run is followed
+inline constexpr qint64 COUNTING_RUN_SECONDS = 5 * 60;
+
+/// The number of a message that is just a number ("7", "12.", "#3"), or
+/// nullopt.
+std::optional<int> countingNumber(const QString &text);
 
 /// A message colored by a SPAM highlight rule that is shorter than
 /// SPAM_WALL_LENGTH ("67", emote walls, long emote names) only keeps the

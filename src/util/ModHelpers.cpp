@@ -79,6 +79,19 @@ QString shortSpamKey(const QStringList &textWords)
     return key;
 }
 
+std::optional<int> countingNumber(const QString &text)
+{
+    static const QRegularExpression number(
+        R"(^[^\p{L}\p{N}]{0,2}([0-9]{1,4})[^\p{L}\p{N}]{0,4}$)",
+        QRegularExpression::UseUnicodePropertiesOption);
+    auto match = number.match(text.trimmed());
+    if (!match.hasMatch())
+    {
+        return std::nullopt;
+    }
+    return match.captured(1).toInt();
+}
+
 bool isSameRepeatKey(const QString &a, const QString &b)
 {
     if (a == b)
