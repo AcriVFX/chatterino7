@@ -302,13 +302,17 @@ TEST(HighlightCategories, LaneFilters)
     // lane filters as the settings have them, wrapped in parens
     QString urgent =
         R"(({"BAN", "INSULT", "HATE", "ME"} contains message.highlight_tag) && !(author.name == "fossabot") && !(author.name == "TitleChange_Bot"))";
-    EXPECT_EQ(*laneTags(urgent), QStringList({"BAN", "INSULT", "HATE", "ME"}));
+    auto urgentTags = laneTags(urgent);
+    ASSERT_TRUE(urgentTags.has_value());
+    EXPECT_EQ(*urgentTags, QStringList({"BAN", "INSULT", "HATE", "ME"}));
     EXPECT_EQ(
         withLaneTag(urgent, "SPAM", true),
         R"(({"BAN", "INSULT", "HATE", "ME", "SPAM"} contains message.highlight_tag) && !(author.name == "fossabot") && !(author.name == "TitleChange_Bot"))");
     QString wrappedFyi =
         R"(( {"LINK", "SPAM"} contains message.highlight_tag || (flags.first_message && !flags.highlighted)) && !(author.name == "fossabot"))";
-    EXPECT_EQ(*laneTags(wrappedFyi), QStringList({"LINK", "SPAM"}));
+    auto fyiTags = laneTags(wrappedFyi);
+    ASSERT_TRUE(fyiTags.has_value());
+    EXPECT_EQ(*fyiTags, QStringList({"LINK", "SPAM"}));
     EXPECT_EQ(
         withLaneTag(wrappedFyi, "SPAM", false),
         R"(( {"LINK"} contains message.highlight_tag || (flags.first_message && !flags.highlighted)) && !(author.name == "fossabot"))");
