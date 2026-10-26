@@ -298,4 +298,22 @@ TEST(HighlightCategories, LaneFilters)
               R"({"NONE"} contains message.highlight_tag)");
     EXPECT_EQ(withLaneTag(withLaneTag(one, "ME", false), "BAN", true),
               R"({"BAN"} contains message.highlight_tag)");
+
+    // lane filters as the settings have them, wrapped in parens
+    QString urgent =
+        R"(({"BAN", "INSULT", "HATE", "ME"} contains message.highlight_tag) && !(author.name == "fossabot") && !(author.name == "TitleChange_Bot"))";
+    EXPECT_EQ(laneTags(urgent),
+              std::optional<QStringList>({"BAN", "INSULT", "HATE", "ME"}));
+    EXPECT_EQ(
+        withLaneTag(urgent, "SPAM", true),
+        R"(({"BAN", "INSULT", "HATE", "ME", "SPAM"} contains message.highlight_tag) && !(author.name == "fossabot") && !(author.name == "TitleChange_Bot"))");
+    QString wrappedFyi =
+        R"(( {"LINK", "SPAM"} contains message.highlight_tag || (flags.first_message && !flags.highlighted)) && !(author.name == "fossabot"))";
+    EXPECT_EQ(laneTags(wrappedFyi),
+              std::optional<QStringList>({"LINK", "SPAM"}));
+    EXPECT_EQ(
+        withLaneTag(wrappedFyi, "SPAM", false),
+        R"(( {"LINK"} contains message.highlight_tag || (flags.first_message && !flags.highlighted)) && !(author.name == "fossabot"))");
+    EXPECT_FALSE(laneTags(
+        R"((!({"BAN"} contains message.highlight_tag)) && flags.highlighted)"));
 }

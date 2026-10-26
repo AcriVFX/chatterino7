@@ -11,6 +11,7 @@
 #include "widgets/helper/color/Checkerboard.hpp"
 #include "widgets/helper/color/ColorItemDelegate.hpp"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -108,9 +109,13 @@ public:
             QStyledItemDelegate::paint(painter, option, index);
             return;
         }
+        // the base paint would fill the text in again, so draw the
+        // background and selection without it
         QStyleOptionViewItem opt = option;
+        this->initStyleOption(&opt, index);
         opt.text.clear();
-        QStyledItemDelegate::paint(painter, opt, index);
+        auto *style = opt.widget ? opt.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
 
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
