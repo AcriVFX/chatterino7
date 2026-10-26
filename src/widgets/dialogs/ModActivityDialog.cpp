@@ -66,6 +66,8 @@ constexpr qint64 LIVE_WINDOW_MS = 12 * MINUTE_MS;
 constexpr int SHARE_ROLE = Qt::UserRole + 1;
 constexpr int SORT_ROLE = Qt::UserRole;
 constexpr int NAME_ROLE = Qt::UserRole + 2;
+/// Width of the widest name in the table, the same on every name cell
+constexpr int NAME_WIDTH_ROLE = Qt::UserRole + 3;
 
 const QColor &windowColor()
 {
@@ -284,12 +286,6 @@ public:
     {
     }
 
-    /// Width of the widest name in the table, set whenever it is filled
-    void setNameWidth(int width)
-    {
-        this->nameWidth_ = width;
-    }
-
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override
     {
@@ -302,7 +298,7 @@ public:
         }
         // the name always wins: in a narrow window the bar shrinks first and
         // disappears before the widest name gets cut off
-        const auto textWidth = this->nameWidth_ + 12;
+        const auto textWidth = index.data(NAME_WIDTH_ROLE).toInt() + 12;
         const int barMax =
             std::clamp(option.rect.width() - textWidth - 14, 0, barMaxWidth);
         const int barSlot = barMax >= minBarWidth ? barMax + 8 : 0;
@@ -331,7 +327,6 @@ public:
 
 private:
     QColor color_;
-    int nameWidth_ = 0;
 };
 
 }  // namespace
@@ -1934,18 +1929,17 @@ void ModActivityDialog::fillTable(QTableWidget *table,
         maxTotal = std::max(maxTotal, row.total);
     }
 
-    if (auto *delegate =
-            dynamic_cast<NameDelegate *>(table->itemDelegateForColumn(ColName)))
+    // every row gets the same bar slot, so the names line up
+    int nameWidth = 0;
     {
         auto bold = table->font();
         bold.setBold(true);
         const QFontMetrics metrics(bold);
-        int widest = 0;
         for (const auto &row : rows)
         {
-            widest = std::max(widest, metrics.horizontalAdvance(row.name));
+            nameWidth =
+                std::max(nameWidth, metrics.horizontalAdvance(row.name));
         }
-        delegate->setNameWidth(widest);
     }
 
     auto sortColumn = table->horizontalHeader()->sortIndicatorSection();
@@ -1971,6 +1965,7 @@ void ModActivityDialog::fillTable(QTableWidget *table,
 
         auto *name = new SortItem(row.name);
         name->setData(NAME_ROLE, row.name);
+        name->setData(NAME_WIDTH_ROLE, nameWidth);
         name->setData(SHARE_ROLE,
                       idle ? 0.0 : static_cast<double>(row.total) / maxTotal);
         auto nameColor = bot ? botColor() : textColor();
