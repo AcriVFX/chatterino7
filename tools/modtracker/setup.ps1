@@ -8,6 +8,10 @@
 #                         Emote stats are kept.
 #   .\setup.ps1 update    copies new service files and rebuilds and restarts
 #                         the counter. Keeps its sign-in and its data.
+#   .\setup.ps1 tunnel    moves the Cloudflare tunnel container to the
+#                         cloudflared version in compose.yaml here. Only the
+#                         tunnel restarts; the counter, its data, sign-in and
+#                         secrets stay as they are.
 #   .\setup.ps1 signin    restarts the counter so it shows a new Twitch
 #                         sign-in code. Keeps its data.
 #   .\setup.ps1 stop      pauses counting and clears the mod actions the
@@ -24,7 +28,7 @@
 
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('install', 'start', 'update', 'signin', 'stop', 'status', 'check')]
+    [ValidateSet('install', 'start', 'update', 'tunnel', 'signin', 'stop', 'status', 'check')]
     [string]$Step
 )
 
@@ -298,6 +302,72 @@ echo "Updated. Waiting for the counter..."
     $code = Invoke-Remote $target $script
     if ($code -eq 0) { Resume-AppConfig }
     Show-StartResult $code
+}
+
+if ($Step -eq 'tunnel') {
+    $target = Get-SshTarget
+    $compose = Join-Path $here 'compose.yaml'
+    if (-not (Test-Path $compose)) { Stop-Setup 'compose.yaml is missing next to this script.' }
+    $image = Select-String -Path $compose -Pattern 'cloudflare/cloudflared:[0-9.]+' | Select-Object -First 1
+    if (-not $image) { Stop-Setup 'compose.yaml here names no cloudflared version.' }
+    $image = $image.Matches[0].Value
+    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($compose)) -replace '(.{76})', "`$1`n"
+    Confirm-Step @"
+This connects once to $target and, in ~/apps/modtracker only:
+  - stops without changing anything if the compose.yaml there differs from
+    the one here in more than the cloudflared version
+  - downloads $image
+  - restarts only the tunnel container with it (mods.acri.fyi is gone for
+    a few seconds) and waits until it is connected to Cloudflare again
+  - goes back to the old version by itself if it does not connect
+The counter keeps running. Its counts, Twitch sign-in, tunnel token and
+keys stay as they are.
+"@
+    $script = @"
+set -eu
+APP=`$HOME/apps/modtracker
+[ -f "`$APP/tunnel.env" ] || { echo "STOP: `$APP is not set up, run install first"; exit 10; }
+cd "`$APP"
+base64 -d > compose.yaml.new <<'B64'
+$b64
+B64
+tr -d '\r' < compose.yaml.new > compose.yaml.tmp && mv compose.yaml.tmp compose.yaml.new
+if ! diff <(grep -v 'cloudflare/cloudflared:' compose.yaml) <(grep -v 'cloudflare/cloudflared:' compose.yaml.new) > /dev/null; then
+  rm compose.yaml.new
+  echo "STOP: compose.yaml on the server differs in more than the cloudflared version. Nothing was changed."
+  exit 11
+fi
+echo "Running now: `$(docker inspect -f '{{.Config.Image}}' modtracker-tunnel)"
+docker pull $image
+cp -p compose.yaml compose.yaml.before-tunnel-update
+mv compose.yaml.new compose.yaml
+chmod 644 compose.yaml
+since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
+docker compose up -d --no-deps tunnel || true
+for i in `$(seq 1 18); do
+  sleep 5
+  out=`$(docker compose logs --since "`$since" --no-log-prefix tunnel 2>&1)
+  case "`$out" in *"Registered tunnel connection"*)
+    printf '%s\n' "`$out" | grep -m1 -E 'Version|version=' || true
+    echo "Running now: `$(docker inspect -f '{{.Config.Image}}' modtracker-tunnel)"
+    echo "DONE"
+    exit 0 ;;
+  esac
+done
+printf '%s\n' "`$out" | tail -n 20
+echo "The new tunnel did not connect within 90 seconds, going back to the old version."
+mv compose.yaml.before-tunnel-update compose.yaml
+docker compose up -d --no-deps tunnel || true
+exit 22
+"@
+    $code = Invoke-Remote $target $script
+    if ($code -eq 255) { Stop-Setup 'SSH could not log in. Not retrying.' }
+    if ($code -eq 11) { Stop-Setup 'compose.yaml here does not match the server. Send these lines to Claude.' }
+    if ($code -eq 22) { Stop-Setup 'The new tunnel did not connect, the old version runs again. Send the lines above to Claude.' }
+    if ($code -ne 0) { Stop-Setup "The server stopped this step (code $code)." }
+    Write-Host ''
+    Write-Host "The tunnel runs $image and is connected." -ForegroundColor Green
+    exit 0
 }
 
 if ($Step -eq 'signin') {
