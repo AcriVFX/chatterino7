@@ -565,8 +565,9 @@ namespace {
 
 const QRegularExpression &laneRegex()
 {
+    // the set may sit inside opening parens, "!(" doesn't count
     static const QRegularExpression re(
-        R"(^\s*(\{[^{}]*\})(\s*contains\s+message\.highlight_tag\b))");
+        R"(^\s*(?:\(\s*)*(\{[^{}]*\})(\s*contains\s+message\.highlight_tag\b))");
     return re;
 }
 
