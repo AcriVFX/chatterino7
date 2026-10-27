@@ -101,6 +101,18 @@ std::optional<int> countingNumber(const QString &text);
 inline constexpr int SPAM_WALL_LENGTH = 200;
 inline constexpr qint64 SPAM_SECOND_WINDOW_SECONDS = 120;
 
+/// OOOO / WWWW ("OOOO", "wwwww"): the whole chat cheering is not spam. Such a
+/// SPAM message stays plain when OW_OTHERS_NEEDED other chatters sent one
+/// within OW_OTHERS_SECONDS before it, so only one user spamming it alone
+/// keeps the color (papaplatte's logs: 33 rows a day -> 6).
+inline constexpr int OW_OTHERS_NEEDED = 2;
+inline constexpr qint64 OW_OTHERS_SECONDS = 30;
+
+/// Is the message only one letter O or W, 4 or more times ("OOOO", "Wwwww")?
+/// Spaces and invisible characters (the " \u034f" duplicate-message suffix)
+/// are ignored.
+bool isOwSpam(const QString &text);
+
 /// Words of a message for variant detection: letters/digits only, lowercase,
 /// repeated characters collapsed ("TEMPELLLL" -> "tempel"), without mentions,
 /// words shorter than 3 characters and duplicates.

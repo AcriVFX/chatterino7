@@ -79,6 +79,29 @@ QString shortSpamKey(const QStringList &textWords)
     return key;
 }
 
+bool isOwSpam(const QString &text)
+{
+    char32_t letter = 0;
+    int count = 0;
+    for (char32_t c : text.toUcs4())
+    {
+        const auto category = QChar::category(c);
+        if (QChar::isSpace(c) || category == QChar::Mark_NonSpacing ||
+            category == QChar::Other_Format)
+        {
+            continue;
+        }
+        c = QChar::toLower(c);
+        if ((c != U'o' && c != U'w') || (letter != 0 && c != letter))
+        {
+            return false;
+        }
+        letter = c;
+        count++;
+    }
+    return count >= 4;
+}
+
 std::optional<int> countingNumber(const QString &text)
 {
     static const QRegularExpression number(
