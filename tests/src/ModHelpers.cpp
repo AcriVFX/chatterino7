@@ -10,6 +10,7 @@
 using namespace chatterino;
 using namespace literals;
 using modhelpers::countingNumber;
+using modhelpers::isOooo;
 using modhelpers::readLogTimeouts;
 
 namespace {
@@ -111,4 +112,20 @@ TEST(ModHelpers, CountingNumber)
     EXPECT_FALSE(countingNumber(u"3 Kappa"_s));
     EXPECT_FALSE(countingNumber(u"12345"_s));
     EXPECT_FALSE(countingNumber(u"W"_s));
+}
+
+TEST(ModHelpers, Oooo)
+{
+    EXPECT_TRUE(isOooo(u"OOOO"_s));
+    EXPECT_TRUE(isOooo(u"Oooooo"_s));
+    EXPECT_TRUE(isOooo(u" oooooooooooo "_s));
+    EXPECT_TRUE(isOooo(u"OOOO OOOO"_s));
+    // duplicate-message suffixes
+    EXPECT_TRUE(isOooo(u"OOOO \u034f"_s));
+    EXPECT_TRUE(isOooo(u"OOOO \U000E0000"_s));
+    EXPECT_FALSE(isOooo(u"OOO"_s));
+    EXPECT_FALSE(isOooo(u"WWWW"_s));
+    EXPECT_FALSE(isOooo(u"OOOO oha"_s));
+    EXPECT_FALSE(isOooo(u"WOOOOW"_s));
+    EXPECT_FALSE(isOooo(u""_s));
 }
