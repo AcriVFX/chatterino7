@@ -208,3 +208,108 @@ TEST(EmoteStats, ImportsChatLogs)
     ASSERT_NE(kappa, nullptr);
     EXPECT_EQ(kappa->messages, 1);
 }
+
+TEST(EmoteStats, CountsPerChatter)
+{
+    MockApplication app;
+
+    emotestats::recordMessage(
+        "statsuser", "a", "UserOne", timeAt(18, 0),
+        {{Source::SevenTv, "omE"}, {Source::Twitch, "Kappa"}});
+    emotestats::recordMessage("statsuser", "b", "userone", timeAt(18, 2),
+                              {{Source::SevenTv, "omE"}});
+    emotestats::recordMessage("statsuser", "c", "userone", timeAt(18, 3), {});
+    emotestats::recordMessage("statsuser", "d", "useronetwo", timeAt(18, 4),
+                              {{Source::SevenTv, "omE"}});
+    emotestats::flush();
+
+    // the server counted more of the same hour; a bare name is from before
+    // chatters were counted and says nothing about how many
+    writeFile(QDir(app.paths_.miscDirectory)
+                  .filePath("EmoteStats/statsuser/server/2026-10-13.tsv"),
+              "18\t*\t*\t20\tuserone:4,useronetwo:1\n"
+              // a line written on Windows
+              "18\tany\t+\t10\tuseronetwo:1,userone:2\r\n"
+              "18\t7tv\tomE\t9\tuseronetwo:1,userone:2\n"
+              "19\tbttv\tClap\t3\tuserone\n");
+
+    auto stats =
+        emotestats::loadUser("statsuser", "UserOne", at(0, 0), at(23, 0));
+    EXPECT_EQ(stats.totalMessages, 4);
+    EXPECT_EQ(stats.emoteMessages, 2);
+    ASSERT_EQ(stats.rows.size(), 2);
+    const auto *ome = findRow(stats, Source::SevenTv, "omE");
+    ASSERT_NE(ome, nullptr);
+    EXPECT_EQ(ome->messages, 2);
+    const auto *kappa = findRow(stats, Source::Twitch, "Kappa");
+    ASSERT_NE(kappa, nullptr);
+    EXPECT_EQ(kappa->messages, 1);
+
+    // everyone: the "any" line is not a chat message of its own
+    auto all = emotestats::load("statsuser", at(0, 0), at(23, 0));
+    EXPECT_EQ(all.totalMessages, 20);
+    EXPECT_EQ(all.emoteMessages, 10);
+    EXPECT_EQ(findRow(all, Source::SevenTv, "omE")->chatters, 2);
+
+    // a cache shared by both views gives the same numbers
+    auto cache = emotestats::makeLoadCache();
+    for (int i = 0; i < 2; i++)
+    {
+        auto cached = emotestats::loadUser("statsuser", "userone", at(0, 0),
+                                           at(23, 0), cache.get());
+        EXPECT_EQ(cached.totalMessages, 4);
+        EXPECT_EQ(cached.emoteMessages, 2);
+        EXPECT_EQ(cached.rows.size(), 2);
+        all = emotestats::load("statsuser", at(0, 0), at(23, 0), cache.get());
+        EXPECT_EQ(all.totalMessages, 20);
+    }
+
+    // outside the range
+    stats = emotestats::loadUser("statsuser", "userone", at(19, 0), at(23, 0));
+    EXPECT_EQ(stats.totalMessages, 0);
+    EXPECT_TRUE(stats.rows.empty());
+}
+
+TEST(EmoteStats, ImportsChatLogsAgainForChatters)
+{
+    MockApplication app;
+
+    const auto root =
+        QDir(app.paths_.miscDirectory).filePath("EmoteStats/statsagain");
+    const auto logDir = QDir(app.settingsDir.path())
+                            .filePath("Logs/Twitch/Channels/statsagain");
+    writeFile(QDir(logDir).filePath("statsagain-2026-10-13.log"),
+              "[18:00:01] userone: PepeHands omE\n"
+              "[18:00:02] userone: omE\n");
+    // an import from before chatters were counted, which still knew
+    // PepeHands (removed from the channel since)
+    writeFile(QDir(root).filePath("import.json"), R"({"files":1})");
+    writeFile(QDir(root).filePath("logs/2026-10-13.tsv"),
+              "16\t7tv\tPepeHands\t1\tuserone\n");
+
+    ASSERT_FALSE(emotestats::logsImported("statsagain"));
+    emotestats::ImportNames names;
+    names.seventvChannel = {"omE"};
+    emotestats::importLogs("statsagain", logDir, names);
+
+    QElapsedTimer timer;
+    timer.start();
+    while ((emotestats::importRunning("statsagain") ||
+            !emotestats::logsImported("statsagain")) &&
+           timer.elapsed() < 10000)
+    {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_TRUE(emotestats::logsImported("statsagain"));
+
+    auto stats = emotestats::loadUser("statsagain", "userone", 0,
+                                      at(23, 0) + (7LL * 24 * 3600000));
+    EXPECT_EQ(stats.totalMessages, 2);
+    EXPECT_EQ(stats.emoteMessages, 2);
+    const auto *ome = findRow(stats, Source::SevenTv, "omE");
+    ASSERT_NE(ome, nullptr);
+    EXPECT_EQ(ome->messages, 2);
+    const auto *pepe = findRow(stats, Source::SevenTv, "PepeHands");
+    ASSERT_NE(pepe, nullptr);
+    EXPECT_EQ(pepe->messages, 1);
+}

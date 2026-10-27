@@ -14,6 +14,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/NetworkResult.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ChatterSet.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/HighlightPhrase.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/HighlightCategories.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/Emojis.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/EmoteStats.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ModHelpers.cpp

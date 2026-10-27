@@ -79,6 +79,42 @@ QString shortSpamKey(const QStringList &textWords)
     return key;
 }
 
+bool isOooo(const QString &text)
+{
+    int count = 0;
+    const auto codePoints = text.toUcs4();
+    for (char32_t c : codePoints)
+    {
+        const auto category = QChar::category(c);
+        // U+E0000 (7TV's duplicate-message suffix) is unassigned, so the
+        // whole tag block is skipped, not just Other_Format
+        if (QChar::isSpace(c) || category == QChar::Mark_NonSpacing ||
+            category == QChar::Other_Format || (c >= 0xE0000 && c <= 0xE007F))
+        {
+            continue;
+        }
+        if (c != U'o' && c != U'O')
+        {
+            return false;
+        }
+        count++;
+    }
+    return count >= 4;
+}
+
+std::optional<int> countingNumber(const QString &text)
+{
+    static const QRegularExpression number(
+        R"(^[^\p{L}\p{N}]{0,2}([0-9]{1,4})[^\p{L}\p{N}]{0,4}$)",
+        QRegularExpression::UseUnicodePropertiesOption);
+    auto match = number.match(text.trimmed());
+    if (!match.hasMatch())
+    {
+        return std::nullopt;
+    }
+    return match.captured(1).toInt();
+}
+
 bool isSameRepeatKey(const QString &a, const QString &b)
 {
     if (a == b)

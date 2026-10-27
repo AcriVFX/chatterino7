@@ -28,7 +28,7 @@ services:
 
   tunnel:
     <<: *hardening
-    image: cloudflare/cloudflared:2026.9.3
+    image: cloudflare/cloudflared:2026.10.4
     container_name: modtracker-tunnel
     command: tunnel --no-autoupdate run
     env_file: tunnel.env

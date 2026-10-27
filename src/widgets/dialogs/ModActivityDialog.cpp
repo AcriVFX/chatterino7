@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFontMetrics>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -65,6 +66,8 @@ constexpr qint64 LIVE_WINDOW_MS = 12 * MINUTE_MS;
 constexpr int SHARE_ROLE = Qt::UserRole + 1;
 constexpr int SORT_ROLE = Qt::UserRole;
 constexpr int NAME_ROLE = Qt::UserRole + 2;
+/// Width of the widest name in the table, the same on every name cell
+constexpr int NAME_WIDTH_ROLE = Qt::UserRole + 3;
 
 const QColor &windowColor()
 {
@@ -272,7 +275,8 @@ public:
     }
 };
 
-/// Draws the share bar in front of the moderator's name
+/// Draws the share bar in front of the moderator's name. Every row gets the
+/// same bar slot, so the names line up.
 class NameDelegate : public QStyledItemDelegate
 {
 public:
@@ -293,9 +297,8 @@ public:
             painter->fillRect(option.rect, option.palette.highlight());
         }
         // the name always wins: in a narrow window the bar shrinks first and
-        // disappears before the name gets cut off
-        const auto textWidth =
-            option.fontMetrics.horizontalAdvance(index.data().toString()) + 12;
+        // disappears before the widest name gets cut off
+        const auto textWidth = index.data(NAME_WIDTH_ROLE).toInt() + 12;
         const int barMax =
             std::clamp(option.rect.width() - textWidth - 14, 0, barMaxWidth);
         const int barSlot = barMax >= minBarWidth ? barMax + 8 : 0;
@@ -1926,6 +1929,19 @@ void ModActivityDialog::fillTable(QTableWidget *table,
         maxTotal = std::max(maxTotal, row.total);
     }
 
+    // every row gets the same bar slot, so the names line up
+    int nameWidth = 0;
+    {
+        auto bold = table->font();
+        bold.setBold(true);
+        const QFontMetrics metrics(bold);
+        for (const auto &row : rows)
+        {
+            nameWidth =
+                std::max(nameWidth, metrics.horizontalAdvance(row.name));
+        }
+    }
+
     auto sortColumn = table->horizontalHeader()->sortIndicatorSection();
     auto sortOrder = table->horizontalHeader()->sortIndicatorOrder();
     table->setSortingEnabled(false);
@@ -1949,6 +1965,7 @@ void ModActivityDialog::fillTable(QTableWidget *table,
 
         auto *name = new SortItem(row.name);
         name->setData(NAME_ROLE, row.name);
+        name->setData(NAME_WIDTH_ROLE, nameWidth);
         name->setData(SHARE_ROLE,
                       idle ? 0.0 : static_cast<double>(row.total) / maxTotal);
         auto nameColor = bot ? botColor() : textColor();

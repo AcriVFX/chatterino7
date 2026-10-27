@@ -165,15 +165,19 @@ bool pingsUser(const Message &message, const QString &login)
 ///   "Frag nooreax ..."): the same user sent REQUEST_PREVIOUS_NEEDED
 ///   variants of a message aimed at the streamer in the last
 ///   REQUEST_WINDOW_SECONDS, request words ignored
+/// - counting spam ("1", "2", "3", "4" ...): the same user counted up or down
+///   COUNTING_PREVIOUS_NEEDED numbers before this one, 4 in a row within
+///   COUNTING_WINDOW_SECONDS. `countingFrom` is set to the first number.
 /// Returns how many of these messages the user sent (this one included),
 /// or 0 if it is not a repeat. `spanSeconds` is set to the time between
 /// the oldest counted message and this one.
 /// `pending` are messages built before this one that are not in the
 /// channel yet (the recent messages loaded on join), or null.
 int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
-                 const Message &message, qint64 &spanSeconds)
+                 const Message &message, qint64 &spanSeconds, int &countingFrom)
 {
     spanSeconds = 0;
+    countingFrom = -1;
     if (!message.serverReceivedTime.isValid() ||
         message.messageText.startsWith('!'))
     {
@@ -188,7 +192,9 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     {
         shortKey = modhelpers::shortSpamKey(words);
     }
-    if (key.isEmpty() && shortKey.isEmpty() && variantTokens.isEmpty())
+    const auto number = modhelpers::countingNumber(message.messageText);
+    if (key.isEmpty() && shortKey.isEmpty() && variantTokens.isEmpty() &&
+        !number)
     {
         return 0;
     }
@@ -218,6 +224,13 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
                            modhelpers::SHORT_SPAM_OTHERS_SECONDS,
                            modhelpers::HEAVY_SPAM_WINDOW_SECONDS});
     }
+    // a counting run is followed further back than the other checks look,
+    // but only through the user's own run (see visit)
+    const auto checksWindow = window;
+    if (number)
+    {
+        window = std::max(window, modhelpers::COUNTING_RUN_SECONDS);
+    }
 
     int repeats = 0;
     qint64 repeatsSpan = 0;
@@ -231,6 +244,12 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     qint64 previousTotalSpan = 0;
     int others = 0;
     bool othersRecently = false;
+    // counting run, newest first: ages of its numbers, the last number found
+    // and the step between two numbers (+1 counting up, -1 counting down)
+    std::vector<qint64> countingAges{0};
+    int countingLast = number.value_or(0);
+    int countingStep = 0;
+    bool countingOpen = number.has_value();
     // returns false once `prev` is too old to matter
     auto visit = [&](const MessagePtr &prev) -> bool {
         auto age =
@@ -252,6 +271,37 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
             return true;
         }
         const bool sameUser = prev->loginName == message.loginName;
+        if (countingOpen &&
+            age - countingAges.back() > modhelpers::COUNTING_GAP_SECONDS)
+        {
+            // they paused longer than a run allows
+            countingOpen = false;
+        }
+        if (sameUser && countingOpen)
+        {
+            const auto prevNumber =
+                modhelpers::countingNumber(prev->messageText);
+            const auto step = prevNumber ? countingLast - *prevNumber : 0;
+            if (prevNumber && (step == 1 || step == -1) &&
+                (countingStep == 0 || step == countingStep) &&
+                age - countingAges.back() <= modhelpers::COUNTING_GAP_SECONDS)
+            {
+                countingAges.push_back(age);
+                countingLast = *prevNumber;
+                countingStep = step;
+            }
+            else
+            {
+                // anything else from them ends the run
+                countingOpen = false;
+            }
+        }
+        if (age > checksWindow)
+        {
+            // only the counting run looks this far back: the other checks
+            // keep their own windows, and the scan ends with the run
+            return countingOpen;
+        }
         if ((sameUser && prev->messageText.startsWith('!')) ||
             (!sameUser && shortKey.isEmpty()))
         {
@@ -375,6 +425,28 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     {
         take(repeats, repeatsSpan);
     }
+    // counting: 4 numbers in a row of the run within COUNTING_WINDOW_SECONDS
+    // (once a run got that fast, the rest of it counts too)
+    const auto counted = static_cast<int>(countingAges.size()) - 1;
+    if (counted >= modhelpers::COUNTING_PREVIOUS_NEEDED)
+    {
+        const auto need =
+            static_cast<size_t>(modhelpers::COUNTING_PREVIOUS_NEEDED);
+        for (size_t i = 0; i + need < countingAges.size(); i++)
+        {
+            if (countingAges[i + need] - countingAges[i] <=
+                modhelpers::COUNTING_WINDOW_SECONDS)
+            {
+                const auto before = count;
+                take(counted, countingAges.back());
+                if (count != before)
+                {
+                    countingFrom = countingLast;
+                }
+                break;
+            }
+        }
+    }
     if (!shortKey.isEmpty())
     {
         if (!othersRecently &&
@@ -456,6 +528,61 @@ bool hasRecentSpam(Channel *channel, const std::vector<MessagePtr> *pending,
         }
     }
     return found;
+}
+
+/// Did OOOO_OTHERS_NEEDED other users send OOOO (see isOooo) within
+/// OOOO_OTHERS_SECONDS before this message? `pending` as in countRepeats.
+bool othersSendOooo(Channel *channel, const std::vector<MessagePtr> *pending,
+                    const Message &message)
+{
+    if (!message.serverReceivedTime.isValid())
+    {
+        return false;
+    }
+
+    QSet<QString> others;
+    // returns false once there is nothing more to look for
+    auto visit = [&](const MessagePtr &prev) -> bool {
+        auto age =
+            prev->serverReceivedTime.isValid()
+                ? prev->serverReceivedTime.secsTo(message.serverReceivedTime)
+                : 0;
+        if (age > modhelpers::OOOO_OTHERS_SECONDS)
+        {
+            return false;
+        }
+        if (age >= 0 && !prev->loginName.isEmpty() &&
+            prev->loginName != message.loginName &&
+            modhelpers::isOooo(prev->messageText))
+        {
+            others.insert(prev->loginName);
+        }
+        return others.size() < modhelpers::OOOO_OTHERS_NEEDED;
+    };
+    bool more = true;
+    if (pending != nullptr)
+    {
+        for (const auto &prev : *pending | std::views::reverse)
+        {
+            more = visit(prev);
+            if (!more)
+            {
+                break;
+            }
+        }
+    }
+    if (more)
+    {
+        auto snapshot = channel->getMessageSnapshot();
+        for (const auto &prev : snapshot | std::views::reverse)
+        {
+            if (!visit(prev))
+            {
+                break;
+            }
+        }
+    }
+    return others.size() >= modhelpers::OOOO_OTHERS_NEEDED;
 }
 
 const QString regexHelpString("(\\w+)[.,!?;:]*?$");
@@ -2129,6 +2256,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // spam ("67", emote walls) only keeps the SPAM color when the user sent
     // another spammy message shortly before. Spam of SPAM_WALL_LENGTH or more
     // characters and a lone "L" ("L", "L game") keep it right away.
+    // OOOO while other chatters send it too stays plain.
     if (builder->highlightTag == u"SPAM")
     {
         builder->spammy = true;
@@ -2136,7 +2264,10 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
             !isLoneL(builder->highlightMatch) && twitchChannel != nullptr &&
             !highlight.playSound && !highlight.windowAlert &&
             !builder->flags.has(MessageFlag::ShowInMentions) &&
-            !hasRecentSpam(channel, args.pendingMessages, builder.message()))
+            (!hasRecentSpam(channel, args.pendingMessages, builder.message()) ||
+             (modhelpers::isOooo(content) &&
+              othersSendOooo(channel, args.pendingMessages,
+                             builder.message()))))
         {
             builder->flags.unset(MessageFlag::Highlighted);
             builder->highlightColor = nullptr;
@@ -2147,11 +2278,13 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     }
 
     // repeated messages and variant spam from one user (see countRepeats).
-    // Faint highlights (spam, streamer names) are replaced by the repeat color.
+    // Faint highlights (spam, streamer names) are replaced by the repeat color,
+    // ME highlights (faint thread replies too) stay in the Urgent lane.
     // Users on the "Ignore highlights" list (bots like Fossabot) never get it.
     if ((!builder->flags.has(MessageFlag::Highlighted) ||
          (builder->highlightColor != nullptr &&
-          builder->highlightColor->alpha() < 0x40)) &&
+          builder->highlightColor->alpha() < 0x40 &&
+          builder->highlightTag != u"ME")) &&
         twitchChannel != nullptr && !args.isReceivedWhisper &&
         !args.isSentWhisper && builder->loginName != channel->getName() &&
         builder->loginName !=
@@ -2159,9 +2292,12 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         !getSettings()->isBlacklistedUser(builder->loginName))
     {
         qint64 span = 0;
-        builder->repeatCount = countRepeats(channel, args.pendingMessages,
-                                            builder.message(), span);
+        int countingFrom = -1;
+        builder->repeatCount =
+            countRepeats(channel, args.pendingMessages, builder.message(), span,
+                         countingFrom);
         builder->repeatSeconds = span;
+        builder->repeatCountingFrom = countingFrom;
     }
     if (builder->repeatCount > 0)
     {
@@ -2627,6 +2763,21 @@ HighlightAlert MessageBuilder::parseHighlights(const QVariantMap &tags,
     this->message().highlightLabel = highlightResult.label;
     this->message().highlightTag = highlightTagFromLabel(highlightResult.label);
     this->message().highlightMatch = highlightResult.matchedText;
+
+    // replies to the user (or in a thread they started) go to the Urgent lane
+    if (this->message().platform == MessagePlatform::AnyOrTwitch &&
+        isReplyHighlight(
+            this->message().highlightTag, highlightResult.color.get(),
+            this->message().replyParentLogin,
+            tags.value(QStringLiteral("reply-thread-parent-user-login"))
+                .toString(),
+            this->message().loginName,
+            getApp()->getAccounts()->twitch.getCurrent()->getUserName()))
+    {
+        this->message().highlightLabel = QStringLiteral("ME: Thread reply");
+        this->message().highlightTag = QStringLiteral("ME");
+        this->message().highlightMatch.clear();
+    }
 
     if (highlightResult.showInMentions)
     {

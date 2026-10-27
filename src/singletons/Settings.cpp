@@ -46,6 +46,22 @@ void initializeSignalVector(pajlada::Signals::SignalHolder &signalHolder,
     });
 }
 
+/// Refills vec from its setting, e.g. after the setting was restored from a
+/// snapshot (the vector only writes to the setting, it doesn't listen to it)
+template <typename T>
+void resyncSignalVector(ChatterinoSetting<std::vector<T>> &setting,
+                        SignalVector<T> &vec)
+{
+    while (!vec.raw().empty())
+    {
+        vec.removeAt(static_cast<int>(vec.raw().size()) - 1);
+    }
+    for (auto &&item : setting.getValue())
+    {
+        vec.append(item);
+    }
+}
+
 }  // namespace
 
 namespace chatterino {
@@ -372,6 +388,12 @@ void Settings::restoreSnapshot()
 
         setting->marshalJSON(snapshot[path], std::move(args));
     }
+
+    // The highlight categories tab edits these vectors, so Cancel has to undo
+    // them too
+    resyncSignalVector(this->highlightedMessagesSetting,
+                       this->highlightedMessages);
+    resyncSignalVector(this->filterRecordsSetting, this->filterRecords);
 }
 
 void Settings::disableSave()

@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
 #include <vector>
 
 /// Small helpers for moderators: repeated message detection and a
@@ -75,6 +76,22 @@ bool startsWithRequest(const QString &text);
 /// ...), so "Sag nooreax ..." and "Frag nooreax ..." compare by what is asked.
 QStringList requestTokens(const QStringList &variantTokens);
 
+/// Counting spam ("1", "2", "3", "4" ... or "10", "9", "8", "7" ...): the same
+/// user sent COUNTING_PREVIOUS_NEEDED numbers before this one, each 1 up (or
+/// each 1 down) from the one before, and 4 of them in a row came within
+/// COUNTING_WINDOW_SECONDS. Anything else from that user, or a pause of more
+/// than COUNTING_GAP_SECONDS, ends the run. Counting along with the streamer's
+/// tries every 10 to 20 seconds stays plain.
+inline constexpr int COUNTING_PREVIOUS_NEEDED = 3;
+inline constexpr qint64 COUNTING_WINDOW_SECONDS = 10;
+inline constexpr qint64 COUNTING_GAP_SECONDS = 20;
+/// How far back a counting run is followed
+inline constexpr qint64 COUNTING_RUN_SECONDS = 5 * 60LL;
+
+/// The number of a message that is just a number ("7", "12.", "#3"), or
+/// nullopt.
+std::optional<int> countingNumber(const QString &text);
+
 /// A message colored by a SPAM highlight rule that is shorter than
 /// SPAM_WALL_LENGTH ("67", emote walls, long emote names) only keeps the
 /// color when the same user sent another spammy message within
@@ -83,6 +100,20 @@ QStringList requestTokens(const QStringList &variantTokens);
 /// right away.
 inline constexpr int SPAM_WALL_LENGTH = 200;
 inline constexpr qint64 SPAM_SECOND_WINDOW_SECONDS = 120;
+
+/// OOOO: the whole chat cheering with the OOOO emote is not spam. Such a
+/// SPAM message stays plain when OOOO_OTHERS_NEEDED other chatters sent one
+/// within OOOO_OTHERS_SECONDS before it, so only one user spamming it alone
+/// keeps the color (papaplatte's logs: 17 rows a day -> 4; only 2% of the
+/// colored OOOO rows end in a timeout). WWWW is not exempt: 56% of the
+/// colored WWWW rows end in a timeout, also while others send it.
+inline constexpr int OOOO_OTHERS_NEEDED = 2;
+inline constexpr qint64 OOOO_OTHERS_SECONDS = 30;
+
+/// Is the message only the letter O, 4 or more times ("OOOO", "Oooooo")?
+/// Spaces and invisible characters (the " \u034f" duplicate-message suffix)
+/// are ignored.
+bool isOooo(const QString &text);
 
 /// Words of a message for variant detection: letters/digits only, lowercase,
 /// repeated characters collapsed ("TEMPELLLL" -> "tempel"), without mentions,

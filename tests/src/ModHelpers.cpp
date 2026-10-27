@@ -1,5 +1,6 @@
 #include "util/ModHelpers.hpp"
 
+#include "common/Literals.hpp"
 #include "Test.hpp"
 
 #include <QDir>
@@ -7,6 +8,9 @@
 #include <QTemporaryDir>
 
 using namespace chatterino;
+using namespace literals;
+using modhelpers::countingNumber;
+using modhelpers::isOooo;
 using modhelpers::readLogTimeouts;
 
 namespace {
@@ -93,4 +97,35 @@ TEST(ModHelpers, LocalizedModUnban)
 
     auto out = readLogTimeouts(dir.path(), "chan", "spammer", now(), 7);
     ASSERT_TRUE(out.empty());
+}
+
+TEST(ModHelpers, CountingNumber)
+{
+    EXPECT_EQ(countingNumber(u"3"_s), 3);
+    EXPECT_EQ(countingNumber(u" 14 "_s), 14);
+    EXPECT_EQ(countingNumber(u"12."_s), 12);
+    EXPECT_EQ(countingNumber(u"#3"_s), 3);
+    // Chatterino's duplicate bypass character
+    EXPECT_EQ(countingNumber(u"7 \U000E0000"_s), 7);
+    EXPECT_FALSE(countingNumber(u"8,5"_s));
+    EXPECT_FALSE(countingNumber(u"3/10"_s));
+    EXPECT_FALSE(countingNumber(u"3 Kappa"_s));
+    EXPECT_FALSE(countingNumber(u"12345"_s));
+    EXPECT_FALSE(countingNumber(u"W"_s));
+}
+
+TEST(ModHelpers, Oooo)
+{
+    EXPECT_TRUE(isOooo(u"OOOO"_s));
+    EXPECT_TRUE(isOooo(u"Oooooo"_s));
+    EXPECT_TRUE(isOooo(u" oooooooooooo "_s));
+    EXPECT_TRUE(isOooo(u"OOOO OOOO"_s));
+    // duplicate-message suffixes
+    EXPECT_TRUE(isOooo(u"OOOO \u034f"_s));
+    EXPECT_TRUE(isOooo(u"OOOO \U000E0000"_s));
+    EXPECT_FALSE(isOooo(u"OOO"_s));
+    EXPECT_FALSE(isOooo(u"WWWW"_s));
+    EXPECT_FALSE(isOooo(u"OOOO oha"_s));
+    EXPECT_FALSE(isOooo(u"WOOOOW"_s));
+    EXPECT_FALSE(isOooo(u""_s));
 }

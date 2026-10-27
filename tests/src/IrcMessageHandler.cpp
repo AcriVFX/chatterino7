@@ -838,3 +838,71 @@ TEST_F(TestIrcMessageHandlerRepeats, RewordedRequests)
     ASSERT_EQ(different.messages().size(), 3);
     EXPECT_EQ(different.messages()[2]->repeatCount, 0);
 }
+
+/// Counting "1", "2", "3", "4" ... (hinkebein7): from the 4th number on, when
+/// 4 in a row came within 10 seconds
+TEST_F(TestIrcMessageHandlerRepeats, CountingSpam)
+{
+    auto channel = std::make_shared<TwitchChannel>(u"pajlada"_s);
+    auto parse = [&](const std::vector<std::pair<qint64, QString>> &texts,
+                     VectorMessageSink &sink) {
+        int i = 0;
+        for (const auto &[seconds, text] : texts)
+        {
+            auto *ircMessage = Communi::IrcMessage::fromData(
+                requesterMessage(i++, seconds, text), nullptr);
+            ASSERT_NE(ircMessage, nullptr);
+            IrcMessageHandler::parseMessageInto(ircMessage, sink,
+                                                channel.get());
+            delete ircMessage;
+        }
+    };
+
+    VectorMessageSink up;
+    parse({{0, u"1"_s},
+           {3, u"2"_s},
+           {6, u"3"_s},
+           {8, u"4"_s},
+           {12, u"5"_s},
+           {30, u"6"_s}},
+          up);
+    ASSERT_EQ(up.messages().size(), 6);
+    EXPECT_EQ(up.messages()[2]->repeatCount, 0);
+    EXPECT_EQ(up.messages()[3]->repeatCount, 4);
+    EXPECT_EQ(up.messages()[3]->repeatSeconds, 8);
+    EXPECT_EQ(up.messages()[3]->repeatCountingFrom, 1);
+    EXPECT_EQ(up.messages()[3]->highlightTag, u"REPEAT"_s);
+    EXPECT_EQ(up.messages()[4]->repeatCount, 5);
+    // slower now, but the run already counted
+    EXPECT_EQ(up.messages()[5]->repeatCount, 6);
+    EXPECT_EQ(up.messages()[5]->repeatSeconds, 30);
+
+    VectorMessageSink down;
+    parse({{0, u"10"_s}, {1, u"9"_s}, {3, u"8"_s}, {4, u"7"_s}}, down);
+    ASSERT_EQ(down.messages().size(), 4);
+    EXPECT_EQ(down.messages()[3]->repeatCount, 4);
+    EXPECT_EQ(down.messages()[3]->repeatCountingFrom, 10);
+
+    // counting along with the streamer's tries, every 15 seconds
+    VectorMessageSink slow;
+    parse({{0, u"41"_s}, {15, u"42"_s}, {30, u"43"_s}, {45, u"44"_s}}, slow);
+    ASSERT_EQ(slow.messages().size(), 4);
+    EXPECT_EQ(slow.messages()[3]->repeatCount, 0);
+
+    // another number or message in between ends the run
+    VectorMessageSink broken;
+    parse({{0, u"1"_s},
+           {2, u"2"_s},
+           {4, u"lol"_s},
+           {6, u"3"_s},
+           {8, u"4"_s},
+           {9, u"67"_s},
+           {10, u"5"_s}},
+          broken);
+    ASSERT_EQ(broken.messages().size(), 7);
+    for (const auto &message : broken.messages())
+    {
+        EXPECT_EQ(message->repeatCount, 0)
+            << message->messageText.toStdString();
+    }
+}

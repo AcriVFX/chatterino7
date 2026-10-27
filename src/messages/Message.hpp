@@ -93,6 +93,9 @@ struct Message {
     int repeatCount = 0;
     /// Seconds between the first counted repeat and this message
     qint64 repeatSeconds = 0;
+    /// Counting spam: the number the run started at ("counted 1 to 14"),
+    /// -1 if the repeat is not counting
+    int repeatCountingFrom = -1;
     /// Matched a SPAM highlight rule, even if it was left uncolored as a
     /// single one (see SPAM_WALL_LENGTH)
     bool spammy = false;
