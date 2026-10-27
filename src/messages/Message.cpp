@@ -129,6 +129,7 @@ std::shared_ptr<Message> Message::clone() const
     cloned->highlightMatch = this->highlightMatch;
     cloned->repeatCount = this->repeatCount;
     cloned->repeatSeconds = this->repeatSeconds;
+    cloned->repeatCountingFrom = this->repeatCountingFrom;
     cloned->spammy = this->spammy;
     cloned->moderationChip = this->moderationChip;
     cloned->historyModerator = this->historyModerator;
