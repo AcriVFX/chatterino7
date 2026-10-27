@@ -79,9 +79,8 @@ QString shortSpamKey(const QStringList &textWords)
     return key;
 }
 
-bool isOwSpam(const QString &text)
+bool isOooo(const QString &text)
 {
-    char32_t letter = 0;
     int count = 0;
     for (char32_t c : text.toUcs4())
     {
@@ -91,12 +90,10 @@ bool isOwSpam(const QString &text)
         {
             continue;
         }
-        c = QChar::toLower(c);
-        if ((c != U'o' && c != U'w') || (letter != 0 && c != letter))
+        if (c != U'o' && c != U'O')
         {
             return false;
         }
-        letter = c;
         count++;
     }
     return count >= 4;

@@ -10,7 +10,7 @@
 using namespace chatterino;
 using namespace literals;
 using modhelpers::countingNumber;
-using modhelpers::isOwSpam;
+using modhelpers::isOooo;
 using modhelpers::readLogTimeouts;
 
 namespace {
@@ -114,18 +114,18 @@ TEST(ModHelpers, CountingNumber)
     EXPECT_FALSE(countingNumber(u"W"_s));
 }
 
-TEST(ModHelpers, OwSpam)
+TEST(ModHelpers, Oooo)
 {
-    EXPECT_TRUE(isOwSpam(u"OOOO"_s));
-    EXPECT_TRUE(isOwSpam(u"Wwwww"_s));
-    EXPECT_TRUE(isOwSpam(u" oooooooooooo "_s));
+    EXPECT_TRUE(isOooo(u"OOOO"_s));
+    EXPECT_TRUE(isOooo(u"Oooooo"_s));
+    EXPECT_TRUE(isOooo(u" oooooooooooo "_s));
+    EXPECT_TRUE(isOooo(u"OOOO OOOO"_s));
     // duplicate-message suffixes
-    EXPECT_TRUE(isOwSpam(u"OOOO \u034f"_s));
-    EXPECT_TRUE(isOwSpam(u"OOOO \U000E0000"_s));
-    EXPECT_FALSE(isOwSpam(u"OOO"_s));
-    EXPECT_FALSE(isOwSpam(u"OOOO WWWW"_s));
-    EXPECT_FALSE(isOwSpam(u"OOOO oha"_s));
-    EXPECT_FALSE(isOwSpam(u"WOOOOW"_s));
-    EXPECT_FALSE(isOwSpam(u"LLLL"_s));
-    EXPECT_FALSE(isOwSpam(u""_s));
+    EXPECT_TRUE(isOooo(u"OOOO \u034f"_s));
+    EXPECT_TRUE(isOooo(u"OOOO \U000E0000"_s));
+    EXPECT_FALSE(isOooo(u"OOO"_s));
+    EXPECT_FALSE(isOooo(u"WWWW"_s));
+    EXPECT_FALSE(isOooo(u"OOOO oha"_s));
+    EXPECT_FALSE(isOooo(u"WOOOOW"_s));
+    EXPECT_FALSE(isOooo(u""_s));
 }

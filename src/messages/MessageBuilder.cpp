@@ -515,10 +515,10 @@ bool hasRecentSpam(Channel *channel, const std::vector<MessagePtr> *pending,
     return found;
 }
 
-/// Did OW_OTHERS_NEEDED other users send OOOO / WWWW (see isOwSpam) within
-/// OW_OTHERS_SECONDS before this message? `pending` as in countRepeats.
-bool othersSendOwSpam(Channel *channel, const std::vector<MessagePtr> *pending,
-                      const Message &message)
+/// Did OOOO_OTHERS_NEEDED other users send OOOO (see isOooo) within
+/// OOOO_OTHERS_SECONDS before this message? `pending` as in countRepeats.
+bool othersSendOooo(Channel *channel, const std::vector<MessagePtr> *pending,
+                    const Message &message)
 {
     if (!message.serverReceivedTime.isValid())
     {
@@ -532,17 +532,17 @@ bool othersSendOwSpam(Channel *channel, const std::vector<MessagePtr> *pending,
             prev->serverReceivedTime.isValid()
                 ? prev->serverReceivedTime.secsTo(message.serverReceivedTime)
                 : 0;
-        if (age > modhelpers::OW_OTHERS_SECONDS)
+        if (age > modhelpers::OOOO_OTHERS_SECONDS)
         {
             return false;
         }
         if (age >= 0 && !prev->loginName.isEmpty() &&
             prev->loginName != message.loginName &&
-            modhelpers::isOwSpam(prev->messageText))
+            modhelpers::isOooo(prev->messageText))
         {
             others.insert(prev->loginName);
         }
-        return others.size() < modhelpers::OW_OTHERS_NEEDED;
+        return others.size() < modhelpers::OOOO_OTHERS_NEEDED;
     };
     bool more = true;
     if (pending != nullptr)
@@ -567,7 +567,7 @@ bool othersSendOwSpam(Channel *channel, const std::vector<MessagePtr> *pending,
             }
         }
     }
-    return others.size() >= modhelpers::OW_OTHERS_NEEDED;
+    return others.size() >= modhelpers::OOOO_OTHERS_NEEDED;
 }
 
 const QString regexHelpString("(\\w+)[.,!?;:]*?$");
@@ -2241,7 +2241,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     // spam ("67", emote walls) only keeps the SPAM color when the user sent
     // another spammy message shortly before. Spam of SPAM_WALL_LENGTH or more
     // characters and a lone "L" ("L", "L game") keep it right away.
-    // OOOO / WWWW while other chatters send it too stays plain.
+    // OOOO while other chatters send it too stays plain.
     if (builder->highlightTag == u"SPAM")
     {
         builder->spammy = true;
@@ -2250,9 +2250,9 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
             !highlight.playSound && !highlight.windowAlert &&
             !builder->flags.has(MessageFlag::ShowInMentions) &&
             (!hasRecentSpam(channel, args.pendingMessages, builder.message()) ||
-             (modhelpers::isOwSpam(content) &&
-              othersSendOwSpam(channel, args.pendingMessages,
-                               builder.message()))))
+             (modhelpers::isOooo(content) &&
+              othersSendOooo(channel, args.pendingMessages,
+                             builder.message()))))
         {
             builder->flags.unset(MessageFlag::Highlighted);
             builder->highlightColor = nullptr;
