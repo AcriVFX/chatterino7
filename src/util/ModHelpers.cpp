@@ -86,8 +86,10 @@ bool isOooo(const QString &text)
     for (char32_t c : codePoints)
     {
         const auto category = QChar::category(c);
+        // U+E0000 (7TV's duplicate-message suffix) is unassigned, so the
+        // whole tag block is skipped, not just Other_Format
         if (QChar::isSpace(c) || category == QChar::Mark_NonSpacing ||
-            category == QChar::Other_Format)
+            category == QChar::Other_Format || (c >= 0xE0000 && c <= 0xE007F))
         {
             continue;
         }
