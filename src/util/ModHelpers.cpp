@@ -82,7 +82,8 @@ QString shortSpamKey(const QStringList &textWords)
 bool isOooo(const QString &text)
 {
     int count = 0;
-    for (char32_t c : text.toUcs4())
+    const auto codePoints = text.toUcs4();
+    for (char32_t c : codePoints)
     {
         const auto category = QChar::category(c);
         if (QChar::isSpace(c) || category == QChar::Mark_NonSpacing ||
