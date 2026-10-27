@@ -218,15 +218,18 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
     {
         window = std::max(window, modhelpers::REQUEST_WINDOW_SECONDS);
     }
-    if (number)
-    {
-        window = std::max(window, modhelpers::COUNTING_RUN_SECONDS);
-    }
     if (!shortKey.isEmpty())
     {
         window = std::max({window, modhelpers::SHORT_SPAM_WINDOW_SECONDS,
                            modhelpers::SHORT_SPAM_OTHERS_SECONDS,
                            modhelpers::HEAVY_SPAM_WINDOW_SECONDS});
+    }
+    // a counting run is followed further back than the other checks look,
+    // but only through the user's own run (see visit)
+    const auto checksWindow = window;
+    if (number)
+    {
+        window = std::max(window, modhelpers::COUNTING_RUN_SECONDS);
     }
 
     int repeats = 0;
@@ -268,6 +271,12 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
             return true;
         }
         const bool sameUser = prev->loginName == message.loginName;
+        if (countingOpen &&
+            age - countingAges.back() > modhelpers::COUNTING_GAP_SECONDS)
+        {
+            // they paused longer than a run allows
+            countingOpen = false;
+        }
         if (sameUser && countingOpen)
         {
             const auto prevNumber =
@@ -286,6 +295,12 @@ int countRepeats(Channel *channel, const std::vector<MessagePtr> *pending,
                 // anything else from them ends the run
                 countingOpen = false;
             }
+        }
+        if (age > checksWindow)
+        {
+            // only the counting run looks this far back: the other checks
+            // keep their own windows, and the scan ends with the run
+            return countingOpen;
         }
         if ((sameUser && prev->messageText.startsWith('!')) ||
             (!sameUser && shortKey.isEmpty()))
