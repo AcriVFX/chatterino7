@@ -15,7 +15,7 @@ for the time Chatterino9 was closed.
 - `compose.yaml`: the service plus a Cloudflare tunnel container on their own
   Docker network. No ports are published.
 - `setup.ps1`: installs it from a Windows PC over one SSH connection per step
-  (`install`, `start`, `update`, `signin`, `stop`, `status`, `check`) and saves the app's keys to
+  (`install`, `start`, `update`, `tunnel`, `signin`, `stop`, `status`, `check`) and saves the app's keys to
   `%APPDATA%\Chatterino2\Misc\ModActivity\remote.json`.
 
 The app (`src/util/ModActivity.cpp`) reads `remote.json`, pulls new actions
