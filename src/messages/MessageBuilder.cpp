@@ -2249,8 +2249,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
             !isLoneL(builder->highlightMatch) && twitchChannel != nullptr &&
             !highlight.playSound && !highlight.windowAlert &&
             !builder->flags.has(MessageFlag::ShowInMentions) &&
-            (!hasRecentSpam(channel, args.pendingMessages,
-                            builder.message()) ||
+            (!hasRecentSpam(channel, args.pendingMessages, builder.message()) ||
              (modhelpers::isOwSpam(content) &&
               othersSendOwSpam(channel, args.pendingMessages,
                                builder.message()))))
