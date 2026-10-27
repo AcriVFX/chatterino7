@@ -51,6 +51,12 @@ void recordIncoming(const MessagePtr &message);
 /// Saves a whisper the current account sent to `partner`
 void recordOutgoing(const QString &partner, const QString &text);
 
+/// Saves a whisper the current account sent to `partner` outside the app (on
+/// twitch.tv) at `msecs`. The same whisper with the same time is kept once.
+/// Returns true if it's in the history now. GUI thread only.
+bool recordSentElsewhere(const QString &partner, const QString &text,
+                         qint64 msecs);
+
 /// Conversations of the current account, newest first
 std::vector<Conversation> conversations();
 
@@ -66,5 +72,10 @@ QString partnerOf(const Message &message);
 /// Fires in the GUI thread after a whisper with the given partner was saved
 /// or read state changed (empty partner: several changed)
 pajlada::Signals::Signal<QString> &updated();
+
+/// Fires in the GUI thread after a whisper sent outside the app was saved
+/// with the given partner. It never passed through the whispers channel, so
+/// open views of that conversation have to reload it.
+pajlada::Signals::Signal<QString> &copiedIn();
 
 }  // namespace chatterino::whisperhistory

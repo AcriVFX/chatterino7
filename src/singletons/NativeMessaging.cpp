@@ -9,21 +9,31 @@
 #include "common/Modes.hpp"
 #include "common/QLogging.hpp"
 #include "debug/AssertInGuiThread.hpp"
+#include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "util/IpcQueue.hpp"
 #include "util/PostToThread.hpp"
+#include "util/WhisperHistory.hpp"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QRegularExpression>
+#include <QSaveFile>
 #include <QSettings>
 #include <QStringBuilder>
+#include <QTextStream>
+
+#include <deque>
+#include <unordered_map>
 
 #ifdef Q_OS_WIN
 #    include "widgets/AttachedWindow.hpp"
@@ -36,7 +46,6 @@ using namespace chatterino;
 using namespace chatterino::literals;
 
 const QString EXTENSION_ID = u"glknmaideaikkmemifbfkhnomoknepka"_s;
-constexpr const size_t MESSAGE_SIZE = 1024;
 
 struct Config {
 #ifdef Q_OS_WIN
@@ -76,6 +85,20 @@ const Config CHROME{
 #endif
 };
 
+#ifdef Q_OS_WIN
+const Config WHISPERS_CHROME{
+    .fileName = u"native-messaging-manifest-chatterino9-whispers.json"_s,
+    .registryKey =
+        u"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.chatterino9.whispers"_s,
+};
+
+const Config WHISPERS_EDGE{
+    .fileName = u"native-messaging-manifest-chatterino9-whispers.json"_s,
+    .registryKey =
+        u"HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.chatterino9.whispers"_s,
+};
+#endif
+
 void registerNmManifest([[maybe_unused]] const Paths &paths,
                         const Config &config, const QJsonDocument &document)
 {
@@ -91,6 +114,135 @@ void registerNmManifest([[maybe_unused]] const Paths &paths,
         writeManifestTo(config.browserDirectory, config.nmDirectory,
                         u"com.chatterino.chatterino.json"_s, document);
 #endif
+}
+
+QString receiptsPath(const Paths &paths)
+{
+    return paths.miscDirectory % u"/Whispers/browser-receipts.tsv";
+}
+
+constexpr qint64 RECEIPT_MAX_AGE = 31LL * 24 * 60 * 60 * 1000;
+
+/// A whisper sent on twitch.tv, from the whisper extension
+struct BrowserWhisper {
+    QString id;
+    QString recipientId;
+    QString text;
+    qint64 sentAt = 0;
+};
+
+/// Who whispers from the browser went to (they only carry a user id).
+/// GUI thread only.
+struct RecipientLookups {
+    /// user id -> login
+    QHash<QString, QString> logins;
+    /// user id -> whispers waiting for its lookup
+    std::unordered_map<QString, std::vector<BrowserWhisper>> waiting;
+    /// user id -> when its last lookup failed
+    QHash<QString, qint64> failedAt;
+    QHash<QString, int> failures;
+    /// when the lookups of the last minute started
+    std::deque<qint64> recent;
+};
+
+RecipientLookups &lookups()
+{
+    static RecipientLookups instance;
+    return instance;
+}
+
+std::vector<BrowserWhisper> takeWaiting(RecipientLookups &st,
+                                        const QString &recipientId)
+{
+    auto node = st.waiting.extract(recipientId);
+    if (node.empty())
+    {
+        return {};
+    }
+    return std::move(node.mapped());
+}
+
+void saveBrowserWhisper(const BrowserWhisper &whisper, const QString &login)
+{
+    if (whisperhistory::recordSentElsewhere(login, whisper.text,
+                                            whisper.sentAt))
+    {
+        nm::whispers::addReceipt(getApp()->getPaths(), whisper.id, true);
+    }
+    // otherwise nobody is signed in: the extension sends it again later
+}
+
+/// Saves a whisper sent on twitch.tv once it's known who it went to. Anything
+/// not saved gets no receipt, so the extension keeps it and sends it again.
+void handleBrowserWhisper(const BrowserWhisper &whisper)
+{
+    assertInGuiThread();
+
+    auto &st = lookups();
+    const auto &recipientId = whisper.recipientId;
+    auto known = st.logins.constFind(recipientId);
+    if (known != st.logins.cend())
+    {
+        saveBrowserWhisper(whisper, *known);
+        return;
+    }
+    auto pending = st.waiting.find(recipientId);
+    if (pending != st.waiting.end())
+    {
+        if (pending->second.size() < 100)
+        {
+            pending->second.push_back(whisper);
+        }
+        return;
+    }
+
+    // Lookups use the account's Helix budget, which bans and timeouts need
+    // too: don't retry a failing id for 10 minutes, at most 20 per minute.
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    if (st.failedAt.value(recipientId, 0) > now - (10LL * 60 * 1000))
+    {
+        return;
+    }
+    while (!st.recent.empty() && st.recent.front() < now - (60LL * 1000))
+    {
+        st.recent.pop_front();
+    }
+    if (st.recent.size() >= 20)
+    {
+        return;
+    }
+    st.recent.push_back(now);
+    st.waiting[recipientId].push_back(whisper);
+
+    getHelix()->getUserById(
+        recipientId,
+        [recipientId](const HelixUser &user) {
+            auto &st = lookups();
+            const auto login = user.login.toLower();
+            const auto whispers = takeWaiting(st, recipientId);
+            st.logins.insert(recipientId, login);
+            st.failures.remove(recipientId);
+            for (const auto &w : whispers)
+            {
+                saveBrowserWhisper(w, login);
+            }
+        },
+        [recipientId] {
+            auto &st = lookups();
+            const auto whispers = takeWaiting(st, recipientId);
+            st.failedAt[recipientId] = QDateTime::currentMSecsSinceEpoch();
+            // failing for an hour: no such user (or never will be)
+            if (++st.failures[recipientId] < 6)
+            {
+                return;
+            }
+            qCWarning(chatterinoNativeMessage)
+                << "Couldn't look up whisper recipient" << recipientId;
+            for (const auto &w : whispers)
+            {
+                nm::whispers::addReceipt(getApp()->getPaths(), w.id, false);
+            }
+        });
 }
 
 }  // namespace
@@ -194,6 +346,22 @@ void registerNmHost(const Paths &paths)
 
         registerNmManifest(paths, FIREFOX, QJsonDocument{obj});
     }
+
+#ifdef Q_OS_WIN
+    // Chatterino9's whisper extension (Edge, Chrome)
+    {
+        auto obj = getBaseDocument();
+        obj.insert(u"name"_s, "com.chatterino9.whispers"_L1);
+        obj.insert(u"description"_s,
+                   "Whispers sent on twitch.tv, for Chatterino9."_L1);
+        obj.insert(
+            u"allowed_origins"_s,
+            QJsonArray{QString::fromLatin1(nm::whispers::EXTENSION_ORIGIN)});
+
+        registerNmManifest(paths, WHISPERS_CHROME, QJsonDocument{obj});
+        registerNmManifest(paths, WHISPERS_EDGE, QJsonDocument{obj});
+    }
+#endif
 }
 
 std::string &getNmQueueName(const Paths &paths)
@@ -203,13 +371,89 @@ std::string &getNmQueueName(const Paths &paths)
     return name;
 }
 
+namespace nm::whispers {
+
+void addReceipt(const Paths &paths, const QString &id, bool saved)
+{
+    const auto path = receiptsPath(paths);
+    if (!QDir().mkpath(QFileInfo(path).absolutePath()))
+    {
+        return;
+    }
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+
+    // drop receipts older than a month now and then
+    if (QFileInfo(path).size() > 64LL * 1024)
+    {
+        QStringList kept;
+        QFile old(path);
+        if (old.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            QTextStream in(&old);
+            while (!in.atEnd())
+            {
+                const auto line = in.readLine();
+                const auto parts = line.split(u'\t');
+                if (parts.size() == 3 &&
+                    parts[2].toLongLong() > now - RECEIPT_MAX_AGE)
+                {
+                    kept.append(line);
+                }
+            }
+        }
+        old.close();
+        QSaveFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text))
+        {
+            QTextStream out(&file);
+            for (const auto &line : kept)
+            {
+                out << line << '\n';
+            }
+            out.flush();
+            file.commit();
+        }
+    }
+
+    QFile file(path);
+    if (file.open(QIODevice::Append | QIODevice::Text))
+    {
+        QTextStream out(&file);
+        out << id << '\t' << (saved ? '1' : '0') << '\t' << now << '\n';
+    }
+}
+
+std::map<QString, bool> readReceipts(const Paths &paths)
+{
+    std::map<QString, bool> receipts;
+    QFile file(receiptsPath(paths));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        return receipts;
+    }
+    const auto cutoff = QDateTime::currentMSecsSinceEpoch() - RECEIPT_MAX_AGE;
+    QTextStream in(&file);
+    while (!in.atEnd())
+    {
+        // a line still being written has fewer parts
+        const auto parts = in.readLine().split(u'\t');
+        if (parts.size() == 3 && parts[2].toLongLong() > cutoff)
+        {
+            receipts[parts[0]] = parts[1] == u"1";
+        }
+    }
+    return receipts;
+}
+
+}  // namespace nm::whispers
+
 // CLIENT
 
 namespace nm::client {
 
-void sendMessage(const QByteArray &array)
+bool sendMessage(const QByteArray &array)
 {
-    ipc::sendMessage("chatterino_gui", array);
+    return ipc::sendMessage("chatterino_gui", array);
 }
 
 void writeToCout(const QByteArray &array)
@@ -267,8 +511,8 @@ NativeMessagingServer::ReceiverThread::ReceiverThread(
 
 void NativeMessagingServer::ReceiverThread::run()
 {
-    auto [messageQueue, error] =
-        ipc::IpcQueue::tryReplaceOrCreate("chatterino_gui", 100, MESSAGE_SIZE);
+    auto [messageQueue, error] = ipc::IpcQueue::tryReplaceOrCreate(
+        "chatterino_gui", 100, nm::MAX_MESSAGE_SIZE);
 
     if (!error.isEmpty())
     {
@@ -310,6 +554,11 @@ void NativeMessagingServer::ReceiverThread::handleMessage(
     if (action == "sync")
     {
         this->handleSync(root);
+        return;
+    }
+    if (action == "chatterino9-whisper-sent")
+    {
+        this->handleWhisperSent(root);
         return;
     }
 
@@ -404,6 +653,48 @@ void NativeMessagingServer::ReceiverThread::handleSync(const QJsonObject &root)
     postToThread([&parent = this->parent_,
                   twitch = root["twitchChannels"_L1].toArray()] {
         parent.syncChannels(twitch);
+    });
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+void NativeMessagingServer::ReceiverThread::handleWhisperSent(
+    const QJsonObject &root)
+{
+    // Structure (from tools/whisper-extension, through the browser host, which
+    // only passes these on from that extension):
+    // { action: 'chatterino9-whisper-sent', id: string, recipientId: string,
+    //   message: string, sentAt: number (msecs) }
+    static const QRegularExpression userIdRe(u"^[0-9]{1,20}$"_s);
+    BrowserWhisper whisper{
+        .id = root["id"_L1].toString(),
+        .recipientId = root["recipientId"_L1].toString(),
+        .text = root["message"_L1].toString().trimmed(),
+    };
+    if (whisper.id.isEmpty() || whisper.id.size() > 100)
+    {
+        return;
+    }
+    // nothing from before 2020 or from the future (NaN fails too)
+    const double sentAt = root["sentAt"_L1].toDouble(-1);
+    const auto now = static_cast<double>(QDateTime::currentMSecsSinceEpoch());
+    const bool valid = userIdRe.match(whisper.recipientId).hasMatch() &&
+                       !whisper.text.isEmpty() && whisper.text.size() <= 1000 &&
+                       sentAt >= 1577836800000.0 && sentAt <= now + 60000.0;
+    if (valid)
+    {
+        whisper.sentAt = static_cast<qint64>(sentAt);
+    }
+
+    postToThread([whisper = std::move(whisper), valid] {
+        if (valid)
+        {
+            handleBrowserWhisper(whisper);
+        }
+        else
+        {
+            qCDebug(chatterinoNativeMessage) << "NM whisper-sent is malformed";
+            nm::whispers::addReceipt(getApp()->getPaths(), whisper.id, false);
+        }
     });
 }
 

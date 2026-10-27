@@ -10,6 +10,7 @@
 #include <QString>
 #include <QThread>
 
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -40,9 +41,34 @@ std::string &getNmQueueName(const Paths &paths);
 
 Atomic<std::optional<QString>> &nmIpcError();
 
+namespace nm {
+
+/// Largest message the browser host can pass on to the app
+inline constexpr size_t MAX_MESSAGE_SIZE = 4096;
+
+}  // namespace nm
+
+/// Chatterino9's extension that copies whispers sent on twitch.tv
+/// (tools/whisper-extension). It has its own native messaging host name, so
+/// other Chatterino builds that rewrite the shared manifest can't lock it out.
+namespace nm::whispers {
+
+/// Its ID comes from the key in its manifest
+inline constexpr const char *EXTENSION_ORIGIN =
+    "chrome-extension://bcgnaflbiogmdloflolimldoepjipehp/";
+
+/// Notes that the app saved (or refused for good) the whisper with `id`
+void addReceipt(const Paths &paths, const QString &id, bool saved);
+
+/// id -> saved, for the receipts of the last month
+std::map<QString, bool> readReceipts(const Paths &paths);
+
+}  // namespace nm::whispers
+
 namespace nm::client {
 
-void sendMessage(const QByteArray &array);
+/// Returns false if the app isn't running (or its queue is full)
+bool sendMessage(const QByteArray &array);
 void writeToCout(const QByteArray &array);
 
 }  // namespace nm::client
@@ -72,6 +98,7 @@ private:
         void handleSelect(const QJsonObject &root);
         void handleDetach(const QJsonObject &root);
         void handleSync(const QJsonObject &root);
+        void handleWhisperSent(const QJsonObject &root);
 
         NativeMessagingServer &parent_;
     };

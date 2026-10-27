@@ -4,8 +4,14 @@
 
 #pragma once
 
+class QString;
+
 namespace chatterino {
 
-void runBrowserExtensionHost();
+class Paths;
+
+/// `origin` is the browser extension that started the host
+/// (chrome-extension://<id>/), or the manifest path on Firefox
+void runBrowserExtensionHost(const Paths &paths, const QString &origin);
 
 }  // namespace chatterino

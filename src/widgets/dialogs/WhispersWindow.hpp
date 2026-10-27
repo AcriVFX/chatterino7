@@ -82,6 +82,8 @@ private:
     QString displayName_;
     /// When a whisper was last sent from here, to show its errors
     qint64 lastSendMsecs_ = 0;
+    /// A reload for whispers copied in from twitch.tv is on its way
+    bool reloadQueued_ = false;
 
     pajlada::Signals::SignalHolder signalHolder_;
     std::vector<boost::signals2::scoped_connection> bSignals_;

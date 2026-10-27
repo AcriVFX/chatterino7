@@ -184,6 +184,10 @@ Args::Args(const QApplication &app, const Paths &paths)
     this->shouldRunBrowserExtensionHost =
         (args.size() > 0 && (args[0].startsWith("chrome-extension://") ||
                              args[0].endsWith(".json")));
+    if (this->shouldRunBrowserExtensionHost)
+    {
+        this->browserExtensionOrigin = args[0];
+    }
 
     if (parser.isSet(channelLayout))
     {

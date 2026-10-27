@@ -55,6 +55,8 @@ public:
     std::optional<QString> exceptionMessage{};
 
     bool shouldRunBrowserExtensionHost{};
+    /// Browser extension that started us as its native messaging host
+    QString browserExtensionOrigin;
     // Shows a single chat. Used on windows to embed in another application.
     bool isFramelessEmbed{};
     std::optional<unsigned long long> parentWindowId{};
