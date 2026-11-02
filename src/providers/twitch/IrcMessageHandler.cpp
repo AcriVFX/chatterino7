@@ -46,17 +46,6 @@ namespace {
 
 using namespace chatterino;
 
-// Message types below are the ones that might contain special user's message on USERNOTICE
-const QSet<QString> SPECIAL_MESSAGE_TYPES{
-    "sub",              //
-    "subgift",          //
-    "resub",            // resub messages
-    "bitsbadgetier",    // bits badge upgrade
-    "ritual",           // new viewer ritual
-    "announcement",     // new mod announcement thing
-    "viewermilestone",  // watch streak, but other categories possible in future
-};
-
 const QString ANONYMOUS_GIFTER_ID = "274598607";
 
 MessagePtr generateBannedMessage(bool confirmedBan)
@@ -782,14 +771,14 @@ void IrcMessageHandler::parseUserNoticeMessageInto(Communi::IrcMessage *message,
         return;
     }
 
-    if (SPECIAL_MESSAGE_TYPES.contains(msgType))
+    // Chatterino9: show the user's own text on every notice type, not only the
+    // known ones. Twitch adds new types (modiversary, socialsharingbadge, ...)
+    // and their text was dropped, hiding what the user wrote from mods.
+    // Messages are not required, so they might be empty.
+    if (!content.isEmpty())
     {
-        // Messages are not required, so they might be empty
-        if (!content.isEmpty())
-        {
-            addMessage(message, sink, channel, content, *getApp()->getTwitch(),
-                       true, false, msgType);
-        }
+        addMessage(message, sink, channel, content, *getApp()->getTwitch(),
+                   true, false, msgType);
     }
 
     auto it = tags.find("system-msg");
