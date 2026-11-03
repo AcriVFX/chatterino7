@@ -289,17 +289,6 @@ QString seventvUsersFile()
                                 QStringLiteral("EmoteStats/7tv-users.json"));
 }
 
-/// Phil's corrections to the Added by column, edited by hand while the app
-/// runs: {"unknown": shown for 7TV emotes 7TV has no adder for,
-/// "emotes": {emote name: who added it, over what 7TV says}}
-QString addedByEditsFile()
-{
-    const auto &misc = getApp()->getPaths().miscDirectory;
-    return misc.isEmpty() ? QString()
-                          : QDir(misc).filePath(
-                                QStringLiteral("EmoteStats/added-by.json"));
-}
-
 /// What added-by.json starts with: Phil added the emotes 7TV has no adder
 /// for and these
 QJsonObject defaultAddedByEdits()
@@ -987,7 +976,9 @@ EmoteStatsDialog::Range EmoteStatsDialog::currentRange() const
 
 void EmoteStatsDialog::loadAddedByEdits()
 {
-    const auto path = addedByEditsFile();
+    // Phil's corrections, edited by hand while the app runs (or Phil's,
+    // synced, in a friend's app)
+    const auto path = emotestats::addedByFile();
     if (path.isEmpty())
     {
         return;

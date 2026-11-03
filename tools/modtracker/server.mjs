@@ -12,9 +12,13 @@
 //   stats window. It reads chat as an anonymous viewer (no login at all) and
 //   writes emotes/YYYY-MM-DD.tsv in the same format as the app.
 // - Serves them over HTTP to requests carrying the API key. The only writes
-//   it takes are pausing, stopping or starting the mod action counting and
-//   deleting the counted mod actions, from the Mod activity window. The
-//   Twitch token is never sent anywhere except to Twitch.
+//   it takes are pausing, stopping or starting the mod action counting,
+//   deleting the counted mod actions (both from the Mod activity window) and
+//   the Emote stats window's "Added by" corrections. The Twitch token is
+//   never sent anywhere except to Twitch.
+// - Friends can get their own read-only key (setup.ps1 friend-add). Only its
+//   SHA-256 is stored, in viewers.json. A friend key reads the emote counts,
+//   and with scope "all" the mod actions too; it can never write anything.
 //
 // No dependencies besides Node itself.
 
@@ -1157,10 +1161,97 @@ function emoteDayList() {
 // ----------------------------------------------------------------- http ---
 
 const KEY_HASH = createHash("sha256").update(API_KEY).digest();
+const VIEWERS_FILE = join(DATA_DIR, "viewers.json");
+const ADDED_BY_FILE = join(CHANNEL_DIR, "added-by.json");
+const ADDED_BY_MAX_BYTES = 64 * 1024;
+const viewers = { stamp: "", keys: [] };
 
-function authorized(req) {
-  const given = String(req.headers["x-modtracker-key"] ?? "");
-  return timingSafeEqual(createHash("sha256").update(given).digest(), KEY_HASH);
+// Friend keys: { "<name>": { "hash": "<sha256 hex of the key>", "scope":
+// "all" | "emotes" } }. Read again whenever the file changes, so adding or
+// removing a friend needs no restart.
+function viewerKeys() {
+  let stamp = "";
+  try {
+    const stat = statSync(VIEWERS_FILE);
+    stamp = `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    // no friends yet
+  }
+  if (stamp !== viewers.stamp) {
+    viewers.stamp = stamp;
+    viewers.keys = [];
+    if (stamp) {
+      try {
+        const data = JSON.parse(readFileSync(VIEWERS_FILE, "utf8"));
+        for (const [name, entry] of Object.entries(data ?? {})) {
+          const hash = String(entry?.hash ?? "");
+          const scope = entry?.scope === "all" ? "all" : "emotes";
+          if (/^[0-9a-f]{64}$/.test(hash)) {
+            viewers.keys.push({ name, hash: Buffer.from(hash, "hex"), scope });
+          }
+        }
+      } catch (err) {
+        log(`viewers.json unreadable, no friend keys: ${err.message ?? err}`);
+      }
+    }
+  }
+  return viewers.keys;
+}
+
+// "owner" for the app's own key, "all" or "emotes" for a friend key, null
+// for anything else
+export function accessOf(given) {
+  const hash = createHash("sha256")
+    .update(String(given ?? ""))
+    .digest();
+  if (timingSafeEqual(hash, KEY_HASH)) {
+    return "owner";
+  }
+  let scope = null;
+  // compare against every key so the time taken doesn't depend on which one
+  for (const viewer of viewerKeys()) {
+    if (timingSafeEqual(hash, viewer.hash) && !scope) {
+      scope = viewer.scope;
+    }
+  }
+  return scope;
+}
+
+// Friends only read; an "emotes" friend only the emote counts
+export function allowed(access, method, path) {
+  if (access === "owner") {
+    return method === "GET" || method === "POST";
+  }
+  if (method !== "GET" || !access) {
+    return false;
+  }
+  if (path === "/v1/status" || path.startsWith(`/v1/${CHANNEL}/emotes/`)) {
+    return true;
+  }
+  return access === "all";
+}
+
+// The Emote stats window's corrections: { "unknown": "<name>", "emotes": {
+// "<emote>": "<name>" } }
+export function cleanAddedBy(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return null;
+  }
+  const name = (value) =>
+    typeof value === "string" && value.trim() && value.length <= 64
+      ? value.trim()
+      : null;
+  const out = { unknown: name(body.unknown) ?? "", emotes: {} };
+  const emotes = body.emotes ?? {};
+  if (typeof emotes !== "object" || Array.isArray(emotes)) {
+    return null;
+  }
+  for (const [emote, adder] of Object.entries(emotes)) {
+    if (emote.length <= 100 && name(adder)) {
+      out.emotes[emote] = name(adder);
+    }
+  }
+  return out;
 }
 
 function send(res, status, body, type = "text/plain; charset=utf-8") {
@@ -1168,13 +1259,13 @@ function send(res, status, body, type = "text/plain; charset=utf-8") {
   res.end(body);
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 4096) {
   return new Promise((resolve) => {
     let body = "";
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 4096) {
+      if (body.length > maxBytes) {
         req.destroy();
         resolve(null);
       }
@@ -1195,9 +1286,20 @@ function trackingJson() {
 }
 
 async function handlePost(req, res, url) {
-  const body = await readBody(req);
+  const addedBy = url.pathname === `/v1/${CHANNEL}/emotes/added-by`;
+  const body = await readBody(req, addedBy ? ADDED_BY_MAX_BYTES : 4096);
   if (body === null) {
     return send(res, 400, "Bad request\n");
+  }
+  if (addedBy) {
+    const clean = cleanAddedBy(body);
+    if (!clean) {
+      return send(res, 400, "Bad request\n");
+    }
+    const tmp = `${ADDED_BY_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(clean, null, 2));
+    renameSync(tmp, ADDED_BY_FILE);
+    return send(res, 200, "{}", "application/json");
   }
   if (url.pathname === `/v1/${CHANNEL}/tracking`) {
     const error = setTracking(body);
@@ -1218,10 +1320,11 @@ async function handlePost(req, res, url) {
 }
 
 const server = createServer((req, res) => {
-  if (!authorized(req) || (req.method !== "GET" && req.method !== "POST")) {
+  const access = accessOf(req.headers["x-modtracker-key"]);
+  const url = new URL(req.url, "http://localhost");
+  if (!allowed(access, req.method, url.pathname)) {
     return send(res, 404, "Not found\n");
   }
-  const url = new URL(req.url, "http://localhost");
   if (req.method === "POST") {
     return handlePost(req, res, url).catch((err) => {
       log(`Request failed: ${err.message ?? err}`);
@@ -1229,25 +1332,27 @@ const server = createServer((req, res) => {
     });
   }
   if (url.pathname === "/v1/status") {
-    return send(
-      res,
-      200,
-      JSON.stringify({
-        channel: CHANNEL,
-        signedIn: Boolean(state.token),
-        needsSignIn: Boolean(state.signInCode),
-        connected: state.connected,
-        lastEventAt: state.lastEventAt,
-        serverTime: Date.now(),
-        tracking: trackingJson(),
-        emotes: {
-          connected: chat.connected,
-          lastMessageAt: chat.lastMessageAt,
-          listsLoadedAt: chat.listsLoadedAt,
-        },
-      }),
-      "application/json"
-    );
+    const emotes = {
+      connected: chat.connected,
+      lastMessageAt: chat.lastMessageAt,
+      listsLoadedAt: chat.listsLoadedAt,
+    };
+    // an emotes-only friend learns nothing about the mod action counting
+    const status =
+      access === "emotes"
+        ? { channel: CHANNEL, access, serverTime: Date.now(), emotes }
+        : {
+            channel: CHANNEL,
+            access,
+            signedIn: Boolean(state.token),
+            needsSignIn: Boolean(state.signInCode),
+            connected: state.connected,
+            lastEventAt: state.lastEventAt,
+            serverTime: Date.now(),
+            tracking: trackingJson(),
+            emotes,
+          };
+    return send(res, 200, JSON.stringify(status), "application/json");
   }
   if (url.pathname === `/v1/${CHANNEL}/actions`) {
     const since = Number(url.searchParams.get("since") ?? 0);
@@ -1255,6 +1360,15 @@ const server = createServer((req, res) => {
   }
   if (url.pathname === `/v1/${CHANNEL}/streams`) {
     return send(res, 200, readStreams());
+  }
+  if (url.pathname === `/v1/${CHANNEL}/emotes/added-by`) {
+    let text;
+    try {
+      text = readFileSync(ADDED_BY_FILE, "utf8");
+    } catch {
+      return send(res, 404, "Not found\n");
+    }
+    return send(res, 200, text, "application/json");
   }
   if (url.pathname === `/v1/${CHANNEL}/emotes/days`) {
     return send(res, 200, emoteDayList());

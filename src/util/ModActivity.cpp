@@ -547,6 +547,11 @@ struct RemoteConfig {
     QByteArray apiKey;
     QByteArray accessClientId;
     QByteArray accessClientSecret;
+    /// Empty for the server's owner. A friend's read-only key (setup.ps1
+    /// friend-add) has "all" (emote stats and mod activity) or "emotes".
+    QString viewer;
+    /// The channel a friend's key reads, empty for the owner
+    QString channel;
 };
 
 std::optional<RemoteConfig> remoteConfig()
@@ -568,6 +573,8 @@ std::optional<RemoteConfig> remoteConfig()
         .accessClientId = obj.value(u"accessClientId").toString().toUtf8(),
         .accessClientSecret =
             obj.value(u"accessClientSecret").toString().toUtf8(),
+        .viewer = obj.value(u"viewer").toString(),
+        .channel = obj.value(u"channel").toString().toLower(),
     };
     // the keys only ever go over https
     if (!config.url.isValid() || config.url.scheme() != u"https" ||
@@ -588,10 +595,22 @@ QString &serverChannel()
     return channel;
 }
 
-/// remoteConfig(), unless the server is known to count another channel
-std::optional<RemoteConfig> remoteConfigFor(const QString &channel)
+/// remoteConfig() when it can read mod actions: not for a friend's key that
+/// only reads emote stats
+std::optional<RemoteConfig> modConfig()
 {
     auto config = remoteConfig();
+    if (config && !config->viewer.isEmpty() && config->viewer != u"all")
+    {
+        return std::nullopt;
+    }
+    return config;
+}
+
+/// modConfig(), unless the server is known to count another channel
+std::optional<RemoteConfig> remoteConfigFor(const QString &channel)
+{
+    auto config = modConfig();
     if (config && !serverChannel().isEmpty() && serverChannel() != channel)
     {
         return std::nullopt;
@@ -759,8 +778,10 @@ bool pushTracking(const QString &channel, const RemoteConfig &config)
     return true;
 }
 
-/// Takes the server's tracking state when the app has nothing to send
-void adoptServerTracking(const QString &channel, const QJsonObject &obj)
+/// Takes the server's tracking state when the app has nothing to send. A
+/// friend's app always takes it, it can't change it.
+void adoptServerTracking(const QString &channel, const QJsonObject &obj,
+                         bool viewer)
 {
     const auto counting = countingFromKey(obj.value(u"state").toString());
     if (!counting)
@@ -775,6 +796,12 @@ void adoptServerTracking(const QString &channel, const QJsonObject &obj)
     std::scoped_lock lock(st.mutex);
     auto &t = trackingLocked(st, channel, QDateTime::currentMSecsSinceEpoch());
     t.outdated = false;
+    if (viewer && t.pending)
+    {
+        t.pending = false;
+        ++t.revision;
+        saveTrackingLocked(channel, t);
+    }
     if (t.pending || (t.counting == *counting && t.until == until))
     {
         return;
@@ -1012,7 +1039,7 @@ pajlada::Signals::NoArgSignal &updated()
 void syncFromServer(const QString &channel)
 {
     const auto key = channel.toLower();
-    const auto config = remoteConfig();
+    const auto config = modConfig();
     auto &state = syncState(key);
     if (!config || state.running)
     {
@@ -1039,9 +1066,11 @@ void syncFromServer(const QString &channel)
                 return;
             }
             syncState(key).needsSignIn = status.value(u"needsSignIn").toBool();
-            if (!pushTracking(key, config))
+            const bool viewer = !config.viewer.isEmpty();
+            if (viewer || !pushTracking(key, config))
             {
-                adoptServerTracking(key, status.value(u"tracking").toObject());
+                adoptServerTracking(key, status.value(u"tracking").toObject(),
+                                    viewer);
             }
             fetchActions(key, config, epoch);
         })
@@ -1078,20 +1107,39 @@ pajlada::Signals::NoArgSignal &syncStatusChanged()
 }
 
 std::optional<NetworkRequest> remoteRequest(const QString &path,
-                                            const QUrlQuery &query)
+                                            const QUrlQuery &query,
+                                            NetworkRequestType type)
 {
     const auto config = remoteConfig();
     if (!config)
     {
         return std::nullopt;
     }
-    return serverRequest(*config, path, query);
+    return serverRequest(*config, path, query, type);
 }
 
 QString remoteHost()
 {
     const auto config = remoteConfig();
     return config ? config->url.host() : QString();
+}
+
+bool remoteViewer()
+{
+    const auto config = remoteConfig();
+    return config && !config->viewer.isEmpty();
+}
+
+bool sharedWithMe(const QString &channel)
+{
+    const auto config = modConfig();
+    if (!config || config->viewer.isEmpty())
+    {
+        return false;
+    }
+    const auto &shared =
+        config->channel.isEmpty() ? serverChannel() : config->channel;
+    return !shared.isEmpty() && shared == channel.toLower();
 }
 
 Tracking tracking(const QString &channel)
@@ -1121,6 +1169,11 @@ void setCounting(const QString &channel, Counting counting,
     if (counting == Counting::Paused &&
         (!until.isValid() || until.toMSecsSinceEpoch() <= now))
     {
+        return;
+    }
+    if (remoteViewer())
+    {
+        // a friend's key only reads, the owner decides what gets counted
         return;
     }
     {
@@ -1186,6 +1239,14 @@ void deleteAll(const QString &channel,
                const std::function<void(const QString &error)> &done)
 {
     const auto key = channel.toLower();
+    if (remoteViewer())
+    {
+        // the server would send everything again on the next sync
+        done(QString("These counts are shared with you from %1. Only its "
+                     "owner can delete them.")
+                 .arg(remoteHost()));
+        return;
+    }
     const auto config = remoteConfigFor(key);
     if (!config)
     {
