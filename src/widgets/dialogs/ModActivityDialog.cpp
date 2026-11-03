@@ -961,10 +961,15 @@ void ModActivityDialog::updateSyncFooter()
     };
     // a friend's read-only key: the server's owner decides what is counted
     const bool viewer = status.configured && modactivity::remoteViewer();
-    const auto where = viewer ? QString("on %1").arg(status.host)
-                       : status.configured
-                           ? QString("on this PC and %1").arg(status.host)
-                           : QString("on this PC");
+    QString where("on this PC");
+    if (viewer)
+    {
+        where = QString("on %1").arg(status.host);
+    }
+    else if (status.configured)
+    {
+        where = QString("on this PC and %1").arg(status.host);
+    }
 
     QString text;
     QString dotColor;
@@ -1083,9 +1088,15 @@ void ModActivityDialog::fillCountingMenu(QMenu *menu)
     }
     else
     {
-        header = viewer           ? "Counting on " + host
-                 : host.isEmpty() ? QString("Counting on this PC")
-                                  : "Counting on this PC and " + host;
+        if (viewer)
+        {
+            header = "Counting on " + host;
+        }
+        else
+        {
+            header = host.isEmpty() ? QString("Counting on this PC")
+                                    : "Counting on this PC and " + host;
+        }
         dotColor = "#4fbf72";
     }
     auto *label = new QLabel(
