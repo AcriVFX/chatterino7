@@ -959,7 +959,10 @@ void ModActivityDialog::updateSyncFooter()
                              "sync.")
                          .arg(status.host, what);
     };
-    const auto where = status.configured
+    // a friend's read-only key: the server's owner decides what is counted
+    const bool viewer = status.configured && modactivity::remoteViewer();
+    const auto where = viewer ? QString("on %1").arg(status.host)
+                       : status.configured
                            ? QString("on this PC and %1").arg(status.host)
                            : QString("on this PC");
 
@@ -985,11 +988,13 @@ void ModActivityDialog::updateSyncFooter()
     {
         const auto since =
             track.since.isValid() ? shortTime(track.since) : QString();
-        text = notTaken ? QString("Counting stopped since %1 on this PC. %2")
-                              .arg(since, notTakenText("stop"))
-                        : QString("Counting stopped since %1 %2. Nothing is "
-                                  "counted until you start it again.")
-                              .arg(since, where);
+        text = notTaken
+                   ? QString("Counting stopped since %1 on this PC. %2")
+                         .arg(since, notTakenText("stop"))
+                   : QString("Counting stopped since %1 %2. Nothing is "
+                             "counted until %3 starts it again.")
+                         .arg(since, where,
+                              viewer ? QString("its owner") : QString("you"));
         dotColor = notTaken ? "#e0a03c" : "#8f9bb3";
         linkText = "Start counting";
         showRetry = notTaken && !track.serverOutdated;
@@ -1008,8 +1013,12 @@ void ModActivityDialog::updateSyncFooter()
     }
     else if (status.ok && !status.needsSignIn)
     {
-        text = QString("Counted around the clock on %1, last synced %2. %3")
-                   .arg(status.host, synced, help);
+        text = viewer ? QString("Shared with you from %1 (read-only), counted "
+                                "around the clock, last synced %2. %3")
+                            .arg(status.host, synced, help)
+                      : QString("Counted around the clock on %1, last synced "
+                                "%2. %3")
+                            .arg(status.host, synced, help);
         dotColor = "#4fbf72";
     }
     else
@@ -1019,12 +1028,13 @@ void ModActivityDialog::updateSyncFooter()
                 ? QString("showing what this PC counted.")
                 : QString("showing what was synced until %1 plus this PC.")
                       .arg(synced);
-        text =
-            status.needsSignIn
-                ? QString("%1 needs a new Twitch sign-in (setup.ps1 signin), "
-                          "%2")
-                      .arg(status.host, shown)
-                : QString("%1 not reachable, %2").arg(status.host, shown);
+        text = status.needsSignIn
+                   ? QString("%1 needs a new Twitch sign-in (%2), %3")
+                         .arg(status.host,
+                              viewer ? QString("by its owner")
+                                     : QString("setup.ps1 signin"),
+                              shown)
+                   : QString("%1 not reachable, %2").arg(status.host, shown);
         dotColor = "#e0a03c";
         showRetry = true;
     }
@@ -1038,6 +1048,10 @@ void ModActivityDialog::updateSyncFooter()
     this->ui_.syncDot->setVisible(!dotColor.isEmpty());
     this->ui_.syncDot->setStyleSheet(
         QString("background: %1; border-radius: 3px;").arg(dotColor));
+    if (viewer)
+    {
+        linkText.clear();
+    }
     this->ui_.countingLink->setText(linkText);
     this->ui_.countingLink->setVisible(!linkText.isEmpty());
     this->ui_.retry->setVisible(status.configured && showRetry);
@@ -1050,6 +1064,8 @@ void ModActivityDialog::fillCountingMenu(QMenu *menu)
     menu->clear();
     const auto track = modactivity::tracking(this->channel_);
     const auto host = modactivity::remoteHost();
+    // a friend's read-only key can't pause, stop or delete anything
+    const bool viewer = modactivity::remoteViewer();
 
     QString header;
     QString dotColor;
@@ -1067,8 +1083,9 @@ void ModActivityDialog::fillCountingMenu(QMenu *menu)
     }
     else
     {
-        header = host.isEmpty() ? QString("Counting on this PC")
-                                : "Counting on this PC and " + host;
+        header = viewer           ? "Counting on " + host
+                 : host.isEmpty() ? QString("Counting on this PC")
+                                  : "Counting on this PC and " + host;
         dotColor = "#4fbf72";
     }
     auto *label = new QLabel(
@@ -1080,6 +1097,14 @@ void ModActivityDialog::fillCountingMenu(QMenu *menu)
     headerAction->setDefaultWidget(label);
     headerAction->setEnabled(false);
     menu->addAction(headerAction);
+    if (viewer)
+    {
+        menu->addSeparator();
+        auto *shared = menu->addAction(
+            QString("Shared with you from %1, read-only").arg(host));
+        shared->setEnabled(false);
+        return;
+    }
     menu->addSeparator();
 
     const auto set = [this](Counting counting, const QDateTime &until = {}) {

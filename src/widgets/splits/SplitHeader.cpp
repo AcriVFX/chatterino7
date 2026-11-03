@@ -27,6 +27,7 @@
 #include "util/Helpers.hpp"
 #include "util/LayoutHelper.hpp"
 #include "util/MentionHistory.hpp"
+#include "util/ModActivity.hpp"
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
@@ -612,8 +613,11 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                 this->split_, &Split::openModViewInBrowser);
         }
 
-        // Chatterino9: per-mod activity for this channel
-        if (twitchChannel && twitchChannel->hasModRights())
+        // Chatterino9: per-mod activity for this channel, also for a friend
+        // the counts are shared with
+        if (twitchChannel &&
+            (twitchChannel->hasModRights() ||
+             modactivity::sharedWithMe(twitchChannel->getName())))
         {
             menu->addAction("Mod activity", this->split_, [this] {
                 this->openModActivity();
@@ -1061,7 +1065,8 @@ void SplitHeader::updateFeatureButtons()
     const bool mod = show && twitchChannel->hasModRights();
 
     this->predictionButton_->setVisible(mod);
-    this->modActivityButton_->setVisible(mod);
+    this->modActivityButton_->setVisible(
+        mod || (show && modactivity::sharedWithMe(twitchChannel->getName())));
     this->emoteStatsButton_->setVisible(show);
 
     // blue while the prediction strip shows a running prediction

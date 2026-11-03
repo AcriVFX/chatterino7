@@ -95,13 +95,22 @@ SyncStatus syncStatus(const QString &channel);
 /// Fires in the GUI thread after each sync attempt
 pajlada::Signals::NoArgSignal &syncStatusChanged();
 
-/// A GET request to the mod tracker server named in remote.json, carrying
-/// its keys, or nothing without remote.json. Used by the Emote stats sync.
-std::optional<NetworkRequest> remoteRequest(const QString &path,
-                                            const QUrlQuery &query = {});
+/// A request to the mod tracker server named in remote.json, carrying its
+/// keys, or nothing without remote.json. Used by the Emote stats sync.
+std::optional<NetworkRequest> remoteRequest(
+    const QString &path, const QUrlQuery &query = {},
+    NetworkRequestType type = NetworkRequestType::Get);
 
 /// Host name of the mod tracker server, empty without remote.json
 QString remoteHost();
+
+/// remote.json holds a friend's read-only key (setup.ps1 friend-add): the
+/// counts come from the owner's server and can't be changed or deleted here
+bool remoteViewer();
+
+/// A friend's key reads the mod actions of `channel`, so its Mod activity
+/// window is worth showing without mod rights there
+bool sharedWithMe(const QString &channel);
 
 enum class Counting : std::uint8_t { On, Paused, Stopped };
 

@@ -16,7 +16,8 @@ for the time Chatterino9 was closed.
   Docker network. No ports are published.
 - `setup.ps1`: installs it from a Windows PC over one SSH connection per step
   (`install`, `start`, `update`, `tunnel`, `signin`, `stop`, `status`, `check`) and saves the app's keys to
-  `%APPDATA%\Chatterino2\Misc\ModActivity\remote.json`.
+  `%APPDATA%\Chatterino2\Misc\ModActivity\remote.json`. `friend-add`,
+  `friend-remove` and `friends` manage read-only keys for friends (below).
 
 The app (`src/util/ModActivity.cpp`) reads `remote.json`, pulls new actions
 when the Mod activity window opens and every 3 minutes while it is open, and
@@ -25,11 +26,17 @@ seconds of the server's copy counts once.
 
 Endpoints, all behind Cloudflare Access and the API key:
 
-- `GET /v1/status`: `{channel, signedIn, needsSignIn, connected, lastEventAt, serverTime, tracking: {state, until, since}, emotes: {connected, lastMessageAt, listsLoadedAt}}`
+- `GET /v1/status`: `{channel, access, signedIn, needsSignIn, connected, lastEventAt, serverTime, tracking: {state, until, since}, emotes: {connected, lastMessageAt, listsLoadedAt}}`
+  (`access` is `owner`, `all` or `emotes`; an `emotes` friend key gets only
+  `channel`, `access`, `serverTime` and `emotes`)
 - `GET /v1/<channel>/actions?since=<msecs>`: action lines newer than `since`
 - `GET /v1/<channel>/streams`: `streams.tsv`
 - `GET /v1/<channel>/emotes/days`: one line per counted UTC day, `YYYY-MM-DD<TAB>mtime`
 - `GET /v1/<channel>/emotes/day?d=YYYY-MM-DD`: that day's emote counts
+- `GET /v1/<channel>/emotes/added-by`: the owner's Added by corrections
+  (`added-by.json`), 404 until the owner's app sent them
+- `POST /v1/<channel>/emotes/added-by` with `{"unknown": name, "emotes": {emote: name}}`:
+  the owner's app sends its `Misc\EmoteStats\added-by.json` when it changed
 - `POST /v1/<channel>/tracking` with `{"state": "on" | "paused" | "stopped", "until": msecs}`:
   pauses (until `until`, at most 24 hours), stops or starts counting mod
   actions. Kept in `tracking.json`. Emotes and streams are always counted.
@@ -46,6 +53,20 @@ and deletes the counts, on the PC and the server together. A pause, stop or
 start the server did not get is sent again on the next sync. Deleting asks
 the server first and deletes nothing on the PC when the server can't be
 reached.
+
+Friends: `setup.ps1 friend-add` gives a friend their own key with scope
+`emotes` (emote stats) or `all` (emote stats and mod activity). The server
+keeps only its SHA-256 in `data/viewers.json` (`{name: {hash, scope}}`),
+re-read whenever the file changes. A friend key only reads: no POST, and
+`emotes` gets only `/v1/status` and `/v1/<channel>/emotes/*`; everything
+else answers 404 like a wrong key. The friend also needs their own
+Cloudflare Access service token in the same Access policy, so it can be
+deleted on its own. The step makes a zip on the Desktop with the friend's
+`remote.json` (`viewer` and `channel` added), the owner's settings without
+`accounts`, `external`, `logging.path` and `cache.path`, `window-layout.json`,
+the emote stats and, for `all`, the mod action files. The friend's app takes
+the server's counting state and Added by corrections and hides pausing,
+stopping and deleting. `setup.ps1 friend-remove` deletes the key again.
 
 To pause: `setup.ps1 stop` (clears the counted mod actions, keeps the
 sign-in and the emote stats). `setup.ps1 start` is a fresh start: it clears

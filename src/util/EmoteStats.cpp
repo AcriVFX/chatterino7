@@ -1363,6 +1363,107 @@ bool importRunning(const QString &channel)
     return state.running.contains(channel.toLower());
 }
 
+namespace {
+
+/// The added-by.json last sent to the server in this run, so it is only sent
+/// again when it changed. GUI thread only.
+QByteArray &sentAddedBy()
+{
+    static QByteArray sent;
+    return sent;
+}
+
+/// The owner's app sends its Added by corrections, a friend's app takes them
+void syncAddedBy(const QString &channel)
+{
+    const auto path = addedByFile();
+    if (path.isEmpty())
+    {
+        return;
+    }
+    const auto route = QStringLiteral("/v1/%1/emotes/added-by").arg(channel);
+
+    if (modactivity::remoteViewer())
+    {
+        auto request = modactivity::remoteRequest(route);
+        if (!request)
+        {
+            return;
+        }
+        std::move(*request)
+            .timeout(SYNC_TIMEOUT_MSECS)
+            .onSuccess([path](const NetworkResult &result) {
+                // 404: the owner has none yet, or an older server
+                const auto doc = QJsonDocument::fromJson(result.getData());
+                if (result.status() != 200 || !doc.isObject())
+                {
+                    return;
+                }
+                const auto data = doc.toJson(QJsonDocument::Indented);
+                QFile current(path);
+                if (current.open(QIODevice::ReadOnly) &&
+                    current.readAll() == data)
+                {
+                    return;
+                }
+                current.close();
+                QDir().mkpath(QFileInfo(path).path());
+                QSaveFile file(path);
+                if (file.open(QIODevice::WriteOnly) && file.write(data) >= 0 &&
+                    file.commit())
+                {
+                    updated().invoke();
+                }
+            })
+            .execute();
+        return;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return;
+    }
+    const auto doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isObject())
+    {
+        // a typo while editing: sent once it parses again
+        return;
+    }
+    const auto body = doc.toJson(QJsonDocument::Compact);
+    if (body == sentAddedBy())
+    {
+        return;
+    }
+    auto request =
+        modactivity::remoteRequest(route, {}, NetworkRequestType::Post);
+    if (!request)
+    {
+        return;
+    }
+    std::move(*request)
+        .timeout(SYNC_TIMEOUT_MSECS)
+        .json(doc.object())
+        .onSuccess([body](const NetworkResult &result) {
+            // an older server answers 404 and gets it after setup.ps1 update
+            if (result.status() == 200)
+            {
+                sentAddedBy() = body;
+            }
+        })
+        .execute();
+}
+
+}  // namespace
+
+QString addedByFile()
+{
+    const auto &misc = getApp()->getPaths().miscDirectory;
+    return misc.isEmpty() ? QString()
+                          : QDir(misc).filePath(
+                                QStringLiteral("EmoteStats/added-by.json"));
+}
+
 void syncFromServer(const QString &channel)
 {
     const auto key = channel.toLower();
@@ -1391,6 +1492,7 @@ void syncFromServer(const QString &channel)
             }
             syncState(key).connected =
                 status.value(u"emotes").toObject().value(u"connected").toBool();
+            syncAddedBy(key);
             fetchDayList(key);
         })
         .onError([key](const NetworkResult &) {

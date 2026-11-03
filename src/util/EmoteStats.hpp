@@ -168,6 +168,14 @@ SyncStatus syncStatus(const QString &channel);
 /// import finished and after each sync attempt
 pajlada::Signals::NoArgSignal &updated();
 
+/// Misc/EmoteStats/added-by.json: the owner's corrections to the Added by
+/// column ({"unknown": shown for 7TV emotes 7TV has no adder for, "emotes":
+/// {emote name: who added it}}). syncFromServer() sends it to the mod tracker
+/// server when it changed; with a friend's key (see modactivity::
+/// remoteViewer()) it takes the owner's from there instead. Empty without a
+/// settings folder.
+QString addedByFile();
+
 }  // namespace emotestats
 
 }  // namespace chatterino
