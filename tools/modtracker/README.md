@@ -63,7 +63,9 @@ else answers 404 like a wrong key. The friend also needs their own
 Cloudflare Access service token in the same Access policy, so it can be
 deleted on its own. The step makes a zip on the Desktop with the friend's
 `remote.json` (`viewer` and `channel` added), the owner's settings without
-`accounts`, `external`, `logging.path` and `cache.path`, `window-layout.json`,
+`accounts`, `kickAccounts`, `external`, any other top-level key named like an
+account, token, secret, password or credential, `logging.path` and `cache.path`
+(the step stops if a login token is still in the result), `window-layout.json`,
 the emote stats and, for `all`, the mod action files. The friend's app takes
 the server's counting state and Added by corrections and hides pausing,
 stopping and deleting. `setup.ps1 friend-remove` deletes the key again.

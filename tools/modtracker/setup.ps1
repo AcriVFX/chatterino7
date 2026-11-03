@@ -443,24 +443,28 @@ function Read-FriendName {
     return $name
 }
 
-# settings.json without your Twitch login (Chatterino keeps the token there),
-# upload keys and paths on this PC
+# settings.json without your Twitch and Kick logins (Chatterino keeps their
+# tokens there), upload keys and paths on this PC
+$dropSections = @('accounts', 'kickAccounts', 'external')
+function Test-DropSection([string]$key) {
+    return ($dropSections -contains $key) -or ($key -match 'account|token|secret|password|credential')
+}
+
 function Get-FriendSettings([string]$path) {
     $text = [IO.File]::ReadAllText($path)
     if ($PSVersionTable.PSVersion.Major -ge 6) {
         # keeps every value exactly as it is
         Add-Type -AssemblyName System.Text.Json
         $root = [Text.Json.Nodes.JsonNode]::Parse($text).AsObject()
-        [void]$root.Remove('accounts')
-        [void]$root.Remove('external')
+        foreach ($key in @($root | ForEach-Object { $_.Key })) {
+            if (Test-DropSection $key) { [void]$root.Remove($key) }
+        }
         foreach ($section in @('logging', 'cache')) {
             if ($root.ContainsKey($section) -and $root[$section] -is [Text.Json.Nodes.JsonObject]) {
                 [void]$root[$section].Remove('path')
             }
         }
         $out = $root.ToJsonString()
-        $check = [Text.Json.Nodes.JsonNode]::Parse($out).AsObject()
-        if ($check.ContainsKey('accounts')) { Stop-Setup 'Could not take your login out of settings.json, nothing was made.' }
     } else {
         Add-Type -AssemblyName System.Web.Extensions
         $json = New-Object Web.Script.Serialization.JavaScriptSerializer
@@ -468,15 +472,19 @@ function Get-FriendSettings([string]$path) {
         $json.RecursionLimit = 1000
         $root = $json.DeserializeObject($text)
         if ($root -isnot [Collections.Generic.IDictionary[string, object]]) { Stop-Setup 'settings.json could not be read.' }
-        [void]$root.Remove('accounts')
-        [void]$root.Remove('external')
+        foreach ($key in @($root.Keys)) {
+            if (Test-DropSection $key) { [void]$root.Remove($key) }
+        }
         foreach ($section in @('logging', 'cache')) {
             if ($root.ContainsKey($section) -and $root[$section] -is [Collections.Generic.IDictionary[string, object]]) {
                 [void]$root[$section].Remove('path')
             }
         }
         $out = $json.Serialize($root)
-        if ($json.DeserializeObject($out).ContainsKey('accounts')) { Stop-Setup 'Could not take your login out of settings.json, nothing was made.' }
+    }
+    # last check on the finished text: no login token may be left anywhere
+    if ($out -match '"(oauthToken|authToken|refreshToken|clientSecret|accounts|kickAccounts)"\s*:') {
+        Stop-Setup "Could not take every login out of settings.json ($($Matches[1]) is still there), nothing was made."
     }
     return $out
 }
