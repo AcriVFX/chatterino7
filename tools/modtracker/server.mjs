@@ -328,6 +328,71 @@ function recordAction(msecs, kind, moderator, target, seconds = 0) {
   state.lastEventAt = Date.now();
 }
 
+// Werbung timeouts: "msecs, target" of each timeout about "Werbung" in
+// werbung.tsv, apart from the action files so their format stays the same.
+// Same rule as the app (src/util/ModActivity.hpp): the timed-out user wrote
+// "werbung" (any case, also inside a word) in chat in the 2 minutes before
+// the timeout, or the mod's reason says it.
+
+const WERBUNG_WINDOW_MSECS = 2 * 60 * 1000;
+/// the timeout can arrive a little before the chat message it is about
+const WERBUNG_SLACK_MSECS = 2000;
+const WERBUNG_FILE = join(CHANNEL_DIR, "werbung.tsv");
+
+export function mentionsWerbung(text) {
+  return /werbung/i.test(String(text ?? ""));
+}
+
+/// login -> when they last wrote "werbung" in chat
+const werbungSaid = new Map();
+
+export function noteWerbung(login, msecs, text, said = werbungSaid) {
+  if (!login || !mentionsWerbung(text)) {
+    return;
+  }
+  said.delete(login);
+  said.set(login, msecs);
+  // oldest first: drop what is too old to matter
+  for (const [name, at] of said) {
+    if (said.size <= 5000 && at >= msecs - WERBUNG_WINDOW_MSECS * 2) {
+      break;
+    }
+    said.delete(name);
+  }
+}
+
+export function isWerbungTimeout(target, reason, msecs, said = werbungSaid) {
+  if (mentionsWerbung(reason)) {
+    return true;
+  }
+  const at = said.get(String(target).toLowerCase());
+  return (
+    at !== undefined &&
+    at >= msecs - WERBUNG_WINDOW_MSECS - WERBUNG_SLACK_MSECS &&
+    at <= msecs + WERBUNG_SLACK_MSECS
+  );
+}
+
+function recordWerbung(msecs, target) {
+  mkdirSync(CHANNEL_DIR, { recursive: true });
+  appendFileSync(WERBUNG_FILE, `${msecs}\t${target.toLowerCase()}\n`);
+}
+
+/// werbung.tsv lines newer than `since`
+function werbungSince(since) {
+  if (!existsSync(WERBUNG_FILE)) {
+    return "";
+  }
+  let out = "";
+  for (const line of readFileSync(WERBUNG_FILE, "utf8").split("\n")) {
+    const msecs = Number(line.slice(0, line.indexOf("\t")));
+    if (line && msecs > since) {
+      out += `${line}\n`;
+    }
+  }
+  return out;
+}
+
 function writeStreamRow(id, start, lastSeen) {
   mkdirSync(CHANNEL_DIR, { recursive: true });
   appendFileSync(
@@ -454,6 +519,7 @@ export function deleteCounts() {
       }
     }
     rmSync(join(CHANNEL_DIR, "streams.tsv"), { force: true });
+    rmSync(WERBUNG_FILE, { force: true });
   }
   // the running stream gets its row again on the next check
   if (live) {
@@ -495,6 +561,12 @@ function onModerate(event, msecs) {
     seconds = Math.round((parseTime(detail.expires_at) - msecs) / 1000);
   }
   recordAction(msecs, kind, moderator, detail.user_login, seconds);
+  if (
+    kind === "timeout" &&
+    isWerbungTimeout(detail.user_login, detail.reason, msecs)
+  ) {
+    recordWerbung(msecs, detail.user_login);
+  }
 }
 
 const seenMessages = new Set();
@@ -1036,6 +1108,7 @@ function onChatMessage(message) {
   const sent = Number(tags["tmi-sent-ts"]);
   const msecs = Number.isFinite(sent) && sent > 0 ? sent : Date.now();
   countMessage(msecs, login, emoteUses(text, tags.emotes));
+  noteWerbung(login, msecs, text);
   chat.lastMessageAt = Date.now();
 }
 
@@ -1252,6 +1325,10 @@ const server = createServer((req, res) => {
   if (url.pathname === `/v1/${CHANNEL}/actions`) {
     const since = Number(url.searchParams.get("since") ?? 0);
     return send(res, 200, actionsSince(Number.isFinite(since) ? since : 0));
+  }
+  if (url.pathname === `/v1/${CHANNEL}/werbung`) {
+    const since = Number(url.searchParams.get("since") ?? 0);
+    return send(res, 200, werbungSince(Number.isFinite(since) ? since : 0));
   }
   if (url.pathname === `/v1/${CHANNEL}/streams`) {
     return send(res, 200, readStreams());

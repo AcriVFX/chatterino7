@@ -8,12 +8,14 @@
 #include "singletons/Paths.hpp"
 #include "util/PostToThread.hpp"
 
+#include <QDate>
 #include <QDir>
 #include <QFile>
 #include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QStringView>
@@ -26,6 +28,8 @@
 #include <cstdlib>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -195,6 +199,64 @@ void appendLine(const QString &path, const QString &line)
     }
 }
 
+// -------------------------------------------------------------- werbung
+//
+// Werbung timeouts are kept apart from the action files, in werbung.tsv
+// ("msecs, target" of each such timeout), so the action files keep their
+// format. The marks are put on the loaded timeouts when they are read.
+
+QString werbungFile(const QString &dir)
+{
+    return QDir(dir).filePath(QStringLiteral("werbung.tsv"));
+}
+
+QString werbungLine(qint64 msecs, const QString &target)
+{
+    return QString::number(msecs) + '\t' + target;
+}
+
+/// Marks the loaded timeout of `target` at about `msecs` as a Werbung
+/// timeout. Returns whether one was marked that wasn't before.
+bool applyWerbung(std::vector<Action> &actions, qint64 msecs,
+                  const QString &target)
+{
+    auto it = std::ranges::lower_bound(actions, msecs - SAME_ACTION_MSECS, {},
+                                       &Action::msecs);
+    for (; it != actions.end() && it->msecs <= msecs + SAME_ACTION_MSECS; ++it)
+    {
+        if (it->kind == Kind::Timeout && it->target == target)
+        {
+            if (it->werbung)
+            {
+                return false;
+            }
+            it->werbung = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+void loadWerbung(std::vector<Action> &actions, const QString &dir)
+{
+    QFile file(werbungFile(dir));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        return;
+    }
+    QTextStream in(&file);
+    while (!in.atEnd())
+    {
+        const auto parts = in.readLine().split(u'\t');
+        bool ok = false;
+        const auto msecs = parts.value(0).toLongLong(&ok);
+        if (parts.size() == 2 && ok && !parts[1].isEmpty())
+        {
+            applyWerbung(actions, msecs, parts[1]);
+        }
+    }
+}
+
 // ------------------------------------------------------------- tracking
 
 constexpr std::array<std::pair<Counting, QStringView>, 3> COUNTING_KEYS{{
@@ -360,6 +422,7 @@ void loadLocked(Store &st, const QString &channel, ChannelData &data)
     }
     std::ranges::stable_sort(data.actions, {}, &Action::msecs);
 
+    loadWerbung(data.actions, dir);
     loadStreams(data, dir);
 }
 
@@ -489,6 +552,50 @@ int mergeActionsLocked(Store &st, const QString &channel,
             &Action::msecs);
     }
     return added;
+}
+
+/// Saves the server's Werbung marks ("msecs, target" lines) of timeouts that
+/// are not marked yet. Returns whether any timeout got marked.
+bool mergeWerbungLocked(Store &st, const QString &channel,
+                        const QByteArray &body)
+{
+    const auto dir = channelDir(channel);
+    if (!ensureDir(dir))
+    {
+        return false;
+    }
+    auto &data = st.channels[channel];
+    loadLocked(st, channel, data);
+
+    QString chunk;
+    const auto rawLines = body.split('\n');
+    for (const auto &raw : rawLines)
+    {
+        const auto parts = QString::fromUtf8(raw).split(u'\t');
+        bool ok = false;
+        const auto msecs = parts.value(0).toLongLong(&ok);
+        if (parts.size() != 2 || !ok || parts[1].isEmpty())
+        {
+            continue;
+        }
+        const auto target = parts[1].toLower();
+        if (applyWerbung(data.actions, msecs, target))
+        {
+            chunk += werbungLine(msecs, target);
+            chunk += u'\n';
+        }
+    }
+    if (chunk.isEmpty())
+    {
+        return false;
+    }
+    QFile file(werbungFile(dir));
+    if (file.open(QIODevice::Append | QIODevice::Text))
+    {
+        QTextStream out(&file);
+        out << chunk;
+    }
+    return true;
 }
 
 /// Saves the server's streams and stream ends the app doesn't know yet.
@@ -831,6 +938,38 @@ void fetchStreams(const QString &channel, const RemoteConfig &config,
         .execute();
 }
 
+/// The server's Werbung marks since `query`'s time. A server from before
+/// Werbung timeouts were marked has none (404), the sync goes on anyway.
+void fetchWerbung(const QString &channel, const RemoteConfig &config,
+                  const QUrlQuery &query, bool anyAdded, int epoch)
+{
+    serverRequest(config, QStringLiteral("/v1/%1/werbung").arg(channel), query)
+        .onSuccess([channel, config, anyAdded,
+                    epoch](const NetworkResult &result) {
+            if (deletedSince(channel, epoch))
+            {
+                return;
+            }
+            bool changed = anyAdded;
+            if (isOk(result))
+            {
+                auto &st = store();
+                std::scoped_lock lock(st.mutex);
+                changed = mergeWerbungLocked(st, channel, result.getData()) ||
+                          changed;
+            }
+            fetchStreams(channel, config, changed, epoch);
+        })
+        .onError([channel, config, anyAdded, epoch](const NetworkResult &) {
+            if (deletedSince(channel, epoch))
+            {
+                return;
+            }
+            fetchStreams(channel, config, anyAdded, epoch);
+        })
+        .execute();
+}
+
 void fetchActions(const QString &channel, const RemoteConfig &config, int epoch)
 {
     const auto &state = syncState(channel);
@@ -840,7 +979,8 @@ void fetchActions(const QString &channel, const RemoteConfig &config, int epoch)
                            0, state.cursor - SYNC_OVERLAP_MSECS)));
 
     serverRequest(config, QStringLiteral("/v1/%1/actions").arg(channel), query)
-        .onSuccess([channel, config, epoch](const NetworkResult &result) {
+        .onSuccess([channel, config, epoch,
+                    query](const NetworkResult &result) {
             if (deletedSince(channel, epoch))
             {
                 return;
@@ -860,7 +1000,7 @@ void fetchActions(const QString &channel, const RemoteConfig &config, int epoch)
                     mergeActionsLocked(st, channel, result.getData(), newest);
             }
             state.cursor = newest;
-            fetchStreams(channel, config, added > 0, epoch);
+            fetchWerbung(channel, config, query, added > 0, epoch);
         })
         .onError([channel](const NetworkResult &) {
             finishSync(channel, false);
@@ -871,7 +1011,8 @@ void fetchActions(const QString &channel, const RemoteConfig &config, int epoch)
 }  // namespace
 
 void record(const QString &channel, const QDateTime &time, Kind kind,
-            const QString &moderator, const QString &target, int seconds)
+            const QString &moderator, const QString &target, int seconds,
+            bool werbung)
 {
     if (channel.isEmpty() || moderator.isEmpty() || !time.isValid())
     {
@@ -884,6 +1025,7 @@ void record(const QString &channel, const QDateTime &time, Kind kind,
         .moderator = moderator.toLower(),
         .target = target.toLower(),
         .seconds = std::max(0, seconds),
+        .werbung = werbung && kind == Kind::Timeout,
     };
 
     {
@@ -901,6 +1043,11 @@ void record(const QString &channel, const QDateTime &time, Kind kind,
         {
             appendLine(QDir(dir).filePath(actionFile(action.msecs)),
                        formatAction(action));
+            if (action.werbung)
+            {
+                appendLine(werbungFile(dir),
+                           werbungLine(action.msecs, action.target));
+            }
         }
 
         auto it = st.channels.find(key);
@@ -1153,9 +1300,11 @@ void deleteLocal(const QString &channel)
         if (!dir.isEmpty())
         {
             QDir qdir(dir);
-            const auto files = qdir.entryList({QStringLiteral("actions-*.tsv"),
-                                               QStringLiteral("streams.tsv")},
-                                              QDir::Files);
+            const auto files = qdir.entryList(
+                {QStringLiteral("actions-*.tsv"), QStringLiteral("streams.tsv"),
+                 QStringLiteral("werbung.tsv"),
+                 QStringLiteral("werbung-logs.json")},
+                QDir::Files);
             for (const auto &name : files)
             {
                 QFile::remove(qdir.filePath(name));
@@ -1261,6 +1410,235 @@ void deleteAll(const QString &channel,
             }
         })
         .execute();
+}
+
+bool mentionsWerbung(QStringView text)
+{
+    return text.contains(u"werbung", Qt::CaseInsensitive);
+}
+
+namespace {
+
+/// Log lines are this many seconds exact, and the timeout may arrive a
+/// little before the message it is about
+constexpr qint64 LOG_SLACK_MSECS = 2000;
+
+/// Timeouts this new are checked on a later run, so the log has every
+/// message before them
+constexpr qint64 LOG_SETTLE_MSECS = 3LL * 60 * 1000;
+
+std::mutex &logCheckMutex()
+{
+    static std::mutex m;
+    return m;
+}
+
+QSet<QString> &logChecksRunning()
+{
+    static QSet<QString> running;
+    return running;
+}
+
+QString logStateFile(const QString &dir)
+{
+    return QDir(dir).filePath(QStringLiteral("werbung-logs.json"));
+}
+
+/// Time of the newest timeout the logs were checked for
+qint64 logsCheckedUntil(const QString &dir)
+{
+    QFile file(logStateFile(dir));
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return 0;
+    }
+    return QJsonDocument::fromJson(file.readAll())
+        .object()
+        .value(u"checkedUntil")
+        .toInteger();
+}
+
+void saveLogsCheckedUntil(const QString &dir, qint64 msecs)
+{
+    QSaveFile file(logStateFile(dir));
+    if (file.open(QIODevice::WriteOnly))
+    {
+        file.write(QJsonDocument(QJsonObject{{"checkedUntil", msecs}})
+                       .toJson(QJsonDocument::Compact));
+        file.commit();
+    }
+}
+
+struct LogCheck {
+    qint64 msecs = 0;
+    QString target;
+};
+
+/// The (msecs, target) of each timeout in `checks` that the logs show the
+/// target wrote "werbung" shortly before
+std::vector<LogCheck> findWerbungInLogs(const QString &channel,
+                                        const QString &logDirectory,
+                                        const std::vector<LogCheck> &checks)
+{
+    // local days of the log files to read, and whose messages matter
+    std::set<QDate> days;
+    QSet<QString> targets;
+    for (const auto &check : checks)
+    {
+        days.insert(QDateTime::fromMSecsSinceEpoch(
+                        check.msecs - WERBUNG_WINDOW_MSECS - LOG_SLACK_MSECS)
+                        .date());
+        days.insert(
+            QDateTime::fromMSecsSinceEpoch(check.msecs + LOG_SLACK_MSECS)
+                .date());
+        targets.insert(check.target);
+    }
+
+    // same line format as the Emote stats log import:
+    // "[12:34:56] login: text" or "[12:34:56] Display login: text"
+    const QRegularExpression lineRegex(QStringLiteral(
+        R"(^\[(\d\d):(\d\d):(\d\d)\] (?:[^\s:]+ )?([a-z0-9_]+): (.*)$)"));
+
+    // when each target wrote "werbung"
+    QHash<QString, std::vector<qint64>> said;
+    for (const auto &day : days)
+    {
+        QFile file(QDir(logDirectory)
+                       .filePath(QStringLiteral("%1-%2.log")
+                                     .arg(channel, day.toString(Qt::ISODate))));
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            continue;
+        }
+        QTextStream in(&file);
+        QString line;
+        while (in.readLineInto(&line))
+        {
+            // most lines don't say it, skip them before the regex
+            if (!mentionsWerbung(line))
+            {
+                continue;
+            }
+            auto m = lineRegex.match(line);
+            if (!m.hasMatch() || !targets.contains(m.captured(4)) ||
+                !mentionsWerbung(m.capturedView(5)))
+            {
+                continue;
+            }
+            const QDateTime time(
+                day, QTime(m.captured(1).toInt(), m.captured(2).toInt(),
+                           m.captured(3).toInt()));
+            if (time.isValid())
+            {
+                said[m.captured(4)].push_back(time.toMSecsSinceEpoch());
+            }
+        }
+    }
+
+    std::vector<LogCheck> found;
+    for (const auto &check : checks)
+    {
+        auto it = said.constFind(check.target);
+        if (it == said.constEnd())
+        {
+            continue;
+        }
+        const auto from = check.msecs - WERBUNG_WINDOW_MSECS - LOG_SLACK_MSECS;
+        const auto to = check.msecs + LOG_SLACK_MSECS;
+        if (std::ranges::any_of(*it, [&](qint64 msecs) {
+                return msecs >= from && msecs <= to;
+            }))
+        {
+            found.push_back(check);
+        }
+    }
+    return found;
+}
+
+}  // namespace
+
+void markWerbungFromLogs(const QString &channel, const QString &logDirectory)
+{
+    const auto key = channel.toLower();
+    const auto dir = channelDir(key);
+    if (dir.isEmpty() || logDirectory.isEmpty())
+    {
+        return;
+    }
+    {
+        std::scoped_lock lock(logCheckMutex());
+        if (logChecksRunning().contains(key))
+        {
+            return;
+        }
+        logChecksRunning().insert(key);
+    }
+
+    std::thread([key, dir, logDirectory] {
+        const auto until =
+            QDateTime::currentMSecsSinceEpoch() - LOG_SETTLE_MSECS;
+        const auto checkedUntil = logsCheckedUntil(dir);
+
+        // the timeouts not marked yet that the logs were not checked for
+        std::vector<LogCheck> checks;
+        {
+            auto &st = store();
+            std::scoped_lock lock(st.mutex);
+            auto &data = st.channels[key];
+            loadLocked(st, key, data);
+            for (const auto &action : data.actions)
+            {
+                if (action.kind == Kind::Timeout && !action.werbung &&
+                    action.msecs > checkedUntil && action.msecs <= until)
+                {
+                    checks.push_back({action.msecs, action.target});
+                }
+            }
+        }
+
+        bool marked = false;
+        if (!checks.empty())
+        {
+            const auto found = findWerbungInLogs(key, logDirectory, checks);
+            auto &st = store();
+            std::scoped_lock lock(st.mutex);
+            auto &data = st.channels[key];
+            QString chunk;
+            for (const auto &check : found)
+            {
+                if (applyWerbung(data.actions, check.msecs, check.target))
+                {
+                    chunk += werbungLine(check.msecs, check.target);
+                    chunk += u'\n';
+                }
+            }
+            if (!chunk.isEmpty() && ensureDir(dir))
+            {
+                QFile file(werbungFile(dir));
+                if (file.open(QIODevice::Append | QIODevice::Text))
+                {
+                    QTextStream out(&file);
+                    out << chunk;
+                }
+                marked = true;
+            }
+        }
+        if (until > checkedUntil && ensureDir(dir))
+        {
+            saveLogsCheckedUntil(dir, until);
+        }
+
+        {
+            std::scoped_lock lock(logCheckMutex());
+            logChecksRunning().remove(key);
+        }
+        if (marked)
+        {
+            runInGuiThread([] {
+                updated().invoke();
+            });
+        }
+    }).detach();
 }
 
 }  // namespace chatterino::modactivity

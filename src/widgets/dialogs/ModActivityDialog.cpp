@@ -4,6 +4,7 @@
 
 #include "Application.hpp"
 #include "singletons/Paths.hpp"
+#include "singletons/Settings.hpp"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -68,6 +69,8 @@ constexpr int SORT_ROLE = Qt::UserRole;
 constexpr int NAME_ROLE = Qt::UserRole + 2;
 /// Width of the widest name in the table, the same on every name cell
 constexpr int NAME_WIDTH_ROLE = Qt::UserRole + 3;
+/// Werbung timeouts left out of a Timeouts cell
+constexpr int HIDDEN_ROLE = Qt::UserRole + 4;
 
 const QColor &windowColor()
 {
@@ -329,6 +332,73 @@ private:
     QColor color_;
 };
 
+/// A Timeouts cell with the number of hidden Werbung timeouts after the count
+/// in small grey, e.g. "1,247 −324"
+class HiddenCountDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        const auto hidden = index.data(HIDDEN_ROLE).toInt();
+        if (hidden <= 0)
+        {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        if (option.state.testFlag(QStyle::State_Selected))
+        {
+            painter->fillRect(option.rect, option.palette.highlight());
+        }
+        const auto text = hiddenText(hidden);
+        const auto font = smallFont(option.font);
+        const int width = QFontMetrics(font).horizontalAdvance(text) + GAP;
+
+        QStyleOptionViewItem shifted(option);
+        shifted.rect.setRight(option.rect.right() - width);
+        QStyledItemDelegate::paint(painter, shifted, index);
+
+        painter->save();
+        painter->setFont(font);
+        painter->setPen(faintColor());
+        painter->drawText(option.rect.adjusted(0, 0, -PADDING, 0),
+                          Qt::AlignRight | Qt::AlignVCenter, text);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &option,
+                   const QModelIndex &index) const override
+    {
+        auto size = QStyledItemDelegate::sizeHint(option, index);
+        const auto hidden = index.data(HIDDEN_ROLE).toInt();
+        if (hidden > 0)
+        {
+            size.setWidth(size.width() +
+                          QFontMetrics(smallFont(option.font))
+                              .horizontalAdvance(hiddenText(hidden)) +
+                          GAP);
+        }
+        return size;
+    }
+
+private:
+    static constexpr int GAP = 6;
+    static constexpr int PADDING = 4;
+
+    static QString hiddenText(int hidden)
+    {
+        return QString(QChar(0x2212)) + cLocale().toString(hidden);
+    }
+
+    static QFont smallFont(QFont font)
+    {
+        font.setPixelSize(11);
+        return font;
+    }
+};
+
 }  // namespace
 
 namespace modactivity_ui {
@@ -508,9 +578,11 @@ ModActivityDialog::ModActivityDialog(QString channel, QWidget *parent)
     syncTimer->setInterval(std::chrono::minutes(3));
     QObject::connect(syncTimer, &QTimer::timeout, this, [this] {
         modactivity::syncFromServer(this->channel_);
+        this->checkLogsForWerbung();
     });
     syncTimer->start();
     modactivity::syncFromServer(this->channel_);
+    this->checkLogsForWerbung();
 
     this->reload();
 }
@@ -559,6 +631,10 @@ void ModActivityDialog::initUi()
         QPushButton#chip { background: transparent; color: #9a9a9e;
             padding: 3px 9px; }
         QPushButton#chip:checked { background: #2a2a2b; color: #f2f2f2; }
+        QPushButton#werbung { background: transparent; padding: 0; }
+        QPushButton#werbung:checked { background: #20324f;
+            border-color: #4f8ff7; }
+        QPushButton#werbung QLabel { background: transparent; }
         QPushButton#seg { padding: 2px 9px; }
         QPushButton#seg:checked { background: #4f8ff7; color: #ffffff;
             border-color: #4f8ff7; }
@@ -714,6 +790,34 @@ void ModActivityDialog::initUi()
         }
         row->addLayout(chips);
 
+        // a checkable button with the label and the hidden count in two
+        // colors
+        this->ui_.werbung = new QPushButton;
+        this->ui_.werbung->setObjectName("werbung");
+        this->ui_.werbung->setCheckable(true);
+        this->ui_.werbung->setChecked(this->hideWerbung_);
+        this->ui_.werbung->setCursor(Qt::PointingHandCursor);
+        {
+            auto *inner = new QHBoxLayout(this->ui_.werbung);
+            inner->setContentsMargins(9, 3, 9, 3);
+            inner->setSpacing(6);
+            this->ui_.werbungLabel = new QLabel("Hide Werbung timeouts");
+            this->ui_.werbungCount = new QLabel;
+            for (auto *label : {this->ui_.werbungLabel, this->ui_.werbungCount})
+            {
+                label->setAttribute(Qt::WA_TransparentForMouseEvents);
+                inner->addWidget(label);
+            }
+        }
+        QObject::connect(this->ui_.werbung, &QPushButton::toggled, this,
+                         [this](bool on) {
+                             this->hideWerbung_ = on;
+                             this->saveView();
+                             this->reload();
+                         });
+        row->addWidget(this->ui_.werbung);
+        this->updateWerbungButton(0);
+
         this->ui_.showBots = new QCheckBox("Show bots");
         this->ui_.showBots->setChecked(this->showBots_);
         QObject::connect(this->ui_.showBots, &QCheckBox::toggled, this,
@@ -788,6 +892,8 @@ void ModActivityDialog::initUi()
         table->sortByColumn(ColTotal, Qt::DescendingOrder);
         table->setItemDelegateForColumn(ColName,
                                         new NameDelegate(barColor, table));
+        table->setItemDelegateForColumn(ColTimeouts,
+                                        new HiddenCountDelegate(table));
         QObject::connect(
             table, &QTableWidget::itemSelectionChanged, this, [this, table] {
                 if (this->updatingUi_)
@@ -1128,7 +1234,7 @@ void ModActivityDialog::confirmDelete()
     const auto host = modactivity::remoteHost();
     const auto locale = QLocale();
     const auto actionCount =
-        locale.toString(static_cast<qlonglong>(this->actions_.size()));
+        locale.toString(static_cast<qlonglong>(this->allActions_.size()));
     const auto track = modactivity::tracking(this->channel_);
 
     const auto makeDialog = [](QDialog &dialog, const QString &step,
@@ -1162,13 +1268,14 @@ void ModActivityDialog::confirmDelete()
             dialog, "Step 1 of 2",
             QString("Delete all mod activity of %1?").arg(this->channel_));
         QStringList lines;
-        lines << (this->actions_.empty()
+        lines << (this->allActions_.empty()
                       ? QString("&bull; no mod actions counted on this PC")
                       : QString("&bull; <span style=\"color: #f2f2f2\"><b>%1 "
                                 "mod actions</b></span> counted since %2")
-                            .arg(actionCount, QDateTime::fromMSecsSinceEpoch(
-                                                  this->actions_.front().msecs)
-                                                  .toString("dd.MM.yyyy")));
+                            .arg(actionCount,
+                                 QDateTime::fromMSecsSinceEpoch(
+                                     this->allActions_.front().msecs)
+                                     .toString("dd.MM.yyyy")));
         lines << QString("&bull; <span style=\"color: #f2f2f2\"><b>%1 "
                          "streams</b></span> in the stream list")
                      .arg(this->streams_.size());
@@ -1429,6 +1536,7 @@ void ModActivityDialog::loadView()
     }
     this->showBots_ = obj.value("bots").toBool(true);
     this->compare_ = obj.value("compare").toBool(true);
+    this->hideWerbung_ = obj.value("hideWerbung").toBool(false);
     this->bucket_ =
         static_cast<Bucket>(std::clamp(obj.value("bucket").toInt(1), 0, 2));
 }
@@ -1463,6 +1571,7 @@ void ModActivityDialog::saveView() const
         {"groups", groups},
         {"bots", this->showBots_},
         {"compare", this->compare_},
+        {"hideWerbung", this->hideWerbung_},
         {"bucket", static_cast<int>(this->bucket_)},
     };
     QFile file(QDir(dir).filePath("view.json"));
@@ -1474,8 +1583,22 @@ void ModActivityDialog::saveView() const
 
 void ModActivityDialog::reload()
 {
-    this->actions_ = modactivity::actions(this->channel_);
+    this->allActions_ = modactivity::actions(this->channel_);
     this->streams_ = modactivity::streams(this->channel_);
+    this->actions_.clear();
+    this->hiddenActions_.clear();
+    if (this->hideWerbung_)
+    {
+        for (const auto &action : this->allActions_)
+        {
+            (action.werbung ? this->hiddenActions_ : this->actions_)
+                .push_back(action);
+        }
+    }
+    else
+    {
+        this->actions_ = this->allActions_;
+    }
 
     this->allTimeCount_.clear();
     this->lastActive_.clear();
@@ -1575,6 +1698,35 @@ void ModActivityDialog::rebuildModList()
     this->updateModsButton();
 }
 
+void ModActivityDialog::checkLogsForWerbung()
+{
+    const auto logPath = getSettings()->logPath.getValue();
+    const auto base =
+        logPath.isEmpty() ? getApp()->getPaths().messageLogDirectory : logPath;
+    modactivity::markWerbungFromLogs(
+        this->channel_, base + "/Twitch/Channels/" + this->channel_);
+}
+
+void ModActivityDialog::updateWerbungButton(int hidden) const
+{
+    const bool on = this->hideWerbung_;
+    this->ui_.werbungLabel->setStyleSheet(
+        QString("color: %1;").arg((on ? textColor() : dimColor()).name()));
+    this->ui_.werbungCount->setStyleSheet(
+        QString("color: %1; font-size: 11px;")
+            .arg(groupColor(GroupTimeouts).name()));
+    this->ui_.werbungCount->setText(cLocale().toString(hidden));
+    this->ui_.werbungCount->setVisible(on && hidden > 0);
+    this->ui_.werbung->setToolTip(
+        QString("Leaves out timeouts about \"Werbung\": the user wrote "
+                "\"werbung\" in chat in the 2 minutes before the timeout, "
+                "or the mod's timeout reason says \"werbung\".%1")
+            .arg(on ? QString(" %1 in this range.")
+                          .arg(cLocale().toString(hidden))
+                    : QString()));
+    this->ui_.werbung->setMinimumSize(this->ui_.werbung->layout()->sizeHint());
+}
+
 void ModActivityDialog::updateModsButton()
 {
     int shown = 0;
@@ -1664,8 +1816,9 @@ ModActivityDialog::Range ModActivityDialog::currentRange() const
             return span(jan1, {});
         }
         case 6: {
-            auto first = this->actions_.empty() ? todayStart
-                                                : this->actions_.front().msecs;
+            auto first = this->allActions_.empty()
+                             ? todayStart
+                             : this->allActions_.front().msecs;
             return span(first,
                         "All time since <b>" +
                             cLocale().toString(
@@ -1800,6 +1953,23 @@ void ModActivityDialog::refresh()
         }
     }
 
+    int hiddenTotal = 0;
+    if (this->groupEnabled(GroupTimeouts))
+    {
+        auto lo = std::ranges::lower_bound(this->hiddenActions_, from, {},
+                                           &modactivity::Action::msecs);
+        for (auto it = lo; it != this->hiddenActions_.end() && it->msecs < to;
+             ++it)
+        {
+            if (auto *row = rowFor(it->moderator))
+            {
+                row->hiddenWerbung += 1;
+                hiddenTotal += 1;
+            }
+        }
+    }
+    this->updateWerbungButton(hiddenTotal);
+
     for (const auto &s : this->rangeStreams_)
     {
         QSet<QString> active;
@@ -1870,6 +2040,13 @@ void ModActivityDialog::refresh()
     parts << QString("Active mods <b>%1 of %2</b>")
                  .arg(activeMods)
                  .arg(this->modRows_.size());
+    if (this->hideWerbung_)
+    {
+        parts << QString("<span style=\"color:%1\">Werbung timeouts hidden "
+                         "<b>%2</b></span>")
+                     .arg(accentColor().name(),
+                          cLocale().toString(hiddenTotal));
+    }
     this->ui_.summary->setText(parts.join("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"));
 
     this->updatingUi_ = true;
@@ -1983,6 +2160,13 @@ void ModActivityDialog::fillTable(QTableWidget *table,
             auto count = row.counts.at(static_cast<size_t>(g));
             set(ColTimeouts + g, cLocale().toString(count), count,
                 count == 0 ? faintColor() : groupColor(g));
+        }
+        if (row.hiddenWerbung > 0)
+        {
+            auto *item = table->item(r, ColTimeouts);
+            item->setData(HIDDEN_ROLE, row.hiddenWerbung);
+            item->setToolTip(QString("%1 Werbung timeouts hidden")
+                                 .arg(cLocale().toString(row.hiddenWerbung)));
         }
         set(ColTotal, cLocale().toString(row.total), row.total, textColor());
 

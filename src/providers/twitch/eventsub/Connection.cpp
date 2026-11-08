@@ -30,6 +30,7 @@
 #include <twitch-eventsub-ws/listener.hpp>
 #include <twitch-eventsub-ws/session.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <deque>
 #include <mutex>
@@ -91,10 +92,34 @@ bool firstDelivery(const std::string &messageID)
     return true;
 }
 
+/// Chatterino9: whether a timeout of `target` at `time` is about "Werbung":
+/// the mod's reason says it, or `target` wrote it in chat shortly before
+bool isWerbungTimeout(const TwitchChannel &channel, const QString &target,
+                      const QString &reason, const QDateTime &time)
+{
+    if (modactivity::mentionsWerbung(reason))
+    {
+        return true;
+    }
+    // a little slack: the timeout can arrive before the message it is about
+    const auto from = time.addMSecs(-modactivity::WERBUNG_WINDOW_MSECS - 2000);
+    const auto to = time.addMSecs(2000);
+    const auto snapshot = channel.getMessageSnapshot();
+    return std::ranges::any_of(snapshot, [&](const MessagePtr &message) {
+        return !message->flags.has(MessageFlag::System) &&
+               message->loginName.compare(target, Qt::CaseInsensitive) == 0 &&
+               message->serverReceivedTime.isValid() &&
+               message->serverReceivedTime >= from &&
+               message->serverReceivedTime <= to &&
+               modactivity::mentionsWerbung(message->messageText);
+    });
+}
+
 /// Chatterino9: counts the action for the Mod activity window. Shared chat
 /// actions come from other channels' mods, so they are not counted.
 template <typename Action>
-void recordModActivity(const channel_moderate::Event &event,
+void recordModActivity(const TwitchChannel &twitchChannel,
+                       const channel_moderate::Event &event,
                        std::chrono::system_clock::time_point timestamp,
                        const QDateTime &time, const Action &action)
 {
@@ -107,8 +132,11 @@ void recordModActivity(const channel_moderate::Event &event,
         auto seconds = std::chrono::round<std::chrono::seconds>(
                            action.expiresAt - timestamp)
                            .count();
-        modactivity::record(channel, time, Kind::Timeout, moderator,
-                            action.userLogin.qt(), static_cast<int>(seconds));
+        const auto target = action.userLogin.qt();
+        modactivity::record(
+            channel, time, Kind::Timeout, moderator, target,
+            static_cast<int>(seconds),
+            isWerbungTimeout(twitchChannel, target, action.reason.qt(), time));
     }
     else if constexpr (std::is_same_v<Action, channel_moderate::Ban>)
     {
@@ -265,8 +293,8 @@ void Connection::onChannelModerate(
             using Action = std::remove_cvref_t<decltype(action)>;
             if (countActivity)
             {
-                recordModActivity(payload.event, metadata.messageTimestamp, now,
-                                  action);
+                recordModActivity(*channel, payload.event,
+                                  metadata.messageTimestamp, now, action);
             }
             static_assert(CanMakeModMessage<Action> ||
                               CanHandleModMessage<Action> ||
