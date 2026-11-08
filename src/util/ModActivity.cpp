@@ -15,7 +15,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
-#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QStringView>
@@ -1469,6 +1468,49 @@ void saveLogsCheckedUntil(const QString &dir, qint64 msecs)
     }
 }
 
+/// Splits a chat log line, "[12:34:56] login: text" or
+/// "[12:34:56] Display login: text" (same format as the Emote stats log
+/// import reads)
+bool parseLogLine(QStringView line, QTime &time, QStringView &login,
+                  QStringView &text)
+{
+    if (line.size() < 12 || line[0] != u'[' || line[3] != u':' ||
+        line[6] != u':' || line[9] != u']' || line[10] != u' ')
+    {
+        return false;
+    }
+    time = QTime(line.mid(1, 2).toInt(), line.mid(4, 2).toInt(),
+                 line.mid(7, 2).toInt());
+    const auto rest = line.mid(11);
+    const auto colon = rest.indexOf(u": ");
+    if (!time.isValid() || colon <= 0)
+    {
+        return false;
+    }
+    auto head = rest.first(colon);
+    const auto space = head.indexOf(u' ');
+    if (space >= 0)
+    {
+        // one display name before the login, nothing more
+        head = head.mid(space + 1);
+        if (head.isEmpty() || head.contains(u' '))
+        {
+            return false;
+        }
+    }
+    const bool isLogin = std::ranges::all_of(head, [](QChar c) {
+        return (c >= u'a' && c <= u'z') || (c >= u'0' && c <= u'9') ||
+               c == u'_';
+    });
+    if (!isLogin)
+    {
+        return false;
+    }
+    login = head;
+    text = rest.mid(colon + 2);
+    return true;
+}
+
 struct LogCheck {
     qint64 msecs = 0;
     QString target;
@@ -1494,11 +1536,6 @@ std::vector<LogCheck> findWerbungInLogs(const QString &channel,
         targets.insert(check.target);
     }
 
-    // same line format as the Emote stats log import:
-    // "[12:34:56] login: text" or "[12:34:56] Display login: text"
-    const QRegularExpression lineRegex(QStringLiteral(
-        R"(^\[(\d\d):(\d\d):(\d\d)\] (?:[^\s:]+ )?([a-z0-9_]+): (.*)$)"));
-
     // when each target wrote "werbung"
     QHash<QString, std::vector<qint64>> said;
     for (const auto &day : days)
@@ -1514,23 +1551,23 @@ std::vector<LogCheck> findWerbungInLogs(const QString &channel,
         QString line;
         while (in.readLineInto(&line))
         {
-            // most lines don't say it, skip them before the regex
+            // most lines don't say it, skip them before parsing
             if (!mentionsWerbung(line))
             {
                 continue;
             }
-            auto m = lineRegex.match(line);
-            if (!m.hasMatch() || !targets.contains(m.captured(4)) ||
-                !mentionsWerbung(m.capturedView(5)))
+            QTime time;
+            QStringView login;
+            QStringView text;
+            if (!parseLogLine(line, time, login, text) ||
+                !targets.contains(login.toString()) || !mentionsWerbung(text))
             {
                 continue;
             }
-            const QDateTime time(
-                day, QTime(m.captured(1).toInt(), m.captured(2).toInt(),
-                           m.captured(3).toInt()));
-            if (time.isValid())
+            const QDateTime at(day, time);
+            if (at.isValid())
             {
-                said[m.captured(4)].push_back(time.toMSecsSinceEpoch());
+                said[login.toString()].push_back(at.toMSecsSinceEpoch());
             }
         }
     }
