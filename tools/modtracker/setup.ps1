@@ -20,6 +20,11 @@
 #   .\setup.ps1 status    shows whether it runs and its last log lines.
 #   .\setup.ps1 check     tests mods.acri.fyi from this PC like Chatterino9
 #                         does. Does not connect to the server over SSH.
+#   .\setup.ps1 edit      opens one day of counted mod actions in Notepad to
+#                         remove, change or add single actions. Saves the
+#                         edits on the server after you type yes; the
+#                         counted actions stay as they are. Uses
+#                         mods.acri.fyi like check, no SSH.
 #
 # Each step makes exactly one SSH connection with your key. It never asks
 # for a password and never retries a failed login, so it can't trip the
@@ -28,7 +33,7 @@
 
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('install', 'start', 'update', 'tunnel', 'signin', 'stop', 'status', 'check')]
+    [ValidateSet('install', 'start', 'update', 'tunnel', 'signin', 'stop', 'status', 'check', 'edit')]
     [string]$Step
 )
 
@@ -252,7 +257,7 @@ crashes 3 times, it stops the counter again.
 "@
     if (Test-Path $localDir) {
         Get-ChildItem -Path $localDir -File |
-            Where-Object { $_.Name -like 'actions-*.tsv' -or $_.Name -eq 'streams.tsv' -or $_.Name -eq 'server-sync.json' -or $_.Name -eq 'tracking.json' } |
+            Where-Object { $_.Name -like 'actions-*.tsv' -or $_.Name -eq 'streams.tsv' -or $_.Name -eq 'server-sync.json' -or $_.Name -eq 'tracking.json' -or $_.Name -eq 'werbung.tsv' -or $_.Name -eq 'werbung-logs.json' -or $_.Name -eq 'edits.tsv' } |
             Remove-Item -Force
         Write-Host 'Cleared the counts on this PC.'
     }
@@ -261,7 +266,7 @@ set -eu
 cd `$HOME/apps/modtracker
 docker compose stop modtracker
 n=`$(ls data/*/actions-*.tsv data/*/streams.tsv 2>/dev/null | wc -l)
-rm -f data/*/actions-*.tsv data/*/streams.tsv data/*/tracking.json
+rm -f data/*/actions-*.tsv data/*/streams.tsv data/*/tracking.json data/*/werbung.tsv data/*/edits.tsv
 echo "Cleared the counts on the server (`$n files)."
 since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
 docker compose up -d
@@ -402,7 +407,7 @@ Chatterino9 leaves the server out until then.
 set -eu
 cd `$HOME/apps/modtracker
 docker compose stop
-rm -f data/*/actions-*.tsv data/*/streams.tsv
+rm -f data/*/actions-*.tsv data/*/streams.tsv data/*/werbung.tsv data/*/edits.tsv
 echo "PAUSED: nothing is counted until start"
 "@
     $code = Invoke-Remote $target $script
@@ -422,6 +427,126 @@ cd `$HOME/apps/modtracker && docker compose ps && docker compose logs --tail 15 
     $code = Invoke-Remote $target $script
     if ($code -eq 255) { Stop-Setup 'SSH could not log in. Not retrying.' }
     exit 0
+}
+
+if ($Step -eq 'edit') {
+    $file = $appConfig
+    if (-not (Test-Path $file)) {
+        if (Test-Path $pausedConfig) { Stop-Setup 'The counter is stopped (setup.ps1 stop), so there is nothing to edit. Run start first.' }
+        Stop-Setup 'remote.json is missing, run install first.'
+    }
+    $c = Get-Content $file -Raw | ConvertFrom-Json
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $host_ = ([Uri]$c.url).Host
+    # The day list and the times in it are in German time
+    $timeZone = 'Europe/Berlin'
+
+    # One HTTPS request to the counter with Chatterino9's keys
+    function Invoke-Counter([string]$method, [string]$path, $body = $null) {
+        $req = [Net.HttpWebRequest]::Create("$($c.url)$path")
+        $req.Method = $method
+        $req.AllowAutoRedirect = $false
+        $req.Timeout = 60000
+        $req.Headers.Add('CF-Access-Client-Id', $c.accessClientId)
+        $req.Headers.Add('CF-Access-Client-Secret', $c.accessClientSecret)
+        $req.Headers.Add('X-Modtracker-Key', $c.apiKey)
+        if ($null -ne $body) {
+            $bytes = (New-Object Text.UTF8Encoding $false).GetBytes(($body | ConvertTo-Json -Compress))
+            $req.ContentType = 'application/json'
+            $req.ContentLength = $bytes.Length
+            $stream = $req.GetRequestStream()
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Close()
+        }
+        try {
+            $resp = $req.GetResponse()
+        } catch [Net.WebException] {
+            $resp = $_.Exception.Response
+            if (-not $resp) { Stop-Setup "$host_ could not be reached: $($_.Exception.Message)" }
+        }
+        $code = [int]$resp.StatusCode
+        $text = (New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)).ReadToEnd()
+        $resp.Close()
+        if ($code -eq 404) { Stop-Setup "$host_ needs .\setup.ps1 update before it can edit mod actions. Nothing was changed." }
+        if ($code -ne 200) { Stop-Setup "$host_ answered $code ($($text.Trim())). Nothing was changed." }
+        return $text
+    }
+
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $answer = (Read-Host -Prompt 'Day to edit (Enter = today, or yesterday, or 2026-11-07)').Trim().ToLower()
+    $date = $null
+    if (-not $answer -or $answer -eq 'today' -or $answer -eq 'heute') {
+        $date = (Get-Date).Date
+    } elseif ($answer -eq 'yesterday' -or $answer -eq 'gestern') {
+        $date = (Get-Date).Date.AddDays(-1)
+    } else {
+        $parsed = [datetime]::MinValue
+        foreach ($format in @('yyyy-MM-dd', 'dd.MM.yyyy', 'd.M.yyyy')) {
+            if ([datetime]::TryParseExact($answer, $format, $culture, [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+                $date = $parsed.Date
+                break
+            }
+        }
+        if (-not $date) { Stop-Setup "`"$answer`" is not a day like 2026-11-07." }
+    }
+    $day = $date.ToString('yyyy-MM-dd', $culture)
+    $name = (Read-Host -Prompt 'Only lines with this name, mod or user (Enter = all)').Trim().TrimStart('@').ToLower()
+    if ($name -and $name -notmatch '^[a-z0-9_]{1,25}$') { Stop-Setup "`"$name`" is not a Twitch name." }
+
+    $query = "day=$day&tz=$([Uri]::EscapeDataString($timeZone))"
+    if ($name) { $query += "&name=$name" }
+    $before = Invoke-Counter 'GET' "/v1/papaplatte/edit-list?$query"
+    $count = ([regex]::Match($before, '(\d+) actions?')).Groups[1].Value
+
+    $list = Join-Path $env:TEMP "mod-actions-$day.txt"
+    [IO.File]::WriteAllText($list, ($before -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $false))
+    Write-Host "Opening papaplatte's mod actions of $($date.ToString('dddd', $culture)) $day in Notepad ($count actions)."
+    Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$list`""
+
+    try {
+        for (;;) {
+            Write-Host ''
+            $go = Read-Host -Prompt 'Edit the list, save it in Notepad (Ctrl+S), then press Enter here (q = stop)'
+            if ($go.Trim().ToLower() -eq 'q') { Stop-Setup 'Nothing was changed.' }
+            $after = [IO.File]::ReadAllText($list, [Text.Encoding]::UTF8)
+            $request = @{ day = $day; timeZone = $timeZone; before = $before; after = $after; save = $false }
+            $result = (Invoke-Counter 'POST' '/v1/papaplatte/edits' $request) | ConvertFrom-Json
+            if ($result.errors.Count -gt 0) {
+                Write-Host ''
+                Write-Host 'These lines are not right, nothing was saved:' -ForegroundColor Red
+                foreach ($e in $result.errors) {
+                    $where = if ($e.line -gt 0) { "line $($e.line): " } else { '' }
+                    Write-Host "  $where$($e.text)"
+                    Write-Host "    $($e.problem)" -ForegroundColor Yellow
+                }
+                Write-Host 'Fix them in Notepad and save again.'
+                continue
+            }
+            if ($result.changes.Count -eq 0) {
+                Write-Host 'Nothing changed, nothing was saved.' -ForegroundColor Green
+                exit 0
+            }
+            Write-Host ''
+            Write-Host "$($result.changes.Count) $(if ($result.changes.Count -eq 1) { 'change' } else { 'changes' }):"
+            foreach ($change in $result.changes) {
+                $color = @{ remove = 'Red'; add = 'Green'; change = 'Cyan' }[$change.op]
+                Write-Host ("  {0,-7} {1}" -f $change.op, $change.text) -ForegroundColor $color
+            }
+            Write-Host ''
+            $ok = Read-Host -Prompt "Type yes to save them on $host_ (anything else = back to Notepad)"
+            if ($ok.Trim() -ne 'yes') { continue }
+            $request.save = $true
+            $result = (Invoke-Counter 'POST' '/v1/papaplatte/edits' $request) | ConvertFrom-Json
+            if ($result.errors.Count -gt 0 -or $result.saved -lt 1) { Stop-Setup 'The server did not save the changes. Send these lines to Claude.' }
+            Write-Host ''
+            Write-Host "Saved $($result.saved) $(if ($result.saved -eq 1) { 'change' } else { 'changes' })." -ForegroundColor Green
+            Write-Host 'Chatterino9 shows them the next time Mod activity syncs (when you open it,'
+            Write-Host 'or within 3 minutes while it is open).'
+            exit 0
+        }
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $list
+    }
 }
 
 if ($Step -eq 'check') {

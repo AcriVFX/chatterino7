@@ -15,7 +15,8 @@ for the time Chatterino9 was closed.
 - `compose.yaml`: the service plus a Cloudflare tunnel container on their own
   Docker network. No ports are published.
 - `setup.ps1`: installs it from a Windows PC over one SSH connection per step
-  (`install`, `start`, `update`, `tunnel`, `signin`, `stop`, `status`, `check`) and saves the app's keys to
+  (`install`, `start`, `update`, `tunnel`, `signin`, `stop`, `status`, `check`; `edit` goes over
+  HTTPS instead) and saves the app's keys to
   `%APPDATA%\Chatterino2\Misc\ModActivity\remote.json`.
 
 The app (`src/util/ModActivity.cpp`) reads `remote.json`, pulls new actions
@@ -27,6 +28,11 @@ Endpoints, all behind Cloudflare Access and the API key:
 
 - `GET /v1/status`: `{channel, signedIn, needsSignIn, connected, lastEventAt, serverTime, tracking: {state, until, since}, emotes: {connected, lastMessageAt, listsLoadedAt}}`
 - `GET /v1/<channel>/actions?since=<msecs>`: action lines newer than `since`
+- `GET /v1/<channel>/werbung?since=<msecs>`: `msecs<TAB>target` of each
+  timeout about "Werbung" newer than `since`: the timed-out user wrote
+  "werbung" in chat in the 2 minutes before (the reason doesn't matter). Kept
+  in `werbung.tsv`, so the action files keep their format. The Mod activity
+  window's "Hide Werbung timeouts" button leaves these out.
 - `GET /v1/<channel>/streams`: `streams.tsv`
 - `GET /v1/<channel>/emotes/days`: one line per counted UTC day, `YYYY-MM-DD<TAB>mtime`
 - `GET /v1/<channel>/emotes/day?d=YYYY-MM-DD`: that day's emote counts
@@ -35,6 +41,18 @@ Endpoints, all behind Cloudflare Access and the API key:
   actions. Kept in `tracking.json`. Emotes and streams are always counted.
 - `POST /v1/<channel>/delete` with `{"confirm": "<channel>"}`: deletes every
   counted mod action and the stream list, answers `{actions}`
+- `GET /v1/<channel>/edits`: `edits.tsv`, the corrections made with
+  `setup.ps1 edit`: `editedAt<TAB>remove|add<TAB>` and an action line. A
+  remove takes away the one action of that kind, mod and user closest to its
+  time, within 5 seconds. The action files stay as they were counted; the app
+  applies the edits to everything it has, also the actions it counted itself.
+- `GET /v1/<channel>/edit-list?day=YYYY-MM-DD&tz=Europe/Berlin&name=<login>`:
+  that day's actions with the edits applied, as the text `setup.ps1 edit`
+  opens in Notepad (`name` keeps only the lines with that mod or user)
+- `POST /v1/<channel>/edits` with `{day, timeZone, before, after, save}`:
+  compares the list as it was opened (`before`) with the edited one
+  (`after`) and answers `{changes: [{op, text}], errors: [{line, text, problem}], saved}`.
+  With `"save": true` and no errors it appends the changes to `edits.tsv`.
 
 The Emote stats window (`src/util/EmoteStats.cpp`) downloads the days that
 changed when it opens and every 3 minutes while it is open, and merges them
@@ -46,6 +64,15 @@ and deletes the counts, on the PC and the server together. A pause, stop or
 start the server did not get is sent again on the next sync. Deleting asks
 the server first and deletes nothing on the PC when the server can't be
 reached.
+
+To correct single mod actions (a double count, the wrong mod, a missed
+action): `setup.ps1 edit`. It asks for a day and opens that day's actions in
+Notepad, one line each. Delete a line to remove the action, change it to fix
+it, write a new one to add a missed action, then save and press Enter in
+PowerShell. It shows the changes and saves them after `yes`. Removed actions
+are listed at the bottom as `#` lines, so taking the `#` away brings one
+back. AutoMod approve/deny are counted only by the app, so they aren't in
+the list. Delete and `stop`/`start` clear the edits along with the counts.
 
 To pause: `setup.ps1 stop` (clears the counted mod actions, keeps the
 sign-in and the emote stats). `setup.ps1 start` is a fresh start: it clears

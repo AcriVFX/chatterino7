@@ -40,6 +40,14 @@ struct Action {
     QString target;
     /// Timeout length in seconds, 0 for everything else
     int seconds = 0;
+    /// A timeout about "Werbung" (see isWerbungTimeout), which the Mod
+    /// activity window can leave out
+    bool werbung = false;
+    /// Taken away with setup.ps1 edit. Kept in memory so a sync doesn't
+    /// bring the server's copy back, but actions() leaves it out.
+    bool removed = false;
+    /// Added with setup.ps1 edit, not counted by anyone
+    bool added = false;
 };
 
 struct Stream {
@@ -49,9 +57,27 @@ struct Stream {
     qint64 end = 0;
 };
 
-/// Saves one moderation action in `channel`
+/// Saves one moderation action in `channel`. `werbung` marks a timeout
+/// about "Werbung".
 void record(const QString &channel, const QDateTime &time, Kind kind,
-            const QString &moderator, const QString &target, int seconds = 0);
+            const QString &moderator, const QString &target, int seconds = 0,
+            bool werbung = false);
+
+/// A timeout counts as a Werbung timeout when the timed-out user wrote
+/// "werbung" (any case, also inside a word) in a message this long before
+/// it. The mod's timeout reason doesn't matter.
+constexpr qint64 WERBUNG_WINDOW_MSECS = 2LL * 60 * 1000;
+
+/// Whether `text` says "werbung", in any case, also inside a word
+bool mentionsWerbung(QStringView text);
+
+/// Looks up the timeouts of `channel` that were not checked yet in the chat
+/// logs in `logDirectory` and marks those as Werbung timeouts where the
+/// timed-out user wrote "werbung" shortly before. Covers the timeouts saved
+/// before Werbung timeouts were marked live.
+/// Runs in the background and fires updated() when it marked any. Call from
+/// the GUI thread.
+void markWerbungFromLogs(const QString &channel, const QString &logDirectory);
 
 /// Called on every stream status refresh while `channel` is live
 void streamSeen(const QString &channel, const QString &streamId,
@@ -60,7 +86,8 @@ void streamSeen(const QString &channel, const QString &streamId,
 /// Called when `channel` goes offline
 void streamEnded(const QString &channel);
 
-/// All saved actions of `channel`, oldest first
+/// All saved actions of `channel` with the edits made with setup.ps1 edit,
+/// oldest first
 std::vector<Action> actions(const QString &channel);
 
 /// All streams of `channel` seen by the app, oldest first
