@@ -60,7 +60,7 @@ void record(const QString &channel, const QDateTime &time, Kind kind,
 
 /// A timeout counts as a Werbung timeout when the timed-out user wrote
 /// "werbung" (any case, also inside a word) in a message this long before
-/// it, or when the mod's reason says "werbung"
+/// it. The mod's timeout reason doesn't matter.
 constexpr qint64 WERBUNG_WINDOW_MSECS = 2LL * 60 * 1000;
 
 /// Whether `text` says "werbung", in any case, also inside a word
@@ -69,7 +69,7 @@ bool mentionsWerbung(QStringView text);
 /// Looks up the timeouts of `channel` that were not checked yet in the chat
 /// logs in `logDirectory` and marks those as Werbung timeouts where the
 /// timed-out user wrote "werbung" shortly before. Covers the timeouts saved
-/// before Werbung timeouts were marked live (the reason is not in the logs).
+/// before Werbung timeouts were marked live.
 /// Runs in the background and fires updated() when it marked any. Call from
 /// the GUI thread.
 void markWerbungFromLogs(const QString &channel, const QString &logDirectory);

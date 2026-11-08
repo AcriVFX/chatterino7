@@ -29,7 +29,7 @@ Endpoints, all behind Cloudflare Access and the API key:
 - `GET /v1/<channel>/actions?since=<msecs>`: action lines newer than `since`
 - `GET /v1/<channel>/werbung?since=<msecs>`: `msecs<TAB>target` of each
   timeout about "Werbung" newer than `since`: the timed-out user wrote
-  "werbung" in chat in the 2 minutes before, or the mod's reason says it. Kept
+  "werbung" in chat in the 2 minutes before (the reason doesn't matter). Kept
   in `werbung.tsv`, so the action files keep their format. The Mod activity
   window's "Hide Werbung timeouts" button leaves these out.
 - `GET /v1/<channel>/streams`: `streams.tsv`

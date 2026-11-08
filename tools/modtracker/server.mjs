@@ -332,7 +332,7 @@ function recordAction(msecs, kind, moderator, target, seconds = 0) {
 // werbung.tsv, apart from the action files so their format stays the same.
 // Same rule as the app (src/util/ModActivity.hpp): the timed-out user wrote
 // "werbung" (any case, also inside a word) in chat in the 2 minutes before
-// the timeout, or the mod's reason says it.
+// the timeout. The mod's reason doesn't matter.
 
 const WERBUNG_WINDOW_MSECS = 2 * 60 * 1000;
 /// the timeout can arrive a little before the chat message it is about
@@ -361,10 +361,7 @@ export function noteWerbung(login, msecs, text, said = werbungSaid) {
   }
 }
 
-export function isWerbungTimeout(target, reason, msecs, said = werbungSaid) {
-  if (mentionsWerbung(reason)) {
-    return true;
-  }
+export function isWerbungTimeout(target, msecs, said = werbungSaid) {
   const at = said.get(String(target).toLowerCase());
   return (
     at !== undefined &&
@@ -561,10 +558,7 @@ function onModerate(event, msecs) {
     seconds = Math.round((parseTime(detail.expires_at) - msecs) / 1000);
   }
   recordAction(msecs, kind, moderator, detail.user_login, seconds);
-  if (
-    kind === "timeout" &&
-    isWerbungTimeout(detail.user_login, detail.reason, msecs)
-  ) {
+  if (kind === "timeout" && isWerbungTimeout(detail.user_login, msecs)) {
     recordWerbung(msecs, detail.user_login);
   }
 }

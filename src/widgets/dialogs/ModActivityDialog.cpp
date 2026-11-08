@@ -1719,8 +1719,8 @@ void ModActivityDialog::updateWerbungButton(int hidden) const
     this->ui_.werbungCount->setVisible(on && hidden > 0);
     this->ui_.werbung->setToolTip(
         QString("Leaves out timeouts about \"Werbung\": the user wrote "
-                "\"werbung\" in chat in the 2 minutes before the timeout, "
-                "or the mod's timeout reason says \"werbung\".%1")
+                "\"werbung\" in chat in the 2 minutes before the "
+                "timeout.%1")
             .arg(on ? QString(" %1 in this range.")
                           .arg(cLocale().toString(hidden))
                     : QString()));

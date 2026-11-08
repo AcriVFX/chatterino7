@@ -93,14 +93,10 @@ bool firstDelivery(const std::string &messageID)
 }
 
 /// Chatterino9: whether a timeout of `target` at `time` is about "Werbung":
-/// the mod's reason says it, or `target` wrote it in chat shortly before
+/// `target` wrote it in chat shortly before. The reason doesn't matter.
 bool isWerbungTimeout(const TwitchChannel &channel, const QString &target,
-                      const QString &reason, const QDateTime &time)
+                      const QDateTime &time)
 {
-    if (modactivity::mentionsWerbung(reason))
-    {
-        return true;
-    }
     // a little slack: the timeout can arrive before the message it is about
     const auto from = time.addMSecs(-modactivity::WERBUNG_WINDOW_MSECS - 2000);
     const auto to = time.addMSecs(2000);
@@ -133,10 +129,9 @@ void recordModActivity(const TwitchChannel &twitchChannel,
                            action.expiresAt - timestamp)
                            .count();
         const auto target = action.userLogin.qt();
-        modactivity::record(
-            channel, time, Kind::Timeout, moderator, target,
-            static_cast<int>(seconds),
-            isWerbungTimeout(twitchChannel, target, action.reason.qt(), time));
+        modactivity::record(channel, time, Kind::Timeout, moderator, target,
+                            static_cast<int>(seconds),
+                            isWerbungTimeout(twitchChannel, target, time));
     }
     else if constexpr (std::is_same_v<Action, channel_moderate::Ban>)
     {
