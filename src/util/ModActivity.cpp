@@ -132,6 +132,9 @@ struct ChannelData {
     bool loaded = false;
     std::vector<Action> actions;
     std::vector<Stream> streams;
+    /// Edits that remove an action the app doesn't have yet, tried again
+    /// when the server's actions come in
+    std::vector<Action> unmatchedRemoves;
 };
 
 struct TrackingData {
@@ -224,7 +227,7 @@ bool applyWerbung(std::vector<Action> &actions, qint64 msecs,
                                        &Action::msecs);
     for (; it != actions.end() && it->msecs <= msecs + SAME_ACTION_MSECS; ++it)
     {
-        if (it->kind == Kind::Timeout && it->target == target)
+        if (it->kind == Kind::Timeout && it->target == target && !it->removed)
         {
             if (it->werbung)
             {
@@ -253,6 +256,80 @@ void loadWerbung(std::vector<Action> &actions, const QString &dir)
         if (parts.size() == 2 && ok && !parts[1].isEmpty())
         {
             applyWerbung(actions, msecs, parts[1]);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- edits
+//
+// Corrections made with setup.ps1 edit, kept by the mod tracker server in
+// edits.tsv and copied here on each sync. The action files stay as they were
+// counted. Each line ("editedAt, remove|add, msecs, kind, mod, target,
+// seconds") takes away the one action of that kind, mod and user closest to
+// msecs within SAME_ACTION_MSECS, or adds one. Same rules as
+// tools/modtracker/server.mjs.
+
+QString editsFile(const QString &dir)
+{
+    return QDir(dir).filePath(QStringLiteral("edits.tsv"));
+}
+
+/// Marks the action closest to `edit` as removed. Returns whether there was
+/// one.
+bool applyRemove(std::vector<Action> &actions, const Action &edit)
+{
+    auto it = std::ranges::lower_bound(actions, edit.msecs - SAME_ACTION_MSECS,
+                                       {}, &Action::msecs);
+    auto best = actions.end();
+    for (; it != actions.end() && it->msecs <= edit.msecs + SAME_ACTION_MSECS;
+         ++it)
+    {
+        if (!it->removed && it->kind == edit.kind &&
+            it->moderator == edit.moderator && it->target == edit.target &&
+            (best == actions.end() || std::abs(it->msecs - edit.msecs) <
+                                          std::abs(best->msecs - edit.msecs)))
+        {
+            best = it;
+        }
+    }
+    if (best == actions.end())
+    {
+        return false;
+    }
+    best->removed = true;
+    return true;
+}
+
+void loadEdits(Store &st, ChannelData &data, const QString &dir)
+{
+    QFile file(editsFile(dir));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        return;
+    }
+    QTextStream in(&file);
+    while (!in.atEnd())
+    {
+        const auto line = in.readLine();
+        const auto op = line.section(u'\t', 1, 1);
+        Action action;
+        if ((op != QStringLiteral("remove") && op != QStringLiteral("add")) ||
+            !parseAction(line.section(u'\t', 2), action))
+        {
+            continue;
+        }
+        action.moderator = intern(st, action.moderator);
+        action.target = intern(st, action.target);
+        if (op == QStringLiteral("add"))
+        {
+            action.added = true;
+            auto pos = std::ranges::upper_bound(data.actions, action.msecs, {},
+                                                &Action::msecs);
+            data.actions.insert(pos, std::move(action));
+        }
+        else if (!applyRemove(data.actions, action))
+        {
+            data.unmatchedRemoves.push_back(std::move(action));
         }
     }
 }
@@ -422,6 +499,7 @@ void loadLocked(Store &st, const QString &channel, ChannelData &data)
     }
     std::ranges::stable_sort(data.actions, {}, &Action::msecs);
 
+    loadEdits(st, data, dir);
     loadWerbung(data.actions, dir);
     loadStreams(data, dir);
 }
@@ -481,7 +559,11 @@ int mergeActionsLocked(Store &st, const QString &channel,
     saved.reserve(static_cast<qsizetype>(data.actions.size()));
     for (const auto &action : data.actions)
     {
-        saved.insert(sameActionKey(action), action.msecs);
+        // removed ones too, so the server's copy doesn't come back
+        if (!action.added)
+        {
+            saved.insert(sameActionKey(action), action.msecs);
+        }
     }
 
     // the server may not have taken a pause or stop yet (or is too old for
@@ -550,6 +632,10 @@ int mergeActionsLocked(Store &st, const QString &channel,
             data.actions,
             data.actions.begin() + static_cast<std::ptrdiff_t>(oldSize), {},
             &Action::msecs);
+
+        std::erase_if(data.unmatchedRemoves, [&](const Action &edit) {
+            return applyRemove(data.actions, edit);
+        });
     }
     return added;
 }
@@ -595,6 +681,41 @@ bool mergeWerbungLocked(Store &st, const QString &channel,
         QTextStream out(&file);
         out << chunk;
     }
+    return true;
+}
+
+/// Saves the server's edits.tsv when it differs from the one here and loads
+/// the actions again with it. Returns whether it differed.
+bool replaceEditsLocked(Store &st, const QString &channel,
+                        const QByteArray &body)
+{
+    const auto dir = channelDir(channel);
+    if (!ensureDir(dir))
+    {
+        return false;
+    }
+    QFile current(editsFile(dir));
+    if (current.open(QIODevice::ReadOnly))
+    {
+        if (current.readAll() == body)
+        {
+            return false;
+        }
+        current.close();
+    }
+    else if (body.isEmpty())
+    {
+        return false;
+    }
+    QSaveFile file(editsFile(dir));
+    if (!file.open(QIODevice::WriteOnly) || file.write(body) != body.size() ||
+        !file.commit())
+    {
+        return false;
+    }
+    auto &data = st.channels[channel];
+    data = {};
+    loadLocked(st, channel, data);
     return true;
 }
 
@@ -938,6 +1059,39 @@ void fetchStreams(const QString &channel, const RemoteConfig &config,
         .execute();
 }
 
+/// The edits made with setup.ps1 edit. Applied again from scratch when they
+/// changed. A server from before setup.ps1 edit has none (404), the sync goes
+/// on anyway.
+void fetchEdits(const QString &channel, const RemoteConfig &config,
+                bool anyAdded, int epoch)
+{
+    serverRequest(config, QStringLiteral("/v1/%1/edits").arg(channel))
+        .onSuccess([channel, config, anyAdded,
+                    epoch](const NetworkResult &result) {
+            if (deletedSince(channel, epoch))
+            {
+                return;
+            }
+            bool changed = anyAdded;
+            if (isOk(result))
+            {
+                auto &st = store();
+                std::scoped_lock lock(st.mutex);
+                changed = replaceEditsLocked(st, channel, result.getData()) ||
+                          changed;
+            }
+            fetchStreams(channel, config, changed, epoch);
+        })
+        .onError([channel, config, anyAdded, epoch](const NetworkResult &) {
+            if (deletedSince(channel, epoch))
+            {
+                return;
+            }
+            fetchStreams(channel, config, anyAdded, epoch);
+        })
+        .execute();
+}
+
 /// The server's Werbung marks since `query`'s time. A server from before
 /// Werbung timeouts were marked has none (404), the sync goes on anyway.
 void fetchWerbung(const QString &channel, const RemoteConfig &config,
@@ -958,14 +1112,14 @@ void fetchWerbung(const QString &channel, const RemoteConfig &config,
                 changed = mergeWerbungLocked(st, channel, result.getData()) ||
                           changed;
             }
-            fetchStreams(channel, config, changed, epoch);
+            fetchEdits(channel, config, changed, epoch);
         })
         .onError([channel, config, anyAdded, epoch](const NetworkResult &) {
             if (deletedSince(channel, epoch))
             {
                 return;
             }
-            fetchStreams(channel, config, anyAdded, epoch);
+            fetchEdits(channel, config, anyAdded, epoch);
         })
         .execute();
 }
@@ -1122,7 +1276,13 @@ std::vector<Action> actions(const QString &channel)
     std::scoped_lock lock(st.mutex);
     auto &data = st.channels[key];
     loadLocked(st, key, data);
-    return data.actions;
+    std::vector<Action> out;
+    out.reserve(data.actions.size());
+    std::ranges::copy_if(data.actions, std::back_inserter(out),
+                         [](const Action &action) {
+                             return !action.removed;
+                         });
+    return out;
 }
 
 std::vector<Stream> streams(const QString &channel)
@@ -1303,7 +1463,8 @@ void deleteLocal(const QString &channel)
             const auto files = qdir.entryList(
                 {QStringLiteral("actions-*.tsv"), QStringLiteral("streams.tsv"),
                  QStringLiteral("werbung.tsv"),
-                 QStringLiteral("werbung-logs.json")},
+                 QStringLiteral("werbung-logs.json"),
+                 QStringLiteral("edits.tsv")},
                 QDir::Files);
             for (const auto &name : files)
             {
@@ -1589,7 +1750,8 @@ void markWerbungFromLogs(const QString &channel, const QString &logDirectory)
             for (const auto &action : data.actions)
             {
                 if (action.kind == Kind::Timeout && !action.werbung &&
-                    action.msecs > checkedUntil && action.msecs <= until)
+                    !action.removed && action.msecs > checkedUntil &&
+                    action.msecs <= until)
                 {
                     checks.push_back({action.msecs, action.target});
                 }

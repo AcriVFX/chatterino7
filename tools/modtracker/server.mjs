@@ -13,8 +13,10 @@
 //   writes emotes/YYYY-MM-DD.tsv in the same format as the app.
 // - Serves them over HTTP to requests carrying the API key. The only writes
 //   it takes are pausing, stopping or starting the mod action counting and
-//   deleting the counted mod actions, from the Mod activity window. The
-//   Twitch token is never sent anywhere except to Twitch.
+//   deleting the counted mod actions, from the Mod activity window, and
+//   corrections to single mod actions from setup.ps1 edit (kept apart in
+//   edits.tsv, the counted actions stay as they are). The Twitch token is
+//   never sent anywhere except to Twitch.
 //
 // No dependencies besides Node itself.
 
@@ -390,6 +392,484 @@ function werbungSince(since) {
   return out;
 }
 
+// ---------------------------------------------------------------- edits ---
+//
+// Corrections made with `setup.ps1 edit`. The action files stay as they were
+// counted; edits.tsv lists what to take away from them and what to add:
+//   editedAt, "remove" or "add", msecs, kind, moderator, target, seconds
+// A remove takes away the one action of that kind, mod and user closest to
+// msecs, within 5 seconds (the edit list shows whole seconds, and the app's
+// own copy of an action can be a little off). The app applies the same
+// list to what it counted itself (src/util/ModActivity.cpp).
+
+const EDITS_FILE = join(CHANNEL_DIR, "edits.tsv");
+const SAME_ACTION_MSECS = 5000;
+const EDIT_KINDS = [
+  "timeout",
+  "ban",
+  "unban",
+  "untimeout",
+  "delete",
+  "warn",
+  "automod_approve",
+  "automod_deny",
+];
+const EDIT_NAME = /^[a-z0-9_]{1,25}$/;
+/// The day's list and the edited one can be big on a busy day
+const EDITS_MAX_BYTES = 4 * 1024 * 1024;
+
+/// One actions-*.tsv line as an object, null if it isn't one
+function parseActionLine(line) {
+  const parts = line.split("\t");
+  if (parts.length !== 5 || !EDIT_KINDS.includes(parts[1]) || !parts[2]) {
+    return null;
+  }
+  const msecs = Number(parts[0]);
+  const seconds = Number(parts[4]);
+  if (!Number.isFinite(msecs) || !Number.isFinite(seconds)) {
+    return null;
+  }
+  return {
+    msecs,
+    kind: parts[1],
+    moderator: parts[2],
+    target: parts[3],
+    seconds,
+  };
+}
+
+export function parseEdits(text) {
+  const edits = [];
+  for (const line of String(text ?? "").split("\n")) {
+    const [at, op, ...rest] = line.split("\t");
+    const action = parseActionLine(rest.join("\t"));
+    if (
+      (op === "remove" || op === "add") &&
+      action &&
+      Number.isFinite(Number(at))
+    ) {
+      edits.push({ op, ...action });
+    }
+  }
+  return edits;
+}
+
+function readEditsText() {
+  try {
+    return readFileSync(EDITS_FILE, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/// `actions` sorted by time with `edits` applied: { kept, removed }, both
+/// sorted by time
+export function applyEdits(actions, edits) {
+  const list = actions.map((a) => ({ ...a, removed: false }));
+  list.sort((a, b) => a.msecs - b.msecs);
+  for (const edit of edits) {
+    if (edit.op === "add") {
+      const at = list.findIndex((a) => a.msecs > edit.msecs);
+      const added = { ...edit, removed: false, added: true };
+      delete added.op;
+      list.splice(at < 0 ? list.length : at, 0, added);
+      continue;
+    }
+    let best = -1;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      const off = Math.abs(a.msecs - edit.msecs);
+      if (
+        !a.removed &&
+        off <= SAME_ACTION_MSECS &&
+        a.kind === edit.kind &&
+        a.moderator === edit.moderator &&
+        a.target === edit.target &&
+        (best < 0 || off < Math.abs(list[best].msecs - edit.msecs))
+      ) {
+        best = i;
+      }
+    }
+    if (best >= 0) {
+      list[best].removed = true;
+    }
+  }
+  const strip = ({ removed, added, ...a }) => a;
+  return {
+    kept: list.filter((a) => !a.removed).map(strip),
+    removed: list.filter((a) => a.removed).map(strip),
+  };
+}
+
+// --- the day list shown in Notepad
+
+/// Offset of `timeZone` from UTC at `msecs`, in msecs
+function zoneOffset(msecs, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+      .formatToParts(new Date(msecs))
+      .map((p) => [p.type, p.value])
+  );
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  return asUtc - (msecs - (msecs % 1000));
+}
+
+/// msecs of a wall clock time in `timeZone`
+export function zonedMsecs(day, hour, minute, second, timeZone) {
+  const [y, m, d] = day.split("-").map(Number);
+  const wall = Date.UTC(y, m - 1, d, hour, minute, second);
+  let msecs = wall - zoneOffset(wall, timeZone);
+  msecs = wall - zoneOffset(msecs, timeZone);
+  return msecs;
+}
+
+function clockOf(msecs, timeZone) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(msecs));
+}
+
+export function isTimeZone(timeZone) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return /^[A-Za-z_]+(\/[A-Za-z0-9_+\-]+)*$/.test(timeZone);
+  } catch {
+    return false;
+  }
+}
+
+export function isDay(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) {
+    return false;
+  }
+  const date = new Date(`${day}T12:00:00Z`);
+  return (
+    !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === day
+  );
+}
+
+/// 600 -> "10m", 90 -> "90s", 0 -> "-"
+export function lengthText(seconds) {
+  if (!seconds) {
+    return "-";
+  }
+  for (const [unit, size] of [
+    ["w", 604800],
+    ["d", 86400],
+    ["h", 3600],
+    ["m", 60],
+  ]) {
+    if (seconds % size === 0) {
+      return `${seconds / size}${unit}`;
+    }
+  }
+  return `${seconds}s`;
+}
+
+/// "10m", "1h30m", "600", "600s" -> seconds; null if it isn't a length
+export function parseLength(text) {
+  const t = String(text).toLowerCase();
+  if (/^\d+$/.test(t)) {
+    return Number(t);
+  }
+  if (!/^(\d+[wdhms])+$/.test(t)) {
+    return null;
+  }
+  const size = { w: 604800, d: 86400, h: 3600, m: 60, s: 1 };
+  let total = 0;
+  for (const [, n, unit] of t.matchAll(/(\d+)([wdhms])/g)) {
+    total += Number(n) * size[unit];
+  }
+  return total;
+}
+
+function pad(text, width) {
+  return text.length >= width ? `${text} ` : text.padEnd(width);
+}
+
+function actionText(action, timeZone) {
+  return (
+    pad(clockOf(action.msecs, timeZone), 10) +
+    pad(action.kind, 16) +
+    pad(action.kind === "timeout" ? lengthText(action.seconds) : "-", 8) +
+    pad(action.moderator, 17) +
+    action.target
+  );
+}
+
+/// One line of the edited list as an action, or the reason it isn't one
+export function parseListLine(line, day, timeZone) {
+  const words = line.trim().split(/\s+/);
+  if (words.length !== 5) {
+    return {
+      error:
+        "needs 5 parts: time, action, length, mod and user (- for no length)",
+    };
+  }
+  const [time, kindWord, lengthWord, modWord, userWord] = words;
+  const clock = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(time);
+  if (
+    !clock ||
+    Number(clock[1]) > 23 ||
+    Number(clock[2]) > 59 ||
+    Number(clock[3] ?? 0) > 59
+  ) {
+    return { error: `"${time}" is not a time like 20:17:40` };
+  }
+  const kind = kindWord.toLowerCase();
+  if (!EDIT_KINDS.includes(kind)) {
+    return { error: `"${kindWord}" is not one of: ${EDIT_KINDS.join(" ")}` };
+  }
+  let seconds = 0;
+  if (kind === "timeout") {
+    seconds = parseLength(lengthWord);
+    if (!seconds) {
+      return { error: `a timeout needs a length like 30s, 10m, 1h or 1d` };
+    }
+    if (seconds > 14 * 86400) {
+      return { error: "a timeout is at most 2 weeks (2w)" };
+    }
+  }
+  const moderator = modWord.replace(/^@/, "").toLowerCase();
+  const target = userWord.replace(/^@/, "").toLowerCase();
+  if (!EDIT_NAME.test(moderator)) {
+    return { error: `"${modWord}" is not a Twitch name` };
+  }
+  if (!EDIT_NAME.test(target)) {
+    return { error: `"${userWord}" is not a Twitch name` };
+  }
+  const msecs = zonedMsecs(
+    day,
+    Number(clock[1]),
+    Number(clock[2]),
+    Number(clock[3] ?? 0),
+    timeZone
+  );
+  return { action: { msecs, kind, moderator, target, seconds } };
+}
+
+/// Actions (kept and removed by edits) between `from` and `to`
+function editedActions(from, to) {
+  const raw = actionsSince(from - SAME_ACTION_MSECS - 1)
+    .split("\n")
+    .map(parseActionLine)
+    .filter((a) => a && a.msecs <= to + SAME_ACTION_MSECS);
+  const edits = parseEdits(readEditsText()).filter(
+    (e) =>
+      e.msecs >= from - 2 * SAME_ACTION_MSECS &&
+      e.msecs <= to + 2 * SAME_ACTION_MSECS
+  );
+  const { kept, removed } = applyEdits(raw, edits);
+  const inDay = (a) => a.msecs >= from && a.msecs < to;
+  return { kept: kept.filter(inDay), removed: removed.filter(inDay) };
+}
+
+function dayRange(day, timeZone) {
+  const from = zonedMsecs(day, 0, 0, 0, timeZone);
+  const next = new Date(`${day}T12:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  const to = zonedMsecs(next.toISOString().slice(0, 10), 0, 0, 0, timeZone);
+  return { from, to };
+}
+
+function dayTitle(day) {
+  const weekday = new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", {
+    weekday: "long",
+    timeZone: "UTC",
+  });
+  return `${weekday} ${day}`;
+}
+
+/// The text `setup.ps1 edit` opens in Notepad
+export function editList(day, timeZone, name = "", actions = null) {
+  const { from, to } = dayRange(day, timeZone);
+  let { kept, removed } = actions ?? editedActions(from, to);
+  const who = String(name).replace(/^@/, "").toLowerCase();
+  if (who) {
+    const match = (a) => a.moderator === who || a.target === who;
+    kept = kept.filter(match);
+    removed = removed.filter(match);
+  }
+  const lines = [
+    `# ${CHANNEL} mod actions, ${dayTitle(day)} (${timeZone === "Europe/Berlin" ? "German" : timeZone} time), ${kept.length} ${kept.length === 1 ? "action" : "actions"}${who ? ` with ${who}` : ""}`,
+    "# Delete a line to remove that action from the counts.",
+    "# Change a line to fix it: the mod, the action, the length or the user.",
+    "# Write a new line to add an action the tracker missed.",
+    `# Actions: ${EDIT_KINDS.join(" ")}`,
+    '# Length is for timeouts (30s, 10m, 1h, 1d), "-" for everything else.',
+    "# Save (Ctrl+S) when you're done and press Enter in PowerShell. Lines starting with # don't count.",
+    "#",
+    `# ${pad("time", 8)}${pad("action", 16)}${pad("length", 8)}${pad("mod", 17)}user`,
+    ...kept.map((a) => actionText(a, timeZone)),
+  ];
+  if (removed.length) {
+    lines.push(
+      "",
+      "#",
+      "# Removed earlier on this day (delete the # in front of one to bring it back):",
+      ...removed.map((a) => `# ${actionText(a, timeZone)}`)
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/// The lines of an edit list that are actions, as normalized text -> how
+/// often, plus the lines that can't be read
+function listLines(text, day, timeZone) {
+  const counts = new Map();
+  const actions = new Map();
+  const errors = [];
+  String(text ?? "")
+    .replace(/^﻿/, "")
+    .split(/\r?\n/)
+    .forEach((line, i) => {
+      if (!line.trim() || line.trim().startsWith("#")) {
+        return;
+      }
+      const parsed = parseListLine(line, day, timeZone);
+      if (parsed.error) {
+        errors.push({ line: i + 1, text: line.trim(), problem: parsed.error });
+        return;
+      }
+      const key = actionText(parsed.action, timeZone);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      actions.set(key, parsed.action);
+    });
+  return { counts, actions, errors };
+}
+
+function describe(a, timeZone) {
+  const length = a.kind === "timeout" ? `  ${lengthText(a.seconds)}` : "";
+  return `${clockOf(a.msecs, timeZone)}  ${a.kind}${length}  ${a.moderator} on ${a.target}`;
+}
+
+/// What changed between the list as it was opened (`before`) and as it was
+/// saved (`after`). Changes `save` to edits.tsv when asked to and nothing is
+/// wrong. Returns { changes, errors, saved }.
+export function editDay(
+  { day, timeZone, before, after, save = false },
+  current = null,
+  now = Date.now()
+) {
+  const old = listLines(before, day, timeZone);
+  const fresh = listLines(after, day, timeZone);
+  const errors = fresh.errors;
+
+  // the counted actions behind the lines that were opened, to remove the
+  // exact one even when the list shows whole seconds
+  const { from, to } = dayRange(day, timeZone);
+  const counted = new Map();
+  for (const a of (current ?? editedActions(from, to)).kept) {
+    const key = actionText(a, timeZone);
+    if (!counted.has(key)) {
+      counted.set(key, []);
+    }
+    counted.get(key).push(a);
+  }
+
+  const removes = [];
+  const adds = [];
+  for (const [key, n] of old.counts) {
+    for (let i = fresh.counts.get(key) ?? 0; i < n; i++) {
+      removes.push(counted.get(key)?.shift() ?? old.actions.get(key));
+    }
+  }
+  for (const [key, n] of fresh.counts) {
+    for (let i = old.counts.get(key) ?? 0; i < n; i++) {
+      const a = fresh.actions.get(key);
+      if (a.msecs < from || a.msecs >= to) {
+        errors.push({
+          line: 0,
+          text: key.trim(),
+          problem: `the time is not on ${day}`,
+        });
+        continue;
+      }
+      adds.push(a);
+    }
+  }
+
+  // a removed and an added line at the same second with the same mod or
+  // user read as one changed action
+  const changes = [];
+  const unpaired = [...adds];
+  for (const r of removes) {
+    const i = unpaired.findIndex(
+      (a) =>
+        Math.floor(a.msecs / 1000) === Math.floor(r.msecs / 1000) &&
+        (a.target === r.target || a.moderator === r.moderator)
+    );
+    if (i < 0) {
+      changes.push({ op: "remove", text: describe(r, timeZone) });
+      continue;
+    }
+    const a = unpaired.splice(i, 1)[0];
+    const what = [];
+    if (a.kind !== r.kind) what.push(`action ${r.kind} -> ${a.kind}`);
+    if (
+      a.seconds !== r.seconds &&
+      (a.kind === "timeout" || r.kind === "timeout")
+    )
+      what.push(`length ${lengthText(r.seconds)} -> ${lengthText(a.seconds)}`);
+    if (a.moderator !== r.moderator)
+      what.push(`mod ${r.moderator} -> ${a.moderator}`);
+    if (a.target !== r.target) what.push(`user ${r.target} -> ${a.target}`);
+    changes.push({
+      op: "change",
+      text: `${clockOf(r.msecs, timeZone)}  ${r.kind} on ${r.target}: ${what.join(", ")}`,
+    });
+  }
+  for (const a of unpaired) {
+    changes.push({ op: "add", text: describe(a, timeZone) });
+  }
+
+  let saved = 0;
+  if (save && !errors.length && (removes.length || adds.length)) {
+    const line = (op, a) =>
+      [
+        now,
+        op,
+        a.msecs,
+        a.kind,
+        a.moderator,
+        a.target,
+        Math.max(0, a.seconds),
+      ].join("\t");
+    const text =
+      [
+        ...removes.map((a) => line("remove", a)),
+        ...adds.map((a) => line("add", a)),
+      ].join("\n") + "\n";
+    mkdirSync(CHANNEL_DIR, { recursive: true });
+    appendFileSync(EDITS_FILE, text);
+    saved = changes.length;
+    log(
+      `Saved ${removes.length} removed and ${adds.length} added mod actions from setup.ps1 edit (${day}).`
+    );
+  }
+  return { changes, errors, saved };
+}
+
 function writeStreamRow(id, start, lastSeen) {
   mkdirSync(CHANNEL_DIR, { recursive: true });
   appendFileSync(
@@ -517,6 +997,7 @@ export function deleteCounts() {
     }
     rmSync(join(CHANNEL_DIR, "streams.tsv"), { force: true });
     rmSync(WERBUNG_FILE, { force: true });
+    rmSync(EDITS_FILE, { force: true });
   }
   // the running stream gets its row again on the next check
   if (live) {
@@ -1235,13 +1716,13 @@ function send(res, status, body, type = "text/plain; charset=utf-8") {
   res.end(body);
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 4096) {
   return new Promise((resolve) => {
     let body = "";
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 4096) {
+      if (body.length > maxBytes) {
         req.destroy();
         resolve(null);
       }
@@ -1262,9 +1743,33 @@ function trackingJson() {
 }
 
 async function handlePost(req, res, url) {
-  const body = await readBody(req);
+  const edits = url.pathname === `/v1/${CHANNEL}/edits`;
+  const body = await readBody(req, edits ? EDITS_MAX_BYTES : 4096);
   if (body === null) {
     return send(res, 400, "Bad request\n");
+  }
+  if (edits) {
+    // from setup.ps1 edit: the day's list as it was opened and as it was
+    // saved in Notepad
+    const timeZone = String(body.timeZone ?? "");
+    if (!isDay(body.day) || !isTimeZone(timeZone)) {
+      return send(
+        res,
+        400,
+        "day must be YYYY-MM-DD and timeZone a time zone\n"
+      );
+    }
+    if (typeof body.before !== "string" || typeof body.after !== "string") {
+      return send(res, 400, "before and after must be the list texts\n");
+    }
+    const result = editDay({
+      day: body.day,
+      timeZone,
+      before: body.before,
+      after: body.after,
+      save: body.save === true,
+    });
+    return send(res, 200, JSON.stringify(result), "application/json");
   }
   if (url.pathname === `/v1/${CHANNEL}/tracking`) {
     const error = setTracking(body);
@@ -1323,6 +1828,21 @@ const server = createServer((req, res) => {
   if (url.pathname === `/v1/${CHANNEL}/werbung`) {
     const since = Number(url.searchParams.get("since") ?? 0);
     return send(res, 200, werbungSince(Number.isFinite(since) ? since : 0));
+  }
+  if (url.pathname === `/v1/${CHANNEL}/edits`) {
+    return send(res, 200, readEditsText());
+  }
+  if (url.pathname === `/v1/${CHANNEL}/edit-list`) {
+    const day = url.searchParams.get("day") ?? "";
+    const timeZone = url.searchParams.get("tz") ?? "";
+    if (!isDay(day) || !isTimeZone(timeZone)) {
+      return send(res, 400, "day must be YYYY-MM-DD and tz a time zone\n");
+    }
+    return send(
+      res,
+      200,
+      editList(day, timeZone, url.searchParams.get("name") ?? "")
+    );
   }
   if (url.pathname === `/v1/${CHANNEL}/streams`) {
     return send(res, 200, readStreams());

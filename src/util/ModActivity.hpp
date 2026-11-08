@@ -43,6 +43,11 @@ struct Action {
     /// A timeout about "Werbung" (see isWerbungTimeout), which the Mod
     /// activity window can leave out
     bool werbung = false;
+    /// Taken away with setup.ps1 edit. Kept in memory so a sync doesn't
+    /// bring the server's copy back, but actions() leaves it out.
+    bool removed = false;
+    /// Added with setup.ps1 edit, not counted by anyone
+    bool added = false;
 };
 
 struct Stream {
@@ -81,7 +86,8 @@ void streamSeen(const QString &channel, const QString &streamId,
 /// Called when `channel` goes offline
 void streamEnded(const QString &channel);
 
-/// All saved actions of `channel`, oldest first
+/// All saved actions of `channel` with the edits made with setup.ps1 edit,
+/// oldest first
 std::vector<Action> actions(const QString &channel);
 
 /// All streams of `channel` seen by the app, oldest first
