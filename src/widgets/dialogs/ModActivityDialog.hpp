@@ -91,6 +91,8 @@ private:
         std::array<int, GroupCount> counts{};
         int total = 0;
         int prevTotal = 0;
+        /// Werbung timeouts left out of `counts` (Hide Werbung timeouts)
+        int hiddenWerbung = 0;
         int streamsActive = 0;
         qint64 lastActive = 0;
     };
@@ -104,6 +106,10 @@ private:
     void refresh();
     void rebuildModList();
     void updateModsButton();
+    /// Hide Werbung timeouts button: colors and the hidden count
+    void updateWerbungButton(int hidden) const;
+    /// Marks older timeouts as Werbung timeouts from the chat logs
+    void checkLogsForWerbung();
     void fillTable(QTableWidget *table, const std::vector<Row> &rows,
                    int streamCount);
     void updateDetail();
@@ -124,7 +130,11 @@ private:
     QString channel_;
 
     // all saved data of the channel, refreshed on every change
+    std::vector<modactivity::Action> allActions_;
+    /// allActions_ without the Werbung timeouts while they are hidden
     std::vector<modactivity::Action> actions_;
+    /// the Werbung timeouts left out of actions_
+    std::vector<modactivity::Action> hiddenActions_;
     std::vector<modactivity::Stream> streams_;
     /// every moderator and bot seen, busiest first
     QStringList allNames_;
@@ -139,6 +149,7 @@ private:
     std::array<bool, GroupCount> groups_{true, true, true, true, true, false};
     bool showBots_ = true;
     bool compare_ = true;
+    bool hideWerbung_ = false;
     Bucket bucket_ = Bucket::Weeks;
     QString selected_;
 
@@ -160,6 +171,9 @@ private:
         QRadioButton *excludeMode = nullptr;
         QTreeWidget *modList = nullptr;
         std::array<QPushButton *, GroupCount> chips{};
+        QPushButton *werbung = nullptr;
+        QLabel *werbungLabel = nullptr;
+        QLabel *werbungCount = nullptr;
         QCheckBox *showBots = nullptr;
         QCheckBox *compare = nullptr;
         QLabel *summary = nullptr;

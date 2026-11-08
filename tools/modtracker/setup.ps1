@@ -252,7 +252,7 @@ crashes 3 times, it stops the counter again.
 "@
     if (Test-Path $localDir) {
         Get-ChildItem -Path $localDir -File |
-            Where-Object { $_.Name -like 'actions-*.tsv' -or $_.Name -eq 'streams.tsv' -or $_.Name -eq 'server-sync.json' -or $_.Name -eq 'tracking.json' } |
+            Where-Object { $_.Name -like 'actions-*.tsv' -or $_.Name -eq 'streams.tsv' -or $_.Name -eq 'server-sync.json' -or $_.Name -eq 'tracking.json' -or $_.Name -eq 'werbung.tsv' -or $_.Name -eq 'werbung-logs.json' } |
             Remove-Item -Force
         Write-Host 'Cleared the counts on this PC.'
     }
@@ -261,7 +261,7 @@ set -eu
 cd `$HOME/apps/modtracker
 docker compose stop modtracker
 n=`$(ls data/*/actions-*.tsv data/*/streams.tsv 2>/dev/null | wc -l)
-rm -f data/*/actions-*.tsv data/*/streams.tsv data/*/tracking.json
+rm -f data/*/actions-*.tsv data/*/streams.tsv data/*/tracking.json data/*/werbung.tsv
 echo "Cleared the counts on the server (`$n files)."
 since=`$(date -u -d '-1 sec' +%Y-%m-%dT%H:%M:%SZ)
 docker compose up -d
@@ -402,7 +402,7 @@ Chatterino9 leaves the server out until then.
 set -eu
 cd `$HOME/apps/modtracker
 docker compose stop
-rm -f data/*/actions-*.tsv data/*/streams.tsv
+rm -f data/*/actions-*.tsv data/*/streams.tsv data/*/werbung.tsv
 echo "PAUSED: nothing is counted until start"
 "@
     $code = Invoke-Remote $target $script
